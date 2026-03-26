@@ -73,6 +73,8 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", models: [], keyPlaceholder: "sk-or-..." },
 };
 
+const CURRENT_VERSION = "0.2.0";
+
 // --- State ---
 interface AppState {
   connected: boolean;
@@ -88,6 +90,8 @@ interface AppState {
   model: string;
   hasApiKey: boolean;
   roots: string[];
+  updateAvailable: boolean;
+  latestVersion: string;
 }
 
 const state: AppState = {
@@ -104,6 +108,8 @@ const state: AppState = {
   model: "",
   hasApiKey: false,
   roots: [],
+  updateAvailable: false,
+  latestVersion: "",
 };
 
 // --- DOM References ---
@@ -135,6 +141,9 @@ function init() {
   // Install captures
   installNetworkCapture();
   installConsoleCapture();
+
+  // Check for updates (non-blocking)
+  checkForUpdates();
 
   // Connect to server
   const config = (window as any).__OPENMAGIC_CONFIG__;
@@ -215,6 +224,20 @@ function render() {
     pill.appendChild(dot);
   }
 
+  // Update indicator
+  if (state.updateAvailable) {
+    const updateDot = document.createElement("span");
+    updateDot.className = "om-update-dot";
+    updateDot.title = `Update available: v${state.latestVersion}`;
+    updateDot.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.panelOpen = true;
+      state.activePanel = "settings";
+      render();
+    });
+    pill.appendChild(updateDot);
+  }
+
   container.appendChild(pill);
 
   // Draggable
@@ -256,12 +279,22 @@ function renderSettings(): string {
   const keyPlaceholder = currentProvider?.keyPlaceholder || "Enter API key...";
   const isLocal = currentProvider?.local || false;
 
+  const updateBanner = state.updateAvailable
+    ? `<div class="om-update-banner">
+        <span>🚀 v${state.latestVersion} available</span>
+        <span class="om-update-current">current: v${CURRENT_VERSION}</span>
+        <code class="om-update-cmd">npx openmagic@latest</code>
+       </div>`
+    : "";
+
   return `
     <div class="om-panel-header">
       <span class="om-panel-title">Settings</span>
+      <span class="om-panel-version">v${CURRENT_VERSION}</span>
       <button class="om-panel-close" data-action="close">&times;</button>
     </div>
     <div class="om-panel-body">
+      ${updateBanner}
       <div class="om-settings">
         <div class="om-field">
           <label class="om-label">Provider</label>
@@ -649,6 +682,42 @@ function escapeHtml(text: string): string {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// --- Update Check ---
+
+function checkForUpdates(): void {
+  // Query npm registry for latest version (non-blocking, silent fail)
+  fetch("https://registry.npmjs.org/openmagic/latest", {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(5000),
+  })
+    .then((res) => {
+      if (!res.ok) return;
+      return res.json();
+    })
+    .then((data) => {
+      if (!data?.version) return;
+      const latest = data.version;
+      if (isNewerVersion(latest, CURRENT_VERSION)) {
+        state.updateAvailable = true;
+        state.latestVersion = latest;
+        render();
+      }
+    })
+    .catch(() => {
+      // Silently ignore — update check is best-effort
+    });
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  const l = latest.split(".").map(Number);
+  const c = current.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((l[i] || 0) > (c[i] || 0)) return true;
+    if ((l[i] || 0) < (c[i] || 0)) return false;
+  }
+  return false;
 }
 
 // --- Boot ---

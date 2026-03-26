@@ -64,7 +64,23 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.12.0";
+function encodeBase64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Utf8(value: string): string {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+const CURRENT_VERSION = "0.13.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -141,7 +157,8 @@ function init() {
   checkForUpdates();
 
   // Connect to server — same origin (single port)
-  const token = (window as any).__OPENMAGIC_TOKEN__;
+  const currentScript = document.querySelector('script[data-openmagic-token]') as HTMLScriptElement | null;
+  const token = currentScript?.dataset.openmagicToken || (window as any).__OPENMAGIC_TOKEN__;
   const wsPort = parseInt(window.location.port, 10) || (window.location.protocol === "https:" ? 443 : 80);
   if (token) {
     ws.connect(wsPort, token)
@@ -220,7 +237,7 @@ function attachGlobalEvents(root: HTMLElement) {
 
     if (field === "provider") {
       state.provider = target.value;
-      state.model = "";
+      state.model = MODEL_REGISTRY[state.provider]?.models[0]?.id || "";
       state.saveStatus = "";
       refreshPanelContent();
     } else if (field === "model") {
@@ -255,14 +272,20 @@ async function applyDiff(target: HTMLElement) {
   const replaceB64 = target.dataset.replace;
   if (!file || !searchB64 || !replaceB64) return;
 
-  const search = atob(searchB64);
-  const replace = atob(replaceB64);
+  const search = decodeBase64Utf8(searchB64);
+  const replace = decodeBase64Utf8(replaceB64);
   const card = target.closest(".om-diff-card") as HTMLElement | null;
 
   try {
     const fileResult = await ws.request("fs.read", { path: resolveFilePath(file) });
     const content = fileResult.payload?.content;
-    if (content?.includes(search)) {
+    const occurrences = content ? content.split(search).length - 1 : 0;
+    if (occurrences === 0) {
+      state.messages.push({ role: "system", content: `Could not find matching code in ${file}` });
+    } else if (occurrences > 1) {
+      state.messages.push({ role: "system", content: `Found ${occurrences} matches in ${file} — expected exactly 1. Edit not applied.` });
+    } else {
+      // exactly 1 match — safe to apply
       const writeResult = await ws.request("fs.write", { path: resolveFilePath(file), content: content.replace(search, replace) });
       if (writeResult?.payload?.ok === false) {
         state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload.error || "unknown"}` });
@@ -273,8 +296,6 @@ async function applyDiff(target: HTMLElement) {
           state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}` };
         }
       }
-    } else {
-      state.messages.push({ role: "system", content: `Could not find matching code in ${file}` });
     }
   } catch (e: any) {
     state.messages.push({ role: "system", content: `Failed: ${file} - ${e.message}` });
@@ -440,20 +461,22 @@ function renderChatHTML(): string {
 
   const msgs = state.messages.map((m, i) => {
     if (m.content.startsWith("__DIFF__")) {
-      const parts = m.content.split("__");
-      // parts: ["", "DIFF", id, file, base64search, base64replace, ""]
-      const file = parts[3];
-      const search = atob(parts[4]);
-      const replace = atob(parts[5]);
-      return `<div class="om-diff-card" data-diff-idx="${i}">
-        <div class="om-diff-file">${escapeHtml(file)}</div>
-        <div class="om-diff-removed">${escapeHtml(search.slice(0, 200))}</div>
-        <div class="om-diff-added">${escapeHtml(replace.slice(0, 200))}</div>
-        <div class="om-diff-actions">
-          <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(file)}" data-search="${parts[4]}" data-replace="${parts[5]}">Apply</button>
-          <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
-        </div>
-      </div>`;
+      try {
+        const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
+        const searchB64 = encodeBase64Utf8(diff.search);
+        const replaceB64 = encodeBase64Utf8(diff.replace);
+        return `<div class="om-diff-card" data-diff-idx="${i}">
+          <div class="om-diff-file">${escapeHtml(diff.file)}</div>
+          <div class="om-diff-removed">${escapeHtml(diff.search.slice(0, 200))}</div>
+          <div class="om-diff-added">${escapeHtml(diff.replace.slice(0, 200))}</div>
+          <div class="om-diff-actions">
+            <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
+            <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
+          </div>
+        </div>`;
+      } catch {
+        return `<div class="om-msg om-msg-system">Malformed diff data</div>`;
+      }
     }
     return `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`;
   }).join("");
@@ -582,13 +605,50 @@ async function sendPrompt() {
   context.pageUrl = window.location.href;
   context.pageTitle = document.title;
 
-  // Grounding loop: fetch project tree + relevant source files before LLM call
+  // Grounding: read project tree + score and read relevant source files
+  const MAX_GROUNDED_FILES = 4;
+  const MAX_GROUNDED_CHARS = 24000;
+  const TEXT_RE = /\.(?:[cm]?[jt]sx?|svelte|vue|astro|html?|css|scss|less|php|py)$/i;
+
   try {
     const treeResult = await ws.request("fs.list", {});
     if (treeResult?.payload?.projectTree) {
       context.projectTree = treeResult.payload.projectTree;
     }
-  } catch { /* non-critical */ }
+
+    // Score files by relevance to the prompt + selected element
+    const allFiles = (treeResult?.payload?.files || []) as Array<{ path: string; type: string }>;
+    const textFiles = allFiles.filter((f: { path: string; type: string }) => f.type === "file" && TEXT_RE.test(f.path));
+
+    // Extract search tokens from prompt and selected element
+    const searchTokens = [text, state.selectedElement?.tagName, state.selectedElement?.id, state.selectedElement?.className, state.selectedElement?.textContent]
+      .filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9_-]+/).filter((t: string) => t.length >= 2);
+
+    const scored = textFiles.map((f: { path: string; type: string }) => {
+      let score = 0;
+      const lower = f.path.toLowerCase();
+      for (const token of searchTokens) { if (lower.includes(token)) score += 5; }
+      if (/(component|page|route|app|src|view|template)/.test(lower)) score += 2;
+      return { ...f, score };
+    }).sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+
+    // Read top scored files
+    const files: Array<{ path: string; content: string }> = [];
+    let totalChars = 0;
+    for (const f of scored.slice(0, MAX_GROUNDED_FILES)) {
+      if (totalChars >= MAX_GROUNDED_CHARS) break;
+      try {
+        const root = state.roots[0] || "";
+        const result = await ws.request("fs.read", { path: root ? `${root}/${f.path}` : f.path });
+        const content = String(result?.payload?.content || "");
+        if (!content) continue;
+        const trimmed = content.slice(0, Math.min(8000, MAX_GROUNDED_CHARS - totalChars));
+        files.push({ path: f.path, content: trimmed });
+        totalChars += trimmed.length;
+      } catch { /* skip unreadable files */ }
+    }
+    if (files.length) context.files = files;
+  } catch { /* grounding is best-effort */ }
 
   try {
     const result = await ws.stream(
@@ -617,9 +677,10 @@ async function sendPrompt() {
       for (const mod of result.modifications) {
         if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
           const diffId = Math.random().toString(36).slice(2);
+          const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace });
           state.messages.push({
             role: "system",
-            content: `__DIFF__${diffId}__${mod.file}__${btoa(mod.search)}__${btoa(mod.replace)}__`,
+            content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
           });
         }
       }
@@ -694,7 +755,11 @@ function exitSelectMode() {
 
 async function takeScreenshot() {
   // If element is selected, try element screenshot first
-  const target = state.selectedElement ? document.querySelector(state.selectedElement.cssSelector) as HTMLElement : undefined;
+  let target: HTMLElement | undefined;
+  try {
+    const sel = state.selectedElement?.cssSelector?.trim();
+    if (sel) target = (document.querySelector(sel) as HTMLElement) || undefined;
+  } catch { /* stale or invalid selector */ }
   const ss = await captureScreenshot(target || undefined);
   if (ss) {
     state.screenshot = ss;

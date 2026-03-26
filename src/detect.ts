@@ -12,6 +12,7 @@ const COMMON_DEV_PORTS = [
   8888, // Jupyter, generic
   3001, // Common alternate
   4000, // Phoenix, generic
+  5000, // Flask
   1234, // Parcel
   4321, // Astro
   3333, // Remix

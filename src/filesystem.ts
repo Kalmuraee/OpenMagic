@@ -3,6 +3,7 @@ import {
   writeFileSync,
   existsSync,
   statSync,
+  lstatSync,
   readdirSync,
   copyFileSync,
   mkdirSync,
@@ -143,10 +144,11 @@ export function listFiles(
       const fullPath = join(dir, item);
       let stat;
       try {
-        stat = statSync(fullPath);
+        stat = lstatSync(fullPath);
       } catch {
         continue;
       }
+      if (stat.isSymbolicLink()) continue;
 
       const relPath = relative(rootPath, fullPath);
 

@@ -58,6 +58,7 @@ export function createProxyServer(
         delete headers["x-content-security-policy"];
         delete headers["etag"];
         delete headers["last-modified"];
+        headers["cache-control"] = "no-store";
 
         res.writeHead(proxyRes.statusCode || 200, headers);
         res.end(body);
@@ -144,16 +145,5 @@ async function collectBody(stream: http.IncomingMessage): Promise<string> {
 
 // Same-origin injection — toolbar.js and WS served from THIS server
 function buildInjectionScript(token: string): string {
-  return `
-<script data-openmagic="true">
-(function() {
-  if (window.__OPENMAGIC_LOADED__) return;
-  window.__OPENMAGIC_LOADED__ = true;
-  window.__OPENMAGIC_TOKEN__ = "${token}";
-  var s = document.createElement("script");
-  s.src = "/__openmagic__/toolbar.js";
-  s.dataset.openmagic = "true";
-  document.body.appendChild(s);
-})();
-</script>`;
+  return `<script src="/__openmagic__/toolbar.js?v=${Date.now()}" data-openmagic="true" data-openmagic-token="${token}" defer></script>`;
 }

@@ -25,7 +25,7 @@ export function loadConfig(): Partial<OpenMagicConfig> {
   }
 }
 
-export function saveConfig(updates: Partial<OpenMagicConfig>): void {
+export function saveConfig(updates: Partial<OpenMagicConfig>): { ok: boolean; error?: string } {
   try {
     ensureConfigDir();
     const existing = loadConfig();
@@ -33,8 +33,9 @@ export function saveConfig(updates: Partial<OpenMagicConfig>): void {
     const tmpFile = CONFIG_FILE + ".tmp";
     writeFileSync(tmpFile, JSON.stringify(merged, null, 2), { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpFile, CONFIG_FILE);
+    return { ok: true };
   } catch (e: unknown) {
-    console.warn(`[OpenMagic] Warning: Could not save config to ${CONFIG_FILE}: ${(e as Error).message}`);
+    return { ok: false, error: (e as Error).message };
   }
 }
 

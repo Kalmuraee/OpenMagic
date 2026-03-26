@@ -197,7 +197,7 @@ export const TOOLBAR_CSS = `
 .om-select option { background: #151528; color: #e0e0e0; }
 
 .om-key-row { display: flex; gap: 6px; align-items: stretch; }
-.om-key-input { flex: 1; min-width: 0; }
+.om-key-input { flex: 1; min-width: 0; -webkit-text-security: disc; }
 
 .om-btn-get-key {
   display: flex; align-items: center; gap: 4px;

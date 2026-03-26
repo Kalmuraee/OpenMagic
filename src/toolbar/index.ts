@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.8.0";
+const CURRENT_VERSION = "0.8.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -347,7 +347,7 @@ function renderSettingsHTML(): string {
       <div class="om-field ${isLocal ? "om-hidden" : ""}">
         <label class="om-label">API Key</label>
         <div class="om-key-row">
-          <input type="password" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" />
+          <input type="text" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
           ${keyUrl ? `<button class="om-btn-get-key" data-action="get-key" data-url="${keyUrl}">${ICON.externalLink} Get key</button>` : ""}
         </div>
         ${keyUrl ? `<div class="om-key-hint"><a data-action="get-key" data-url="${keyUrl}">Get your ${prov?.name || ""} API key here</a></div>` : ""}
@@ -388,7 +388,22 @@ async function saveSettings() {
   const apiKeyInput = $panelBody.querySelector('[data-field="apiKey"]') as HTMLInputElement;
   const apiKey = apiKeyInput?.value || "";
 
-  if (!state.provider) return;
+  if (!state.provider) {
+    state.saveStatus = "error";
+    updateSaveButton();
+    setTimeout(() => { state.saveStatus = ""; refreshPanelContent(); }, 2000);
+    return;
+  }
+
+  // Check WebSocket connection
+  if (!ws.isConnected()) {
+    state.saveStatus = "error";
+    updateSaveButton();
+    const btn = $panelBody.querySelector('[data-action="save-settings"]');
+    if (btn) btn.innerHTML = "Not connected - check terminal";
+    setTimeout(() => { state.saveStatus = ""; refreshPanelContent(); }, 3000);
+    return;
+  }
 
   const payload: any = { provider: state.provider, model: state.model };
   if (apiKey) payload.apiKey = apiKey;
@@ -397,12 +412,16 @@ async function saveSettings() {
   updateSaveButton();
 
   try {
-    await ws.request("config.set", payload);
+    // Race against a 8s local timeout (don't wait 30s)
+    const result = await Promise.race([
+      ws.request("config.set", payload),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Save timed out")), 8000)),
+    ]);
     state.hasApiKey = !!(apiKey || state.hasApiKey);
     state.saveStatus = "saved";
     updateSaveButton();
 
-    // Auto-transition to chat after 1s
+    // Auto-transition to chat after 1.2s
     setTimeout(() => {
       state.saveStatus = "";
       if (state.activePanel === "settings") {
@@ -411,8 +430,16 @@ async function saveSettings() {
     }, 1200);
   } catch (e: any) {
     state.saveStatus = "error";
-    updateSaveButton();
-    setTimeout(() => { state.saveStatus = ""; refreshPanelContent(); }, 3000);
+    const btn = $panelBody.querySelector('[data-action="save-settings"]');
+    const msg = (e?.message || "").includes("timeout") ? "Connection timeout - is the CLI running?"
+      : (e?.message || "").includes("connected") ? "Not connected to OpenMagic server"
+      : `Save failed: ${e?.message || "Unknown error"}`;
+    if (btn) {
+      btn.innerHTML = msg;
+      btn.className = "om-btn";
+      (btn as HTMLButtonElement).disabled = false;
+    }
+    setTimeout(() => { state.saveStatus = ""; refreshPanelContent(); }, 4000);
   }
 }
 

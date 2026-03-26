@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.8.0";
+const VERSION = "0.8.1";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -252,23 +252,29 @@ program
     // Generate session token
     const token = generateSessionToken();
 
-    // Find available proxy port
+    // Find available proxy port (need TWO consecutive free ports: proxy + companion)
     let proxyPort = parseInt(opts.listen, 10);
-    if (await isPortOpen(proxyPort)) {
-      proxyPort = await findAvailablePort(proxyPort);
+    while (await isPortOpen(proxyPort) || await isPortOpen(proxyPort + 1)) {
+      proxyPort++;
+      if (proxyPort > parseInt(opts.listen, 10) + 100) {
+        console.log(chalk.red("  Could not find two consecutive free ports."));
+        process.exit(1);
+      }
     }
 
+    const companionPort = proxyPort + 1;
+
     // Start the OpenMagic server (serves toolbar + WebSocket)
-    const { httpServer: omServer } = createOpenMagicServer(proxyPort, roots);
-    omServer.listen(proxyPort + 1, "127.0.0.1", () => {
-      // OpenMagic API/WS server running on proxyPort+1
+    const { httpServer: omServer } = createOpenMagicServer(companionPort, roots);
+    omServer.listen(companionPort, "127.0.0.1", () => {
+      // OpenMagic API/WS server running
     });
 
     // Start the proxy server
     const proxyServer = createProxyServer(
       targetHost,
       targetPort!,
-      proxyPort + 1
+      companionPort
     );
 
     proxyServer.listen(proxyPort, "127.0.0.1", async () => {

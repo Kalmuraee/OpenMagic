@@ -82,7 +82,7 @@ export function connect(port: number, token: string): Promise<void> {
 
 export function send(msg: { id: string; type: string; payload?: any }): void {
   const data = JSON.stringify(msg);
-  if (ws && connected) {
+  if (ws && ws.readyState === WebSocket.OPEN && connected) {
     ws.send(data);
   } else {
     messageQueue.push(data);

@@ -17,6 +17,7 @@ import type {
   OpenMagicConfig,
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
+import { MODEL_REGISTRY } from "./llm/registry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -41,7 +42,7 @@ export function createOpenMagicServer(
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       });
-      res.end(JSON.stringify({ status: "ok", version: "0.9.0" }));
+      res.end(JSON.stringify({ status: "ok", version: "0.10.0" }));
       return;
     }
 
@@ -56,7 +57,13 @@ export function createOpenMagicServer(
 
   const clientStates = new WeakMap<WebSocket, ClientState>();
 
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
+    // Validate Origin — only allow localhost connections
+    const origin = req.headers.origin || "";
+    if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
+      ws.close(4003, "Forbidden origin");
+      return;
+    }
     clientStates.set(ws, { authenticated: false });
 
     ws.on("message", async (data) => {
@@ -117,7 +124,7 @@ async function handleMessage(
         id: msg.id,
         type: "handshake.ok",
         payload: {
-          version: "0.9.0",
+          version: "0.10.0",
           roots,
           config: {
             provider: config.provider,
@@ -175,7 +182,8 @@ async function handleMessage(
       const payload = msg.payload as LlmChatPayload;
       const config = loadConfig();
 
-      if (!config.apiKey) {
+      const providerMeta = MODEL_REGISTRY?.[payload.provider || config.provider || ""];
+      if (!config.apiKey && !providerMeta?.local) {
         sendError(ws, "config_error", "API key not configured", msg.id);
         return;
       }
@@ -222,7 +230,7 @@ async function handleMessage(
       if (payload.provider !== undefined) updates.provider = payload.provider;
       if (payload.model !== undefined) updates.model = payload.model;
       if (payload.apiKey !== undefined) updates.apiKey = payload.apiKey;
-      if (payload.roots !== undefined) updates.roots = payload.roots;
+      // roots are set by CLI only, not browser-configurable
       saveConfig(updates);
       send(ws, {
         id: msg.id,

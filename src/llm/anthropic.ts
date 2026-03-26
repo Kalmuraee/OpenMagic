@@ -19,11 +19,13 @@ export async function chatAnthropic(
   const url = "https://api.anthropic.com/v1/messages";
 
   const apiMessages: AnthropicMessage[] = [];
+  const lastUserIdx = messages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
 
-  for (const msg of messages) {
-    if (msg.role === "system") continue; // System prompt goes in system field
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "system") continue;
 
-    if (msg.role === "user" && typeof msg.content === "string") {
+    if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const contextParts: Parameters<typeof buildUserMessage>[1] = {};
 
       if (context.selectedElement) {

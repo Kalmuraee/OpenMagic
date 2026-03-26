@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -208,6 +208,9 @@ program
         if (!started) {
           process.exit(1);
         }
+        // Re-detect in case server started on a different port
+        const recheck = await detectDevServer();
+        if (recheck) { targetPort = recheck.port; targetHost = recheck.host; }
       }
     } else {
       // Auto-detect running dev server

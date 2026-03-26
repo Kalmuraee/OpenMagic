@@ -47,7 +47,8 @@ export function isPathSafe(filePath: string, roots: string[]): boolean {
   const resolved = resolve(filePath);
   return roots.some((root) => {
     const resolvedRoot = resolve(root);
-    return resolved.startsWith(resolvedRoot);
+    const rel = relative(resolvedRoot, resolved);
+    return !rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\");
   });
 }
 

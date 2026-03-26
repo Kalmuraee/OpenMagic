@@ -1,7 +1,11 @@
 import http from "node:http";
-import { createGunzip, createInflate, createBrotliDecompress } from "node:zlib";
-import { pipeline } from "node:stream/promises";
+import { gunzip, inflate, brotliDecompress } from "node:zlib";
+import { promisify } from "node:util";
 import httpProxy from "http-proxy";
+
+const gunzipAsync = promisify(gunzip);
+const inflateAsync = promisify(inflate);
+const brotliAsync = promisify(brotliDecompress);
 import { getSessionToken } from "./security.js";
 
 export function createProxyServer(
@@ -46,6 +50,11 @@ export function createProxyServer(
         delete headers["content-length"];
         delete headers["content-encoding"];
         delete headers["transfer-encoding"];
+        delete headers["content-security-policy"];
+        delete headers["content-security-policy-report-only"];
+        delete headers["x-content-security-policy"];
+        delete headers["etag"];
+        delete headers["last-modified"];
 
         res.writeHead(proxyRes.statusCode || 200, headers);
         res.end(body);
@@ -96,63 +105,38 @@ export function createProxyServer(
   return server;
 }
 
-function collectBody(stream: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const encoding = (stream.headers["content-encoding"] || "").toLowerCase();
-    const chunks: Buffer[] = [];
-
-    let source: NodeJS.ReadableStream = stream;
-
-    // Decompress if needed
-    if (encoding === "gzip" || encoding === "x-gzip") {
-      const gunzip = createGunzip();
-      stream.pipe(gunzip);
-      source = gunzip;
-      gunzip.on("error", () => {
-        // Decompression failed — try reading raw
-        collectRaw(stream).then(resolve).catch(reject);
-      });
-    } else if (encoding === "deflate") {
-      const inflate = createInflate();
-      stream.pipe(inflate);
-      source = inflate;
-      inflate.on("error", () => {
-        collectRaw(stream).then(resolve).catch(reject);
-      });
-    } else if (encoding === "br") {
-      const brotli = createBrotliDecompress();
-      stream.pipe(brotli);
-      source = brotli;
-      brotli.on("error", () => {
-        collectRaw(stream).then(resolve).catch(reject);
-      });
-    }
-
-    source.on("data", (chunk: Buffer) => chunks.push(chunk));
-    source.on("end", () => {
-      try {
-        resolve(Buffer.concat(chunks).toString("utf-8"));
-      } catch {
-        reject(new Error("Failed to decode response body"));
-      }
-    });
-    source.on("error", (err) => reject(err));
-  });
-}
-
-function collectRaw(stream: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
+async function collectBody(stream: http.IncomingMessage): Promise<string> {
+  // Buffer raw data first, then decompress — avoids consumed-stream problem
+  const rawBuffer = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
     stream.on("data", (chunk: Buffer) => chunks.push(chunk));
-    stream.on("end", () => {
-      try {
-        resolve(Buffer.concat(chunks).toString("utf-8"));
-      } catch {
-        reject(new Error("Failed to decode raw body"));
-      }
-    });
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
     stream.on("error", reject);
   });
+
+  const encoding = (stream.headers["content-encoding"] || "").toLowerCase();
+
+  if (!encoding || encoding === "identity") {
+    return rawBuffer.toString("utf-8");
+  }
+
+  // Try decompression — fall back to raw on failure
+  try {
+    let decompressed: Buffer;
+    if (encoding === "gzip" || encoding === "x-gzip") {
+      decompressed = await gunzipAsync(rawBuffer);
+    } else if (encoding === "deflate") {
+      decompressed = await inflateAsync(rawBuffer);
+    } else if (encoding === "br") {
+      decompressed = await brotliAsync(rawBuffer);
+    } else {
+      return rawBuffer.toString("utf-8");
+    }
+    return decompressed.toString("utf-8");
+  } catch {
+    // Decompression failed — try raw (might be uncompressed despite header)
+    return rawBuffer.toString("utf-8");
+  }
 }
 
 function handleToolbarAsset(

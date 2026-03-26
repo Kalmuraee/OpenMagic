@@ -551,6 +551,99 @@ export const MODEL_REGISTRY: ProviderRegistry = {
     keyPlaceholder: "gsk_...",
   },
 
+  // ─── MiniMax ───────────────────────────────────────────────────
+  minimax: {
+    name: "MiniMax",
+    models: [
+      { id: "MiniMax-M2.7", name: "MiniMax M2.7", vision: true, context: 1048576, maxOutput: 16384 },
+      { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", vision: true, context: 1048576, maxOutput: 16384 },
+      { id: "MiniMax-M2.5", name: "MiniMax M2.5", vision: true, context: 1048576, maxOutput: 16384 },
+      { id: "MiniMax-M2.5-highspeed", name: "MiniMax M2.5 Highspeed", vision: true, context: 1048576, maxOutput: 16384 },
+    ],
+    apiBase: "https://api.minimax.chat/v1",
+    keyPrefix: "",
+    keyPlaceholder: "Enter MiniMax API key...",
+  },
+
+  // ─── Moonshot / Kimi ──────────────────────────────────────────
+  moonshot: {
+    name: "Kimi (Moonshot)",
+    models: [
+      {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        vision: true,
+        context: 262144,
+        maxOutput: 16384,
+        thinking: {
+          supported: true,
+          paramName: "reasoning_effort",
+          paramType: "level",
+          levels: ["low", "medium", "high"],
+          defaultLevel: "medium",
+        },
+      },
+      {
+        id: "kimi-k2-thinking",
+        name: "Kimi K2 Thinking",
+        vision: false,
+        context: 262144,
+        maxOutput: 16384,
+        thinking: {
+          supported: true,
+          paramName: "reasoning_effort",
+          paramType: "level",
+          levels: ["low", "medium", "high"],
+          defaultLevel: "high",
+        },
+      },
+    ],
+    apiBase: "https://api.moonshot.cn/v1",
+    keyPrefix: "",
+    keyPlaceholder: "Enter Moonshot API key...",
+  },
+
+  // ─── Alibaba Qwen (DashScope) ────────────────────────────────
+  qwen: {
+    name: "Qwen (Alibaba)",
+    models: [
+      { id: "qwen3.5-plus", name: "Qwen 3.5 Plus", vision: true, context: 1010000, maxOutput: 16384 },
+      { id: "qwen-plus", name: "Qwen Plus", vision: false, context: 131072, maxOutput: 16384 },
+      { id: "qwen-max", name: "Qwen Max", vision: false, context: 131072, maxOutput: 16384 },
+      { id: "qwen-turbo", name: "Qwen Turbo", vision: false, context: 131072, maxOutput: 8192 },
+    ],
+    apiBase: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    keyPrefix: "",
+    keyPlaceholder: "Enter DashScope API key...",
+  },
+
+  // ─── Zhipu AI (GLM) ──────────────────────────────────────────
+  zhipu: {
+    name: "Zhipu AI (GLM)",
+    models: [
+      { id: "glm-5", name: "GLM-5", vision: true, context: 131072, maxOutput: 16384 },
+      { id: "glm-4.7", name: "GLM-4.7", vision: true, context: 131072, maxOutput: 16384 },
+      { id: "glm-4.6", name: "GLM-4.6", vision: true, context: 131072, maxOutput: 16384 },
+      { id: "glm-4.5", name: "GLM-4.5", vision: true, context: 131072, maxOutput: 16384 },
+    ],
+    apiBase: "https://open.bigmodel.cn/api/paas/v4",
+    keyPrefix: "",
+    keyPlaceholder: "Enter Zhipu API key...",
+  },
+
+  // ─── ByteDance Doubao ─────────────────────────────────────────
+  doubao: {
+    name: "Doubao (ByteDance)",
+    models: [
+      { id: "doubao-seed-2-0-pro", name: "Doubao Seed 2.0 Pro", vision: false, context: 131072, maxOutput: 16384 },
+      { id: "doubao-seed-2-0-lite", name: "Doubao Seed 2.0 Lite", vision: false, context: 131072, maxOutput: 8192 },
+      { id: "doubao-seed-2-0-code", name: "Doubao Seed 2.0 Code", vision: false, context: 131072, maxOutput: 16384 },
+    ],
+    apiBase: "https://ark.cn-beijing.volces.com/api/v3",
+    keyPrefix: "",
+    keyPlaceholder: "Enter Volcano Engine API key...",
+  },
+
   // ─── Ollama (Local) ───────────────────────────────────────────
   ollama: {
     name: "Ollama (Local)",

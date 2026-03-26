@@ -69,11 +69,34 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
     { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
     { id: "qwen/qwen3-32b", name: "Qwen 3 32B" },
   ], keyPlaceholder: "gsk_..." },
+  minimax: { name: "MiniMax", models: [
+    { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
+    { id: "MiniMax-M2.7-highspeed", name: "M2.7 Highspeed" },
+    { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
+  ], keyPlaceholder: "MiniMax key..." },
+  moonshot: { name: "Kimi (Moonshot)", models: [
+    { id: "kimi-k2.5", name: "Kimi K2.5" },
+    { id: "kimi-k2-thinking", name: "Kimi K2 Thinking" },
+  ], keyPlaceholder: "Moonshot key..." },
+  qwen: { name: "Qwen (Alibaba)", models: [
+    { id: "qwen3.5-plus", name: "Qwen 3.5 Plus" },
+    { id: "qwen-max", name: "Qwen Max" },
+    { id: "qwen-turbo", name: "Qwen Turbo" },
+  ], keyPlaceholder: "DashScope key..." },
+  zhipu: { name: "Zhipu AI (GLM)", models: [
+    { id: "glm-5", name: "GLM-5" },
+    { id: "glm-4.7", name: "GLM-4.7" },
+    { id: "glm-4.6", name: "GLM-4.6" },
+  ], keyPlaceholder: "Zhipu key..." },
+  doubao: { name: "Doubao (ByteDance)", models: [
+    { id: "doubao-seed-2-0-pro", name: "Doubao Seed 2.0 Pro" },
+    { id: "doubao-seed-2-0-code", name: "Doubao Seed 2.0 Code" },
+  ], keyPlaceholder: "Volcano key..." },
   ollama: { name: "Ollama (Local)", models: [], keyPlaceholder: "not required", local: true },
   openrouter: { name: "OpenRouter", models: [], keyPlaceholder: "sk-or-..." },
 };
 
-const CURRENT_VERSION = "0.5.0";
+const CURRENT_VERSION = "0.6.0";
 
 // --- State ---
 interface AppState {
@@ -200,20 +223,25 @@ function render() {
   const pill = document.createElement("div");
   pill.className = "om-pill";
   pill.innerHTML = `
-    <span class="om-pill-logo">✨</span>
-    <span class="om-pill-text">Magic</span>
+    <span class="om-grab" title="Drag to move">
+      <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>
+    </span>
+    <span class="om-pill-brand">
+      <svg class="om-pill-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>
+      <span class="om-pill-text">OpenMagic</span>
+    </span>
     <span class="om-pill-divider"></span>
     <button class="om-pill-btn ${state.selecting ? "active" : ""}" data-action="select" title="Select Element">
-      🎯
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
     </button>
     <button class="om-pill-btn" data-action="screenshot" title="Screenshot">
-      📸
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
     </button>
-    <button class="om-pill-btn ${state.activePanel === "chat" ? "active" : ""}" data-action="chat" title="Chat">
-      💬
+    <button class="om-pill-btn ${state.activePanel === "chat" ? "active" : ""}" data-action="chat" title="Chat with AI">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
     </button>
     <button class="om-pill-btn ${state.activePanel === "settings" ? "active" : ""}" data-action="settings" title="Settings">
-      ⚙️
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
     </button>
   `;
 
@@ -287,8 +315,11 @@ function renderSettings(): string {
        </div>`
     : "";
 
+  const showSessionKey = state.provider === "openai" || state.provider === "anthropic";
+
   return `
     <div class="om-panel-header">
+      <svg class="om-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
       <span class="om-panel-title">Settings</span>
       <span class="om-panel-version">v${CURRENT_VERSION}</span>
       <button class="om-panel-close" data-action="close">&times;</button>
@@ -313,15 +344,32 @@ function renderSettings(): string {
         </div>
 
         <div class="om-field ${isLocal ? "om-hidden" : ""}">
-          <label class="om-label">API Key</label>
+          <label class="om-label">Authentication</label>
+          ${showSessionKey ? `
+            <div class="om-auth-tabs">
+              <button class="om-auth-tab active" data-auth="apikey">API Key</button>
+              <button class="om-auth-tab" data-auth="session">Session Token</button>
+            </div>
+          ` : ""}
           <input type="password" class="om-input" data-field="apiKey"
                  placeholder="${keyPlaceholder}"
                  value="" />
+          ${showSessionKey ? `
+            <div class="om-auth-hint om-hidden" data-hint="session">
+              <p>To use your existing account session:</p>
+              <ol>
+                <li>Go to <strong>${state.provider === "openai" ? "platform.openai.com" : "console.anthropic.com"}</strong></li>
+                <li>Open DevTools → Application → Cookies</li>
+                <li>Copy the <code>sessionKey</code> value</li>
+                <li>Paste it above</li>
+              </ol>
+            </div>
+          ` : ""}
         </div>
 
         <button class="om-btn" data-action="save-settings">Save Configuration</button>
 
-        ${state.hasApiKey ? '<div class="om-status om-status-success">API key configured</div>' : ""}
+        ${state.hasApiKey ? '<div class="om-status om-status-success">Authenticated</div>' : ""}
       </div>
     </div>
   `;
@@ -401,6 +449,25 @@ function attachPanelEvents(panel: HTMLElement) {
   // Settings: model change
   panel.querySelector('[data-field="model"]')?.addEventListener("change", (e) => {
     state.model = (e.target as HTMLSelectElement).value;
+  });
+
+  // Settings: auth tab switching
+  panel.querySelectorAll(".om-auth-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      panel.querySelectorAll(".om-auth-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      const authType = (tab as HTMLElement).dataset.auth;
+      const hint = panel.querySelector('[data-hint="session"]');
+      const input = panel.querySelector('[data-field="apiKey"]') as HTMLInputElement;
+      if (authType === "session") {
+        hint?.classList.remove("om-hidden");
+        if (input) input.placeholder = "Paste session token...";
+      } else {
+        hint?.classList.add("om-hidden");
+        const currentProvider = MODEL_REGISTRY[state.provider];
+        if (input) input.placeholder = currentProvider?.keyPlaceholder || "Enter API key...";
+      }
+    });
   });
 
   // Settings: save
@@ -644,8 +711,10 @@ function makeDraggable(el: HTMLElement) {
   let origY = 0;
 
   el.addEventListener("mousedown", (e) => {
-    // Only drag from the pill itself, not buttons
-    if ((e.target as HTMLElement).closest(".om-pill-btn")) return;
+    // Only drag from the grab handle or brand area, not buttons
+    const target = e.target as HTMLElement;
+    if (target.closest(".om-pill-btn")) return;
+    if (!target.closest(".om-grab") && !target.closest(".om-pill-brand")) return;
 
     isDragging = true;
     startX = e.clientX;

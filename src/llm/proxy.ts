@@ -12,6 +12,11 @@ const OPENAI_COMPATIBLE_PROVIDERS = new Set([
   "xai",
   "ollama",
   "openrouter",
+  "minimax",
+  "moonshot",
+  "qwen",
+  "zhipu",
+  "doubao",
 ]);
 
 interface LlmChatParams {

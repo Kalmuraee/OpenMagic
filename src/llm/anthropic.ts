@@ -113,8 +113,14 @@ export async function chatAnthropic(
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      onError(`Anthropic API error ${response.status}: ${errorText}`);
+      const errorText = await response.text().catch(() => "Unknown error");
+      if (response.status === 401 || response.status === 403) {
+        onError("Invalid Anthropic API key. Check your key in Settings.");
+      } else if (response.status === 429) {
+        onError("Anthropic rate limit exceeded. Wait a moment and try again.");
+      } else {
+        onError(`Anthropic API error ${response.status}: ${errorText.slice(0, 200)}`);
+      }
       return;
     }
 

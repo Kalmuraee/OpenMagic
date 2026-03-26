@@ -1,4 +1,6 @@
 import http from "node:http";
+import { createGunzip, createInflate, createBrotliDecompress } from "node:zlib";
+import { pipeline } from "node:stream/promises";
 import httpProxy from "http-proxy";
 import { getSessionToken } from "./security.js";
 
@@ -26,58 +28,65 @@ export function createProxyServer(
       return;
     }
 
-    // For HTML responses, collect the body and inject the toolbar script
-    const chunks: Buffer[] = [];
-    proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
-    proxyRes.on("end", () => {
-      let body = Buffer.concat(chunks).toString("utf-8");
+    // For HTML responses, collect the body, decompress if needed, and inject toolbar
+    collectBody(proxyRes)
+      .then((body) => {
+        // Inject toolbar script before </body> or at end
+        const toolbarScript = buildInjectionScript(serverPort, token);
+        if (body.includes("</body>")) {
+          body = body.replace("</body>", `${toolbarScript}</body>`);
+        } else if (body.includes("</html>")) {
+          body = body.replace("</html>", `${toolbarScript}</html>`);
+        } else {
+          body += toolbarScript;
+        }
 
-      // Inject toolbar script before </body> or at end
-      const toolbarScript = buildInjectionScript(serverPort, token);
-      if (body.includes("</body>")) {
-        body = body.replace("</body>", `${toolbarScript}</body>`);
-      } else if (body.includes("</html>")) {
-        body = body.replace("</html>", `${toolbarScript}</html>`);
-      } else {
-        body += toolbarScript;
-      }
+        // Send uncompressed response (we decoded it)
+        const headers = { ...proxyRes.headers };
+        delete headers["content-length"];
+        delete headers["content-encoding"];
+        delete headers["transfer-encoding"];
 
-      // Remove content-length since we modified the body
-      const headers = { ...proxyRes.headers };
-      delete headers["content-length"];
-      delete headers["content-encoding"]; // Remove compression since we decoded it
-
-      res.writeHead(proxyRes.statusCode || 200, headers);
-      res.end(body);
-    });
+        res.writeHead(proxyRes.statusCode || 200, headers);
+        res.end(body);
+      })
+      .catch(() => {
+        // If decompression/collection fails, proxy the raw response
+        // This ensures the app still works even if injection fails
+        try {
+          res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+          res.end();
+        } catch {
+          // Response already sent or connection closed
+        }
+      });
   });
 
   proxy.on("error", (err, _req, res) => {
-    console.error("[OpenMagic] Proxy error:", err.message);
     if (res instanceof http.ServerResponse && !res.headersSent) {
-      res.writeHead(502, { "Content-Type": "text/plain" });
+      res.writeHead(502, { "Content-Type": "text/html" });
       res.end(
-        `OpenMagic proxy error: Could not connect to dev server at ${targetHost}:${targetPort}\n\nMake sure your dev server is running.`
+        `<html><body style="font-family:system-ui;padding:40px;background:#1a1a2e;color:#e0e0e0;">
+          <h2 style="color:#e94560;">OpenMagic — Cannot connect to dev server</h2>
+          <p>Could not reach <code>${targetHost}:${targetPort}</code></p>
+          <p style="color:#888;">Make sure your dev server is running, then refresh this page.</p>
+          <p style="color:#666;font-size:13px;">${err.message}</p>
+        </body></html>`
       );
     }
   });
 
   const server = http.createServer((req, res) => {
-    // Serve toolbar assets from /__openmagic__/ path
     if (req.url?.startsWith("/__openmagic__/")) {
       handleToolbarAsset(req, res, serverPort);
       return;
     }
-
-    // Proxy everything else to the dev server
     proxy.web(req, res);
   });
 
-  // Handle WebSocket upgrades — forward to dev server (for HMR etc.)
   server.on("upgrade", (req, socket, head) => {
-    // Don't proxy OpenMagic WebSocket connections
     if (req.url?.startsWith("/__openmagic__")) {
-      return; // Let the WS server handle this
+      return;
     }
     proxy.ws(req, socket, head);
   });
@@ -85,13 +94,70 @@ export function createProxyServer(
   return server;
 }
 
+function collectBody(stream: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const encoding = (stream.headers["content-encoding"] || "").toLowerCase();
+    const chunks: Buffer[] = [];
+
+    let source: NodeJS.ReadableStream = stream;
+
+    // Decompress if needed
+    if (encoding === "gzip" || encoding === "x-gzip") {
+      const gunzip = createGunzip();
+      stream.pipe(gunzip);
+      source = gunzip;
+      gunzip.on("error", () => {
+        // Decompression failed — try reading raw
+        collectRaw(stream).then(resolve).catch(reject);
+      });
+    } else if (encoding === "deflate") {
+      const inflate = createInflate();
+      stream.pipe(inflate);
+      source = inflate;
+      inflate.on("error", () => {
+        collectRaw(stream).then(resolve).catch(reject);
+      });
+    } else if (encoding === "br") {
+      const brotli = createBrotliDecompress();
+      stream.pipe(brotli);
+      source = brotli;
+      brotli.on("error", () => {
+        collectRaw(stream).then(resolve).catch(reject);
+      });
+    }
+
+    source.on("data", (chunk: Buffer) => chunks.push(chunk));
+    source.on("end", () => {
+      try {
+        resolve(Buffer.concat(chunks).toString("utf-8"));
+      } catch {
+        reject(new Error("Failed to decode response body"));
+      }
+    });
+    source.on("error", (err) => reject(err));
+  });
+}
+
+function collectRaw(stream: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    stream.on("end", () => {
+      try {
+        resolve(Buffer.concat(chunks).toString("utf-8"));
+      } catch {
+        reject(new Error("Failed to decode raw body"));
+      }
+    });
+    stream.on("error", reject);
+  });
+}
+
 function handleToolbarAsset(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
   _serverPort: number
 ): void {
-  // The toolbar bundle is served inline via the injection script
-  // This endpoint exists for potential future asset serving (icons, fonts, etc.)
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not found");
 }

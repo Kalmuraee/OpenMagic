@@ -163,3 +163,47 @@ export function getProjectName(cwd: string = process.cwd()): string {
     return "this project";
   }
 }
+
+// --- Dependency Installation Check ---
+
+export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
+
+export interface DependencyStatus {
+  installed: boolean;
+  packageManager: PackageManager;
+  installCommand: string;
+}
+
+const LOCK_FILES: Array<{ file: string; pm: PackageManager }> = [
+  { file: "pnpm-lock.yaml", pm: "pnpm" },
+  { file: "yarn.lock", pm: "yarn" },
+  { file: "bun.lockb", pm: "bun" },
+  { file: "bun.lock", pm: "bun" },
+  { file: "package-lock.json", pm: "npm" },
+];
+
+const INSTALL_COMMANDS: Record<PackageManager, string> = {
+  npm: "npm install",
+  yarn: "yarn install",
+  pnpm: "pnpm install",
+  bun: "bun install",
+};
+
+export function checkDependenciesInstalled(cwd: string = process.cwd()): DependencyStatus {
+  const hasNodeModules = existsSync(join(cwd, "node_modules"));
+
+  // Detect package manager from lock file
+  let pm: PackageManager = "npm";
+  for (const { file, pm: detectedPm } of LOCK_FILES) {
+    if (existsSync(join(cwd, file))) {
+      pm = detectedPm;
+      break;
+    }
+  }
+
+  return {
+    installed: hasNodeModules,
+    packageManager: pm,
+    installCommand: INSTALL_COMMANDS[pm],
+  };
+}

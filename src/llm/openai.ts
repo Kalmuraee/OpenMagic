@@ -122,8 +122,14 @@ export async function chatOpenAICompatible(
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      onError(`API error ${response.status}: ${errorText}`);
+      const errorText = await response.text().catch(() => "Unknown error");
+      if (response.status === 401 || response.status === 403) {
+        onError(`Invalid API key for ${providerConfig.name}. Check your key in Settings.`);
+      } else if (response.status === 429) {
+        onError(`Rate limit exceeded for ${providerConfig.name}. Wait a moment and try again.`);
+      } else {
+        onError(`${providerConfig.name} API error ${response.status}: ${errorText.slice(0, 200)}`);
+      }
       return;
     }
 

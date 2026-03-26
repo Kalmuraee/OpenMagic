@@ -2,8 +2,23 @@ import { Command } from "commander";
 import chalk from "chalk";
 import open from "open";
 import { resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+
+// Global error handlers — prevent silent crashes
+process.on("unhandledRejection", (err) => {
+  console.error(chalk.red("\n  [OpenMagic] Unhandled error:"), (err as Error)?.message || err);
+  console.error(chalk.dim("  Please report this at https://github.com/Kalmuraee/OpenMagic/issues"));
+});
+
+process.on("uncaughtException", (err) => {
+  console.error(chalk.red("\n  [OpenMagic] Fatal error:"), err.message);
+  console.error(chalk.dim("  Please report this at https://github.com/Kalmuraee/OpenMagic/issues"));
+  process.exit(1);
+});
+
+// Track child processes for cleanup
+const childProcesses: ChildProcess[] = [];
 import { createProxyServer } from "./proxy.js";
 import { createOpenMagicServer } from "./server.js";
 import { generateSessionToken } from "./security.js";
@@ -13,10 +28,11 @@ import {
   isPortOpen,
   detectDevScripts,
   getProjectName,
+  checkDependenciesInstalled,
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -28,10 +44,18 @@ function ask(question: string): Promise<string> {
   });
 }
 
-function waitForPort(port: number, timeoutMs: number = 30000): Promise<boolean> {
+function waitForPort(
+  port: number,
+  timeoutMs: number = 30000,
+  shouldAbort?: () => boolean
+): Promise<boolean> {
   const start = Date.now();
   return new Promise((resolve) => {
     const check = async () => {
+      if (shouldAbort?.()) {
+        resolve(false);
+        return;
+      }
       if (await isPortOpen(port)) {
         resolve(true);
         return;
@@ -43,6 +67,37 @@ function waitForPort(port: number, timeoutMs: number = 30000): Promise<boolean> 
       setTimeout(check, 500);
     };
     check();
+  });
+}
+
+function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(cmd, args, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true,
+      });
+
+      child.stdout?.on("data", (data: Buffer) => {
+        const lines = data.toString().trim().split("\n");
+        for (const line of lines) {
+          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+        }
+      });
+
+      child.stderr?.on("data", (data: Buffer) => {
+        const lines = data.toString().trim().split("\n");
+        for (const line of lines) {
+          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+        }
+      });
+
+      child.on("error", () => resolve(false));
+      child.on("close", (code) => resolve(code === 0));
+    } catch {
+      resolve(false);
+    }
   });
 }
 
@@ -204,6 +259,45 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     return false;
   }
 
+  // Check if dependencies are installed
+  const deps = checkDependenciesInstalled();
+  if (!deps.installed) {
+    console.log(
+      chalk.yellow("  ⚠  node_modules/ not found. Dependencies need to be installed.")
+    );
+    console.log("");
+
+    const answer = await ask(
+      chalk.white(`  Run `) +
+      chalk.cyan(deps.installCommand) +
+      chalk.white("? ") +
+      chalk.dim("(Y/n) ")
+    );
+
+    if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
+      console.log("");
+      console.log(chalk.dim(`  Run ${deps.installCommand} manually, then try again.`));
+      console.log("");
+      return false;
+    }
+
+    console.log("");
+    console.log(chalk.dim(`  Installing dependencies with ${deps.packageManager}...`));
+
+    const [installCmd, ...installArgs] = deps.installCommand.split(" ");
+    const installed = await runCommand(installCmd, installArgs);
+
+    if (!installed) {
+      console.log(chalk.red("  ✗  Dependency installation failed."));
+      console.log(chalk.dim(`     Try running ${deps.installCommand} manually.`));
+      console.log("");
+      return false;
+    }
+
+    console.log(chalk.green("  ✓  Dependencies installed."));
+    console.log("");
+  }
+
   // Pick the best script
   let chosen = scripts[0];
   if (scripts.length === 1) {
@@ -283,64 +377,91 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     chalk.dim("...")
   );
 
-  const child = spawn("npm", ["run", chosen.name], {
-    cwd: process.cwd(),
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
-    shell: true,
-    env: {
-      ...process.env,
-      PORT: String(port),       // CRA, Express
-      BROWSER: "none",          // Prevent CRA from opening browser
-      BROWSER_NONE: "true",     // Some frameworks
-    },
-  });
+  // Use the correct package manager run command
+  const depsInfo = checkDependenciesInstalled();
+  const runCmd = depsInfo.packageManager === "yarn" ? "yarn" :
+    depsInfo.packageManager === "pnpm" ? "pnpm" :
+    depsInfo.packageManager === "bun" ? "bun" : "npm";
+  const runArgs = runCmd === "npm" ? ["run", chosen.name] : [chosen.name];
 
-  // Pipe child output with prefix
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(runCmd, runArgs, {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: false,
+      shell: true,
+      env: {
+        ...process.env,
+        PORT: String(port),
+        BROWSER: "none",
+        BROWSER_NONE: "true",
+      },
+    });
+  } catch (e: unknown) {
+    console.log(chalk.red(`  ✗  Failed to start: ${(e as Error).message}`));
+    return false;
+  }
+
+  childProcesses.push(child);
+  let childExited = false;
+
   child.stdout?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line.trim()) {
-        process.stdout.write(chalk.dim(`  │ ${line}\n`));
-      }
+    for (const line of data.toString().trim().split("\n")) {
+      if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
     }
   });
 
   child.stderr?.on("data", (data: Buffer) => {
-    const lines = data.toString().trim().split("\n");
-    for (const line of lines) {
-      if (line.trim()) {
-        process.stdout.write(chalk.dim(`  │ ${line}\n`));
-      }
+    for (const line of data.toString().trim().split("\n")) {
+      if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
     }
   });
 
   child.on("error", (err) => {
+    childExited = true;
     console.log(chalk.red(`  ✗  Failed to start: ${err.message}`));
   });
 
   child.on("exit", (code) => {
+    childExited = true;
     if (code !== null && code !== 0) {
       console.log(chalk.red(`  ✗  Dev server exited with code ${code}`));
     }
   });
 
-  // Clean up child on exit
+  // Clean up all child processes on exit
   const cleanup = () => {
-    try {
-      child.kill("SIGTERM");
-    } catch {}
+    for (const cp of childProcesses) {
+      try { cp.kill("SIGTERM"); } catch {}
+    }
+    setTimeout(() => {
+      for (const cp of childProcesses) {
+        try { cp.kill("SIGKILL"); } catch {}
+      }
+    }, 3000);
   };
   process.on("exit", cleanup);
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  // Wait for the port to open
+  // Wait for the port to open (abort early if child exits)
   console.log(
     chalk.dim(`  Waiting for port ${port}...`)
   );
 
-  const isUp = await waitForPort(port, 30000);
+  const isUp = await waitForPort(port, 30000, () => childExited);
+
+  if (childExited && !isUp) {
+    console.log(
+      chalk.red(`  ✗  Dev server exited before it was ready.`)
+    );
+    console.log(
+      chalk.dim(`     Check the error output above and fix the issue.`)
+    );
+    console.log("");
+    return false;
+  }
 
   if (!isUp) {
     console.log(

@@ -26,10 +26,14 @@ export function loadConfig(): Partial<OpenMagicConfig> {
 }
 
 export function saveConfig(updates: Partial<OpenMagicConfig>): void {
-  ensureConfigDir();
-  const existing = loadConfig();
-  const merged = { ...existing, ...updates };
-  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+  try {
+    ensureConfigDir();
+    const existing = loadConfig();
+    const merged = { ...existing, ...updates };
+    writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+  } catch (e: unknown) {
+    console.warn(`[OpenMagic] Warning: Could not save config to ${CONFIG_FILE}: ${(e as Error).message}`);
+  }
 }
 
 export function getConfigPath(): string {

@@ -41,7 +41,7 @@ export function createOpenMagicServer(
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       });
-      res.end(JSON.stringify({ status: "ok", version: "0.3.0" }));
+      res.end(JSON.stringify({ status: "ok", version: "0.4.0" }));
       return;
     }
 
@@ -101,6 +101,11 @@ async function handleMessage(
   switch (msg.type) {
     case "handshake": {
       const payload = msg.payload as HandshakePayload;
+      if (!payload?.token) {
+        sendError(ws, "invalid_payload", "Missing token in handshake", msg.id);
+        ws.close();
+        return;
+      }
       if (!validateToken(payload.token)) {
         sendError(ws, "auth_failed", "Invalid token", msg.id);
         ws.close();
@@ -112,7 +117,7 @@ async function handleMessage(
         id: msg.id,
         type: "handshake.ok",
         payload: {
-          version: "0.3.0",
+          version: "0.4.0",
           roots,
           config: {
             provider: config.provider,
@@ -126,6 +131,10 @@ async function handleMessage(
 
     case "fs.read": {
       const payload = msg.payload as FsReadPayload;
+      if (!payload?.path) {
+        sendError(ws, "invalid_payload", "Missing path", msg.id);
+        break;
+      }
       const result = readFileSafe(payload.path, roots);
       if ("error" in result) {
         sendError(ws, "fs_error", result.error, msg.id);
@@ -255,15 +264,20 @@ function serveToolbarBundle(res: http.ServerResponse): void {
   ];
 
   for (const bundlePath of bundlePaths) {
-    if (existsSync(bundlePath)) {
-      const content = readFileSync(bundlePath, "utf-8");
-      res.writeHead(200, {
-        "Content-Type": "application/javascript",
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "no-cache",
-      });
-      res.end(content);
-      return;
+    try {
+      if (existsSync(bundlePath)) {
+        const content = readFileSync(bundlePath, "utf-8");
+        res.writeHead(200, {
+          "Content-Type": "application/javascript",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-cache",
+        });
+        res.end(content);
+        return;
+      }
+    } catch {
+      // Permission error or read failure — try next path
+      continue;
     }
   }
 

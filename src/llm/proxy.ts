@@ -50,22 +50,31 @@ export async function handleLlmChat(
     onDone({ content: result.content, modifications });
   };
 
-  if (provider === "anthropic") {
-    await chatAnthropic(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
-  } else if (provider === "google") {
-    await chatGoogle(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
-  } else if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
-    await chatOpenAICompatible(
-      provider,
-      model,
-      apiKey,
-      messages,
-      context,
-      onChunk,
-      wrappedOnDone,
-      onError
-    );
-  } else {
-    onError(`Unsupported provider: ${provider}`);
+  try {
+    if (provider === "anthropic") {
+      await chatAnthropic(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
+    } else if (provider === "google") {
+      await chatGoogle(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
+    } else if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
+      await chatOpenAICompatible(
+        provider,
+        model,
+        apiKey,
+        messages,
+        context,
+        onChunk,
+        wrappedOnDone,
+        onError
+      );
+    } else {
+      onError(`Unsupported provider: ${provider}. Check your Settings.`);
+    }
+  } catch (e: unknown) {
+    const msg = (e as Error).message || "Unknown error";
+    if (msg.includes("fetch") || msg.includes("ECONNREFUSED") || msg.includes("network")) {
+      onError(`Network error: Could not reach the ${provider} API. Check your internet connection.`);
+    } else {
+      onError(`Unexpected error with ${provider}: ${msg}`);
+    }
   }
 }

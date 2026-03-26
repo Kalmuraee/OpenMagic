@@ -94,8 +94,14 @@ export async function chatGoogle(
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      onError(`Google API error ${response.status}: ${errorText}`);
+      const errorText = await response.text().catch(() => "Unknown error");
+      if (response.status === 401 || response.status === 403) {
+        onError("Invalid Google API key. Check your key in Settings.");
+      } else if (response.status === 429) {
+        onError("Google API rate limit exceeded. Wait a moment and try again.");
+      } else {
+        onError(`Google API error ${response.status}: ${errorText.slice(0, 200)}`);
+      }
       return;
     }
 

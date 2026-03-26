@@ -1,6 +1,6 @@
 import type { ChatMessage, LlmContext } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
-import { SYSTEM_PROMPT, buildUserMessage } from "./prompts.js";
+import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
 
 interface AnthropicMessage {
   role: "user" | "assistant";
@@ -26,30 +26,7 @@ export async function chatAnthropic(
     if (msg.role === "system") continue;
 
     if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
-      const contextParts: Parameters<typeof buildUserMessage>[1] = {};
-
-      if (context.selectedElement) {
-        contextParts.selectedElement = context.selectedElement.outerHTML;
-      }
-      if (context.files && context.files.length > 0) {
-        contextParts.filePath = context.files[0].path;
-        contextParts.fileContent = context.files[0].content;
-      }
-      if (context.projectTree) {
-        contextParts.projectTree = context.projectTree;
-      }
-      if (context.networkLogs) {
-        contextParts.networkLogs = context.networkLogs
-          .map((l) => `${l.method} ${l.url} → ${l.status || "pending"}`)
-          .join("\n");
-      }
-      if (context.consoleLogs) {
-        contextParts.consoleLogs = context.consoleLogs
-          .map((l) => `[${l.level}] ${l.args.join(" ")}`)
-          .join("\n");
-      }
-
-      const enrichedContent = buildUserMessage(msg.content, contextParts);
+      const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
 
       // If screenshot available, use vision
       if (context.screenshot) {

@@ -6,6 +6,7 @@ import {
   readdirSync,
   copyFileSync,
   mkdirSync,
+  realpathSync,
 } from "node:fs";
 import { join, resolve, relative, dirname, extname } from "node:path";
 import type { FileEntry } from "./shared-types.js";
@@ -45,10 +46,24 @@ const IGNORED_EXTENSIONS = new Set([
 
 export function isPathSafe(filePath: string, roots: string[]): boolean {
   const resolved = resolve(filePath);
+
+  // Also check realpath to prevent symlink escape
+  let real: string;
+  try {
+    real = realpathSync(resolved);
+  } catch {
+    // File doesn't exist yet (for writes) — use resolved path
+    real = resolved;
+  }
+
   return roots.some((root) => {
     const resolvedRoot = resolve(root);
     const rel = relative(resolvedRoot, resolved);
-    return !rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\");
+    const realRel = relative(resolvedRoot, real);
+    return (
+      (!rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\")) &&
+      (!realRel.startsWith("..") && !realRel.startsWith("/") && !realRel.startsWith("\\"))
+    );
   });
 }
 

@@ -195,9 +195,3 @@ export function hideHighlight(): void {
   }
 }
 
-export function removeHighlight(): void {
-  if (highlightEl) {
-    highlightEl.remove();
-    highlightEl = null;
-  }
-}

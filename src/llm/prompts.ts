@@ -1,3 +1,5 @@
+import type { LlmContext } from "../shared-types.js";
+
 export const SYSTEM_PROMPT = `You are OpenMagic, an AI coding assistant embedded in a developer's web application. You help modify the codebase based on visual context from the running app.
 
 ## Your Role
@@ -36,6 +38,16 @@ You MUST respond with valid JSON in this exact format:
 6. If the change involves multiple files, include all modifications in the array
 7. ALWAYS respond with the JSON format above, even for explanations (put them in the "explanation" field)
 8. If you cannot make the requested change, set modifications to an empty array and explain why`;
+
+export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
+  const parts: Parameters<typeof buildUserMessage>[1] = {};
+  if (context.selectedElement) parts.selectedElement = context.selectedElement.outerHTML;
+  if (context.files?.length) { parts.filePath = context.files[0].path; parts.fileContent = context.files[0].content; }
+  if (context.projectTree) parts.projectTree = context.projectTree;
+  if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
+  if (context.consoleLogs) parts.consoleLogs = context.consoleLogs.map(l => `[${l.level}] ${l.args.join(" ")}`).join("\n");
+  return parts;
+}
 
 export function buildUserMessage(
   userPrompt: string,

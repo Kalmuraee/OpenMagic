@@ -2,7 +2,7 @@ import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshot } from "./services/capture.js";
-import { installNetworkCapture, installConsoleCapture, buildContext } from "./services/context-builder.js";
+import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 
 // ── SVG Icons (Lucide-style) ─────────────────────────────────────
 const ICON = {
@@ -16,6 +16,10 @@ const ICON = {
   externalLink: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
   check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`,
   grip: `<svg width="7" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>`,
+  network: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
+  activity: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+  paperclip: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
+  image: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
 };
 
 // ── Model Registry (inline for browser bundle) ───────────────────
@@ -80,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.16.0";
+const CURRENT_VERSION = "0.17.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -101,6 +105,8 @@ const state = {
   updateAvailable: false,
   latestVersion: "",
   saveStatus: "" as "" | "saving" | "saved" | "error",
+  networkCapture: false,       // whether network panel is showing
+  attachments: [] as string[], // base64 image data URLs attached to next message
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -231,6 +237,7 @@ function buildStaticDOM(): string {
         <span class="om-pill-divider"></span>
         <button class="om-pill-btn" data-action="select" title="Select element">${ICON.crosshair}</button>
         <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
+        <button class="om-pill-btn" data-action="network" title="Network & Performance">${ICON.activity}</button>
         <span class="om-pill-divider"></span>
         <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
         <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
@@ -244,10 +251,13 @@ function buildStaticDOM(): string {
         </div>
         <div class="om-panel-body"></div>
       </div>
+      <div class="om-prompt-attachments"></div>
       <div class="om-prompt-row">
         <div class="om-prompt-context"></div>
+        <button class="om-prompt-attach" data-action="attach-image" title="Attach image">${ICON.paperclip}</button>
         <input class="om-prompt-input" type="text" placeholder="Describe what to change..." autocomplete="off" />
         <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
+        <input type="file" class="om-file-input om-hidden" accept="image/*" multiple />
       </div>
     </div>`;
 }
@@ -288,6 +298,49 @@ function attachGlobalEvents(root: HTMLElement) {
       sendPrompt();
     }
   });
+
+  // File input change handler
+  const fileInput = root.querySelector(".om-file-input") as HTMLInputElement;
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      handleFileSelect(fileInput.files);
+      fileInput.value = ""; // Reset so same file can be selected again
+    });
+  }
+
+  // Drag and drop on prompt area
+  const promptRow = root.querySelector(".om-prompt-row");
+  if (promptRow) {
+    promptRow.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      (promptRow as HTMLElement).style.borderColor = "rgba(108, 92, 231, 0.5)";
+    });
+    promptRow.addEventListener("dragleave", () => {
+      (promptRow as HTMLElement).style.borderColor = "";
+    });
+    promptRow.addEventListener("drop", (e) => {
+      e.preventDefault();
+      (promptRow as HTMLElement).style.borderColor = "";
+      const dt = (e as DragEvent).dataTransfer;
+      if (dt?.files?.length) handleFileSelect(dt.files);
+    });
+
+    // Also handle paste with images
+    $promptInput.addEventListener("paste", (e) => {
+      const items = (e as ClipboardEvent).clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) {
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            handleFileSelect(dt.files);
+          }
+        }
+      }
+    });
+  }
 
   // Listen for reconnection events
   ws.onMessage((msg: any) => {
@@ -394,6 +447,14 @@ function handleAction(action: string, target: HTMLElement) {
       target.style.display = "none";
       break;
     }
+    case "network": togglePanel("chat"); captureNetworkProfile(); break;
+    case "attach-image": triggerFileAttach(); break;
+    case "remove-attachment": {
+      const idx = parseInt(target.dataset.idx || "0", 10);
+      state.attachments.splice(idx, 1);
+      renderAttachments();
+      break;
+    }
     case "apply-diff": applyDiff(target); break;
     case "reject-diff": rejectDiff(target); break;
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
@@ -424,6 +485,9 @@ function updatePromptContext() {
   }
   if (state.screenshot) {
     chips.push(`<span class="om-prompt-chip">Screenshot <button class="om-prompt-chip-x" data-action="clear-screenshot">${ICON.x}</button></span>`);
+  }
+  if (state.attachments.length) {
+    chips.push(`<span class="om-prompt-chip">${state.attachments.length} image${state.attachments.length > 1 ? "s" : ""}</span>`);
   }
   $promptCtx.innerHTML = chips.join("");
 }
@@ -703,6 +767,16 @@ async function sendPrompt() {
   context.pageUrl = window.location.href;
   context.pageTitle = document.title;
 
+  // Include image attachments (for vision-capable models)
+  if (state.attachments.length > 0) {
+    // Use the first attachment as the screenshot if none is captured
+    if (!context.screenshot) {
+      context.screenshot = state.attachments[0];
+    }
+    // Store all attachments for multi-image models
+    context.attachments = [...state.attachments];
+  }
+
   // Grounding: read project tree + score and read relevant source files
   const MAX_GROUNDED_FILES = 4;
   const MAX_GROUNDED_CHARS = 24000;
@@ -789,8 +863,105 @@ async function sendPrompt() {
 
   state.streaming = false;
   state.streamContent = "";
+  state.attachments = [];
+  renderAttachments();
   refreshPanelContent();
   scrollChatToBottom();
+}
+
+// ── Network & Profiling ──────────────────────────────────────────
+
+function captureNetworkProfile() {
+  // Capture performance timing
+  const perf = window.performance;
+  const navEntry = perf.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  const paintEntries = perf.getEntriesByType("paint");
+  const resources = perf.getEntriesByType("resource").slice(-20) as PerformanceResourceTiming[];
+
+  const networkLogs = getNetworkLogs();
+  const consoleLogs = getConsoleLogs();
+
+  // Build a summary message
+  const lines: string[] = [];
+  lines.push("--- Network & Performance Capture ---");
+
+  if (navEntry) {
+    lines.push(`Page load: ${Math.round(navEntry.loadEventEnd - navEntry.startTime)}ms`);
+    lines.push(`DOM ready: ${Math.round(navEntry.domContentLoadedEventEnd - navEntry.startTime)}ms`);
+    lines.push(`TTFB: ${Math.round(navEntry.responseStart - navEntry.startTime)}ms`);
+  }
+
+  const fcp = paintEntries.find(e => e.name === "first-contentful-paint");
+  if (fcp) lines.push(`FCP: ${Math.round(fcp.startTime)}ms`);
+
+  if (networkLogs.length) {
+    lines.push(`\nRecent requests (${networkLogs.length}):`);
+    for (const log of networkLogs.slice(-15)) {
+      lines.push(`  ${log.method} ${log.url.slice(0, 80)} → ${log.status || "pending"} (${log.duration || "?"}ms)`);
+    }
+  }
+
+  if (consoleLogs.length) {
+    const errors = consoleLogs.filter(l => l.level === "error");
+    const warns = consoleLogs.filter(l => l.level === "warn");
+    if (errors.length) lines.push(`\nConsole errors: ${errors.length}`);
+    if (warns.length) lines.push(`Console warnings: ${warns.length}`);
+  }
+
+  if (resources.length) {
+    const slowest = [...resources].sort((a, b) => b.duration - a.duration).slice(0, 5);
+    lines.push(`\nSlowest resources:`);
+    for (const r of slowest) {
+      lines.push(`  ${Math.round(r.duration)}ms — ${r.name.split("/").pop()?.slice(0, 50)}`);
+    }
+  }
+
+  // Add as a system message in the chat
+  state.messages.push({ role: "system", content: lines.join("\n") });
+  refreshPanelContent();
+  scrollChatToBottom();
+  updatePromptContext();
+}
+
+// ── File Attachments ─────────────────────────────────────────────
+
+function triggerFileAttach() {
+  const input = shadow.querySelector(".om-file-input") as HTMLInputElement;
+  if (input) input.click();
+}
+
+function handleFileSelect(files: FileList | null) {
+  if (!files) return;
+  for (let i = 0; i < files.length && state.attachments.length < 5; i++) {
+    const file = files[i];
+    if (!file.type.startsWith("image/")) continue;
+    if (file.size > 10 * 1024 * 1024) continue; // 10MB max
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        state.attachments.push(reader.result);
+        renderAttachments();
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+function renderAttachments() {
+  const container = shadow.querySelector(".om-prompt-attachments");
+  if (!container) return;
+  if (!state.attachments.length) {
+    container.innerHTML = "";
+    container.classList.add("om-hidden");
+    return;
+  }
+  container.classList.remove("om-hidden");
+  container.innerHTML = state.attachments.map((a, i) =>
+    `<div class="om-attachment-thumb">
+      <img src="${a}" alt="attachment" />
+      <button class="om-attachment-remove" data-action="remove-attachment" data-idx="${i}">${ICON.x}</button>
+    </div>`
+  ).join("");
 }
 
 // ── Select Mode ──────────────────────────────────────────────────

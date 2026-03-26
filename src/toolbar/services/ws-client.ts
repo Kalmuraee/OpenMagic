@@ -87,7 +87,12 @@ export function connect(port: number, token: string): Promise<void> {
         if (wasConnected && shouldReconnect && !reconnectTimer) {
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
-            connect(port, token).catch(() => {});
+            connect(port, token).then(() => {
+              // Notify toolbar of reconnection
+              for (const handler of globalHandlers) {
+                handler({ type: "reconnected", payload: {} });
+              }
+            }).catch(() => {});
           }, 2000);
         }
       };

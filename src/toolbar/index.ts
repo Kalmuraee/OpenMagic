@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.11.0";
+const CURRENT_VERSION = "0.12.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -124,6 +124,17 @@ function init() {
   // Attach event delegation ONCE
   attachGlobalEvents(root);
   setupDraggable();
+
+  // Restore persisted toolbar position
+  try {
+    const pos = JSON.parse(localStorage.getItem("__om_pos__") || "");
+    if (pos?.left && pos?.top) {
+      $toolbar.style.left = pos.left;
+      $toolbar.style.top = pos.top;
+      $toolbar.style.right = "auto";
+      $toolbar.style.bottom = "auto";
+    }
+  } catch {}
 
   installNetworkCapture();
   installConsoleCapture();
@@ -224,6 +235,65 @@ function attachGlobalEvents(root: HTMLElement) {
       sendPrompt();
     }
   });
+
+  // Listen for reconnection events
+  ws.onMessage((msg: any) => {
+    if (msg.type === "reconnected") {
+      state.connected = true;
+      updateStatusDot();
+    }
+  });
+}
+
+function resolveFilePath(rel: string): string {
+  return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
+}
+
+async function applyDiff(target: HTMLElement) {
+  const file = target.dataset.file;
+  const searchB64 = target.dataset.search;
+  const replaceB64 = target.dataset.replace;
+  if (!file || !searchB64 || !replaceB64) return;
+
+  const search = atob(searchB64);
+  const replace = atob(replaceB64);
+  const card = target.closest(".om-diff-card") as HTMLElement | null;
+
+  try {
+    const fileResult = await ws.request("fs.read", { path: resolveFilePath(file) });
+    const content = fileResult.payload?.content;
+    if (content?.includes(search)) {
+      const writeResult = await ws.request("fs.write", { path: resolveFilePath(file), content: content.replace(search, replace) });
+      if (writeResult?.payload?.ok === false) {
+        state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload.error || "unknown"}` });
+      } else {
+        // Update the diff message to "Applied"
+        const idx = card?.dataset.diffIdx;
+        if (idx !== undefined) {
+          state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}` };
+        }
+      }
+    } else {
+      state.messages.push({ role: "system", content: `Could not find matching code in ${file}` });
+    }
+  } catch (e: any) {
+    state.messages.push({ role: "system", content: `Failed: ${file} - ${e.message}` });
+  }
+
+  refreshPanelContent();
+  scrollChatToBottom();
+}
+
+function rejectDiff(target: HTMLElement) {
+  const idx = target.dataset.idx;
+  if (idx !== undefined) {
+    const i = parseInt(idx);
+    const parts = state.messages[i]?.content.split("__");
+    const file = parts?.[3] || "file";
+    state.messages[i] = { role: "system", content: `Rejected change to ${file}` };
+  }
+  refreshPanelContent();
+  scrollChatToBottom();
 }
 
 function handleAction(action: string, target: HTMLElement) {
@@ -240,6 +310,8 @@ function handleAction(action: string, target: HTMLElement) {
       if (url) window.open(url, "_blank", "noopener");
       break;
     }
+    case "apply-diff": applyDiff(target); break;
+    case "reject-diff": rejectDiff(target); break;
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
     case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
   }
@@ -366,9 +438,25 @@ function renderChatHTML(): string {
     return `<div class="om-status om-status-error">Configure your provider in Settings first</div>`;
   }
 
-  const msgs = state.messages.map(m =>
-    `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`
-  ).join("");
+  const msgs = state.messages.map((m, i) => {
+    if (m.content.startsWith("__DIFF__")) {
+      const parts = m.content.split("__");
+      // parts: ["", "DIFF", id, file, base64search, base64replace, ""]
+      const file = parts[3];
+      const search = atob(parts[4]);
+      const replace = atob(parts[5]);
+      return `<div class="om-diff-card" data-diff-idx="${i}">
+        <div class="om-diff-file">${escapeHtml(file)}</div>
+        <div class="om-diff-removed">${escapeHtml(search.slice(0, 200))}</div>
+        <div class="om-diff-added">${escapeHtml(replace.slice(0, 200))}</div>
+        <div class="om-diff-actions">
+          <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(file)}" data-search="${parts[4]}" data-replace="${parts[5]}">Apply</button>
+          <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`;
+  }).join("");
 
   const streamHtml = state.streaming
     ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span>${escapeHtml(state.streamContent)}</div>` : "";
@@ -524,24 +612,15 @@ async function sendPrompt() {
 
     state.messages.push({ role: "assistant", content: state.streamContent || result?.content || "" });
 
-    // Apply code modifications if any
+    // Show diff previews for approval instead of auto-applying
     if (result?.modifications?.length) {
       for (const mod of result.modifications) {
         if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
-          try {
-            const fileResult = await ws.request("fs.read", { path: resolveFilePath(mod.file) });
-            const content = fileResult.payload?.content;
-            if (content?.includes(mod.search)) {
-              const writeResult = await ws.request("fs.write", { path: resolveFilePath(mod.file), content: content.replace(mod.search, mod.replace) });
-              if (writeResult?.payload?.ok === false) {
-                state.messages.push({ role: "system", content: `Write failed: ${mod.file} - ${writeResult.payload.error || "unknown"}` });
-              } else {
-                state.messages.push({ role: "system", content: `Applied change to ${mod.file}` });
-              }
-            }
-          } catch (e: any) {
-            state.messages.push({ role: "system", content: `Failed: ${mod.file} - ${e.message}` });
-          }
+          const diffId = Math.random().toString(36).slice(2);
+          state.messages.push({
+            role: "system",
+            content: `__DIFF__${diffId}__${mod.file}__${btoa(mod.search)}__${btoa(mod.replace)}__`,
+          });
         }
       }
     }
@@ -553,10 +632,6 @@ async function sendPrompt() {
   state.streamContent = "";
   refreshPanelContent();
   scrollChatToBottom();
-}
-
-function resolveFilePath(rel: string): string {
-  return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
 }
 
 // ── Select Mode ──────────────────────────────────────────────────
@@ -618,7 +693,9 @@ function exitSelectMode() {
 }
 
 async function takeScreenshot() {
-  const ss = await captureScreenshot();
+  // If element is selected, try element screenshot first
+  const target = state.selectedElement ? document.querySelector(state.selectedElement.cssSelector) as HTMLElement : undefined;
+  const ss = await captureScreenshot(target || undefined);
   if (ss) {
     state.screenshot = ss;
     updatePromptContext();
@@ -650,7 +727,18 @@ function setupDraggable() {
     $toolbar.style.bottom = "auto";
   });
 
-  document.addEventListener("mouseup", () => { active = false; });
+  document.addEventListener("mouseup", () => {
+    if (active) {
+      active = false;
+      // Persist position
+      try {
+        localStorage.setItem("__om_pos__", JSON.stringify({
+          left: $toolbar.style.left,
+          top: $toolbar.style.top,
+        }));
+      } catch {}
+    }
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

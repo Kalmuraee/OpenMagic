@@ -1,6 +1,6 @@
 import type { ChatMessage, LlmContext } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
-import { SYSTEM_PROMPT, buildUserMessage } from "./prompts.js";
+import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
 
 export async function chatGoogle(
   model: string,
@@ -27,20 +27,7 @@ export async function chatGoogle(
     const role = msg.role === "assistant" ? "model" : "user";
 
     if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
-      const contextParts: Parameters<typeof buildUserMessage>[1] = {};
-
-      if (context.selectedElement) {
-        contextParts.selectedElement = context.selectedElement.outerHTML;
-      }
-      if (context.files && context.files.length > 0) {
-        contextParts.filePath = context.files[0].path;
-        contextParts.fileContent = context.files[0].content;
-      }
-      if (context.projectTree) {
-        contextParts.projectTree = context.projectTree;
-      }
-
-      const enrichedContent = buildUserMessage(msg.content, contextParts);
+      const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
 
       const parts: Array<{ text?: string; inline_data?: { mime_type: string; data: string } }> = [
         { text: enrichedContent },

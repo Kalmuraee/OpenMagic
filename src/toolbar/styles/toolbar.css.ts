@@ -16,7 +16,7 @@ export const TOOLBAR_CSS = `
   bottom: 20px;
   right: 20px;
   z-index: 2147483647;
-  width: 420px;
+  width: min(420px, calc(100vw - 40px));
   display: flex;
   flex-direction: column;
   background: #111125;
@@ -25,6 +25,23 @@ export const TOOLBAR_CSS = `
   box-shadow: 0 6px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.02);
   overflow: hidden;
 }
+
+/* Panel header */
+.om-panel-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  background: rgba(108, 92, 231, 0.03);
+  flex-shrink: 0;
+}
+.om-panel-title { font-size: 11px; font-weight: 600; color: #a29bfe; }
+.om-panel-version { font-size: 10px; color: #444; margin-left: auto; }
+.om-panel-close {
+  background: none; border: none; color: #555; cursor: pointer;
+  padding: 2px 4px; border-radius: 4px; line-height: 1;
+  display: flex; align-items: center;
+}
+.om-panel-close:hover { color: #ccc; background: rgba(255,255,255,0.05); }
 
 /* ── Header Bar (brand + tools) ───────────────────────── */
 .om-toolbar-header {

@@ -27,7 +27,6 @@ process.on("uncaughtException", (err) => {
 // Track child processes for cleanup
 const childProcesses: ChildProcess[] = [];
 import { createProxyServer } from "./proxy.js";
-import { createOpenMagicServer } from "./server.js";
 import { generateSessionToken } from "./security.js";
 import {
   detectDevServer,
@@ -39,7 +38,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -253,42 +252,29 @@ program
     saveConfig({ ...config, roots, targetPort });
 
     // Generate session token
-    const token = generateSessionToken();
+    generateSessionToken();
 
-    // Find available proxy port (need TWO consecutive free ports: proxy + companion)
+    // Find available port (single port — proxy + toolbar + WS all on same origin)
     let proxyPort = parseInt(opts.listen, 10);
-    while (await isPortOpen(proxyPort) || await isPortOpen(proxyPort + 1)) {
+    while (await isPortOpen(proxyPort)) {
       proxyPort++;
       if (proxyPort > parseInt(opts.listen, 10) + 100) {
-        console.log(chalk.red("  Could not find two consecutive free ports."));
+        console.log(chalk.red("  Could not find an available port."));
         process.exit(1);
       }
     }
 
-    const companionPort = proxyPort + 1;
-
-    // Start the OpenMagic server (serves toolbar + WebSocket)
-    const { httpServer: omServer } = createOpenMagicServer(companionPort, roots);
-    omServer.listen(companionPort, "127.0.0.1", () => {
-      // OpenMagic API/WS server running
-    });
-
-    // Start the proxy server
-    const proxyServer = createProxyServer(
-      targetHost,
-      targetPort!,
-      companionPort
-    );
+    // Single server: proxy + toolbar + WebSocket all on one port
+    const proxyServer = createProxyServer(targetHost, targetPort!, roots);
 
     proxyServer.listen(proxyPort, "127.0.0.1", async () => {
       console.log("");
       console.log(
-        chalk.bold.green(`  🚀 Proxy running at → `) +
+        chalk.bold.green(`  Proxy running at → `) +
           chalk.bold.underline.cyan(`http://localhost:${proxyPort}`)
       );
       console.log("");
 
-      // Health check — verify the proxy can reach the dev server
       await healthCheck(proxyPort, targetPort!);
 
       console.log(
@@ -305,19 +291,11 @@ program
       }
     });
 
-    // Handle WebSocket upgrades for OpenMagic
-    proxyServer.on("upgrade", (req, socket, head) => {
-      if (req.url?.startsWith("/__openmagic__")) {
-        omServer.emit("upgrade", req, socket, head);
-      }
-    });
-
     // Graceful shutdown
     const shutdown = () => {
       console.log("");
       console.log(chalk.dim("  Shutting down OpenMagic..."));
       proxyServer.close();
-      omServer.close();
       process.exit(0);
     };
 

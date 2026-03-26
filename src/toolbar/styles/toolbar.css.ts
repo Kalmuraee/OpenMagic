@@ -166,6 +166,36 @@ export const TOOLBAR_CSS = `
 .om-prompt-send:hover { background: #7c6cf7; }
 .om-prompt-send:disabled { background: #2a2a4a; color: #444; cursor: not-allowed; }
 
+.om-prompt-attach {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0;
+  background: none; border: none; color: #555;
+  cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s;
+}
+.om-prompt-attach:hover { color: #a29bfe; background: rgba(108, 92, 231, 0.1); }
+
+/* ── Attachments ──────────────────────────────────────── */
+.om-prompt-attachments {
+  display: flex; gap: 6px; padding: 4px 8px; flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.om-attachment-thumb {
+  position: relative; width: 48px; height: 48px;
+  border-radius: 6px; overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.om-attachment-thumb img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.om-attachment-remove {
+  position: absolute; top: 1px; right: 1px;
+  width: 16px; height: 16px; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.7); border: none; border-radius: 50%;
+  color: #fff; cursor: pointer; padding: 0; line-height: 1;
+}
+.om-attachment-remove svg { width: 10px; height: 10px; }
+
 /* ── Settings ─────────────────────────────────────────── */
 .om-settings { display: flex; flex-direction: column; gap: 12px; }
 

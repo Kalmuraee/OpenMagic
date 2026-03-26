@@ -19,7 +19,7 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.17.0";
+const VERSION = "0.17.1";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface ClientState {
@@ -34,7 +34,11 @@ interface ClientState {
 export function attachOpenMagic(
   httpServer: http.Server,
   roots: string[]
-): { wss: WebSocketServer; handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean } {
+): {
+  wss: WebSocketServer;
+  handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean;
+  handleUpgrade: (req: http.IncomingMessage, socket: any, head: Buffer) => boolean;
+} {
 
   // Request handler for /__openmagic__/ paths — returns true if handled
   function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
@@ -60,11 +64,8 @@ export function attachOpenMagic(
     return false;
   }
 
-  // WebSocket server on the same HTTP server
-  const wss = new WebSocketServer({
-    server: httpServer,
-    path: "/__openmagic__/ws",
-  });
+  // WebSocket server — noServer mode so it doesn't intercept non-OpenMagic upgrades
+  const wss = new WebSocketServer({ noServer: true });
 
   const clientStates = new WeakMap<WebSocket, ClientState>();
 
@@ -104,7 +105,19 @@ export function attachOpenMagic(
     });
   });
 
-  return { wss, handleRequest };
+  // Handle WebSocket upgrades for OpenMagic path only
+  function handleUpgrade(req: http.IncomingMessage, socket: any, head: Buffer): boolean {
+    const urlPath = (req.url || "").split("?")[0];
+    if (urlPath === "/__openmagic__/ws") {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return true;
+    }
+    return false;
+  }
+
+  return { wss, handleRequest, handleUpgrade };
 }
 
 async function handleMessage(

@@ -95,26 +95,31 @@ ${toolbarScript}
           ${toolbarScript}
         </body></html>`
       );
+    } else if (res && typeof (res as any).destroy === "function") {
+      // WebSocket socket error — destroy cleanly
+      try { (res as any).destroy(); } catch {}
     }
   });
 
-  // Shared reference for the handler — set after server creation
+  // Shared references — set after server creation
   let omHandle: ((req: http.IncomingMessage, res: http.ServerResponse) => boolean) | null = null;
+  let omUpgrade: ((req: http.IncomingMessage, socket: any, head: Buffer) => boolean) | null = null;
 
   const server = http.createServer((req, res) => {
     if (omHandle && omHandle(req, res)) return;
     proxy.web(req, res);
   });
 
-  // Attach OpenMagic WS + endpoints to THIS server (same port)
+  // Attach OpenMagic endpoints to THIS server (same port, noServer WSS)
   const om = attachOpenMagic(server, roots);
   omHandle = om.handleRequest;
+  omUpgrade = om.handleUpgrade;
 
-  // Handle WebSocket upgrades
+  // Single upgrade handler — OpenMagic WS first, everything else to dev server
   server.on("upgrade", (req, socket, head) => {
-    // OpenMagic WS is handled by the WSS attached to this server
-    if (req.url?.startsWith("/__openmagic__")) return;
-    // Everything else (HMR, etc.) goes to dev server
+    // Try OpenMagic WebSocket first
+    if (omUpgrade && omUpgrade(req, socket, head)) return;
+    // Everything else (HMR, hot reload, etc.) forwarded to dev server
     proxy.ws(req, socket, head);
   });
 

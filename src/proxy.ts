@@ -64,6 +64,7 @@ export function createProxyServer(
 
   proxy.on("error", (err, _req, res) => {
     if (res instanceof http.ServerResponse && !res.headersSent) {
+      const toolbarScript = buildInjectionScript(serverPort, token);
       res.writeHead(502, { "Content-Type": "text/html" });
       res.end(
         `<html><body style="font-family:system-ui;padding:40px;background:#1a1a2e;color:#e0e0e0;">
@@ -71,6 +72,7 @@ export function createProxyServer(
           <p>Could not reach <code>${targetHost}:${targetPort}</code></p>
           <p style="color:#888;">Make sure your dev server is running, then refresh this page.</p>
           <p style="color:#666;font-size:13px;">${err.message}</p>
+          ${toolbarScript}
         </body></html>`
       );
     }

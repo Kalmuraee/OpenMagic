@@ -73,7 +73,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", models: [], keyPlaceholder: "sk-or-..." },
 };
 
-const CURRENT_VERSION = "0.4.0";
+const CURRENT_VERSION = "0.5.0";
 
 // --- State ---
 interface AppState {

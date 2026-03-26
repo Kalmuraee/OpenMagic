@@ -5,6 +5,13 @@ import { resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 
+// Suppress http-proxy deprecation warning noise
+const origEmitWarning = process.emitWarning;
+process.emitWarning = function (warning: any, ...args: any[]) {
+  if (typeof warning === "string" && warning.includes("util._extend")) return;
+  return origEmitWarning.call(process, warning, ...args);
+} as typeof process.emitWarning;
+
 // Global error handlers — prevent silent crashes
 process.on("unhandledRejection", (err) => {
   console.error(chalk.red("\n  [OpenMagic] Unhandled error:"), (err as Error)?.message || err);
@@ -32,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -99,6 +106,68 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
       resolve(false);
     }
   });
+}
+
+async function healthCheck(proxyPort: number, targetPort: number): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/`, {
+      signal: controller.signal,
+      headers: { Accept: "text/html" },
+    });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const text = await res.text();
+      if (text.includes("__OPENMAGIC_LOADED__")) {
+        console.log(chalk.green("  ✓  Toolbar injection verified."));
+      } else {
+        console.log(chalk.yellow("  ⚠  Page loaded but toolbar may not have injected (non-HTML response or CSP)."));
+      }
+    } else {
+      console.log(
+        chalk.yellow(`  ⚠  Dev server returned ${res.status}. Pages may have errors.`)
+      );
+      console.log(
+        chalk.dim("     The toolbar will still appear on pages that load successfully.")
+      );
+    }
+  } catch {
+    console.log(
+      chalk.yellow("  ⚠  Could not verify proxy. The dev server may still be starting.")
+    );
+    console.log(
+      chalk.dim("     Try refreshing the page in a few seconds.")
+    );
+  }
+  console.log("");
+}
+
+// Detect common dev server errors and show hints
+function formatDevServerLine(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed) return "";
+
+  // Detect error patterns and add context
+  if (trimmed.startsWith("Error:") || trimmed.includes("ModuleNotFoundError") || trimmed.includes("Can't resolve")) {
+    return chalk.red(`  │ ${trimmed}`);
+  }
+  if (trimmed.includes("EADDRINUSE") || trimmed.includes("address already in use")) {
+    return chalk.red(`  │ ${trimmed}`) + "\n" +
+      chalk.yellow("  │ → Port is already in use. Stop the other process or use --port <different-port>");
+  }
+  if (trimmed.includes("EACCES") || trimmed.includes("permission denied")) {
+    return chalk.red(`  │ ${trimmed}`) + "\n" +
+      chalk.yellow("  │ → Permission denied. Try a different port or check file permissions.");
+  }
+  if (trimmed.includes("Cannot find module") || trimmed.includes("MODULE_NOT_FOUND")) {
+    return chalk.red(`  │ ${trimmed}`) + "\n" +
+      chalk.yellow("  │ → Missing dependency. Try running npm install.");
+  }
+
+  return chalk.dim(`  │ ${trimmed}`);
 }
 
 const program = new Command();
@@ -202,23 +271,28 @@ program
       proxyPort + 1
     );
 
-    proxyServer.listen(proxyPort, "127.0.0.1", () => {
+    proxyServer.listen(proxyPort, "127.0.0.1", async () => {
       console.log("");
       console.log(
         chalk.bold.green(`  🚀 Proxy running at → `) +
           chalk.bold.underline.cyan(`http://localhost:${proxyPort}`)
       );
       console.log("");
+
+      // Health check — verify the proxy can reach the dev server
+      await healthCheck(proxyPort, targetPort!);
+
       console.log(
         chalk.dim("  Open the URL above in your browser to start.")
       );
       console.log(chalk.dim("  Press Ctrl+C to stop."));
+      console.log(
+        chalk.dim("  Errors below are from your dev server, not OpenMagic.")
+      );
       console.log("");
 
       if (opts.open !== false) {
-        open(`http://localhost:${proxyPort}`).catch(() => {
-          // Silently fail if browser can't be opened
-        });
+        open(`http://localhost:${proxyPort}`).catch(() => {});
       }
     });
 
@@ -408,13 +482,15 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   child.stdout?.on("data", (data: Buffer) => {
     for (const line of data.toString().trim().split("\n")) {
-      if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+      const formatted = formatDevServerLine(line);
+      if (formatted) process.stdout.write(formatted + "\n");
     }
   });
 
   child.stderr?.on("data", (data: Buffer) => {
     for (const line of data.toString().trim().split("\n")) {
-      if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+      const formatted = formatDevServerLine(line);
+      if (formatted) process.stdout.write(formatted + "\n");
     }
   });
 

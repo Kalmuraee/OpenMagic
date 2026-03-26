@@ -96,7 +96,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", models: [], keyPlaceholder: "sk-or-..." },
 };
 
-const CURRENT_VERSION = "0.6.0";
+const CURRENT_VERSION = "0.7.0";
 
 // --- State ---
 interface AppState {
@@ -315,7 +315,25 @@ function renderSettings(): string {
        </div>`
     : "";
 
-  const showSessionKey = state.provider === "openai" || state.provider === "anthropic";
+  // Provider → API key page URLs
+  const KEY_URLS: Record<string, string> = {
+    openai: "https://platform.openai.com/api-keys",
+    anthropic: "https://console.anthropic.com/settings/keys",
+    google: "https://aistudio.google.com/apikey",
+    xai: "https://console.x.ai/team/default/api-keys",
+    deepseek: "https://platform.deepseek.com/api_keys",
+    mistral: "https://console.mistral.ai/api-keys",
+    groq: "https://console.groq.com/keys",
+    minimax: "https://platform.minimax.chat/user-center/basic-information/interface-key",
+    moonshot: "https://platform.moonshot.cn/console/api-keys",
+    qwen: "https://dashscope.console.aliyun.com/apiKey",
+    zhipu: "https://open.bigmodel.cn/usercenter/apikeys",
+    doubao: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+    openrouter: "https://openrouter.ai/settings/keys",
+  };
+
+  const keyUrl = KEY_URLS[state.provider] || "";
+  const providerName = currentProvider?.name || "provider";
 
   return `
     <div class="om-panel-header">
@@ -344,32 +362,28 @@ function renderSettings(): string {
         </div>
 
         <div class="om-field ${isLocal ? "om-hidden" : ""}">
-          <label class="om-label">Authentication</label>
-          ${showSessionKey ? `
-            <div class="om-auth-tabs">
-              <button class="om-auth-tab active" data-auth="apikey">API Key</button>
-              <button class="om-auth-tab" data-auth="session">Session Token</button>
-            </div>
-          ` : ""}
-          <input type="password" class="om-input" data-field="apiKey"
-                 placeholder="${keyPlaceholder}"
-                 value="" />
-          ${showSessionKey ? `
-            <div class="om-auth-hint om-hidden" data-hint="session">
-              <p>To use your existing account session:</p>
-              <ol>
-                <li>Go to <strong>${state.provider === "openai" ? "platform.openai.com" : "console.anthropic.com"}</strong></li>
-                <li>Open DevTools → Application → Cookies</li>
-                <li>Copy the <code>sessionKey</code> value</li>
-                <li>Paste it above</li>
-              </ol>
-            </div>
-          ` : ""}
+          <label class="om-label">API Key</label>
+          <div class="om-key-row">
+            <input type="password" class="om-input om-key-input" data-field="apiKey"
+                   placeholder="${keyPlaceholder}"
+                   value="" />
+            ${keyUrl ? `<button class="om-btn-connect" data-action="get-key" data-url="${keyUrl}" title="Get API key from ${providerName}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              Get key
+            </button>` : ""}
+          </div>
+          ${state.provider && !isLocal ? `<div class="om-key-hint">Paste your ${providerName} API key above.${keyUrl ? ` <a data-action="get-key" data-url="${keyUrl}">Get one here &rarr;</a>` : ""}</div>` : ""}
         </div>
 
-        <button class="om-btn" data-action="save-settings">Save Configuration</button>
+        <button class="om-btn" data-action="save-settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save
+        </button>
 
-        ${state.hasApiKey ? '<div class="om-status om-status-success">Authenticated</div>' : ""}
+        ${state.hasApiKey ? `<div class="om-status om-status-success">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Connected
+        </div>` : ""}
       </div>
     </div>
   `;
@@ -451,22 +465,12 @@ function attachPanelEvents(panel: HTMLElement) {
     state.model = (e.target as HTMLSelectElement).value;
   });
 
-  // Settings: auth tab switching
-  panel.querySelectorAll(".om-auth-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      panel.querySelectorAll(".om-auth-tab").forEach((t) => t.classList.remove("active"));
-      tab.classList.add("active");
-      const authType = (tab as HTMLElement).dataset.auth;
-      const hint = panel.querySelector('[data-hint="session"]');
-      const input = panel.querySelector('[data-field="apiKey"]') as HTMLInputElement;
-      if (authType === "session") {
-        hint?.classList.remove("om-hidden");
-        if (input) input.placeholder = "Paste session token...";
-      } else {
-        hint?.classList.add("om-hidden");
-        const currentProvider = MODEL_REGISTRY[state.provider];
-        if (input) input.placeholder = currentProvider?.keyPlaceholder || "Enter API key...";
-      }
+  // Settings: "Get key" button — opens provider's API key page
+  panel.querySelectorAll('[data-action="get-key"]').forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      const url = (el as HTMLElement).dataset.url;
+      if (url) window.open(url, "_blank", "noopener");
     });
   });
 

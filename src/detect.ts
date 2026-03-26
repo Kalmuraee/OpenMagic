@@ -54,9 +54,14 @@ export async function detectDevServer(): Promise<DetectedServer | null> {
         return { port, host: "127.0.0.1" };
       }
     }
+    // Project has dev scripts with known ports but none are running.
+    // Do NOT fall back to generic port scan — that would find unrelated
+    // services (like macOS AirPlay on 5000). Return null so the CLI
+    // offers to start the dev server instead.
+    return null;
   }
 
-  // Fallback: scan common ports
+  // No scripts found — fall back to scanning common ports
   const checks = COMMON_DEV_PORTS.map(async (port) => {
     const isOpen = await checkPort(port);
     return isOpen ? port : null;

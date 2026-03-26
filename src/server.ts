@@ -19,7 +19,7 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.14.2";
+const VERSION = "0.15.0";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface ClientState {
@@ -40,12 +40,15 @@ export function attachOpenMagic(
   function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
     if (!req.url?.startsWith("/__openmagic__/")) return false;
 
-    if (req.url === "/__openmagic__/toolbar.js") {
+    // Strip query string for path matching (e.g., toolbar.js?v=123)
+    const urlPath = req.url.split("?")[0];
+
+    if (urlPath === "/__openmagic__/toolbar.js") {
       serveToolbarBundle(res);
       return true;
     }
 
-    if (req.url === "/__openmagic__/health") {
+    if (urlPath === "/__openmagic__/health") {
       res.writeHead(200, {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",

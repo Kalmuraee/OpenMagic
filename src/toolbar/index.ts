@@ -80,7 +80,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.15.0";
+const CURRENT_VERSION = "0.16.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -96,6 +96,7 @@ const state = {
   provider: "",
   model: "",
   hasApiKey: false,
+  configuredProviders: {} as Record<string, boolean>, // which providers have keys
   roots: [] as string[],
   updateAvailable: false,
   latestVersion: "",
@@ -111,8 +112,34 @@ let $panel: HTMLDivElement;
 let $panelBody: HTMLDivElement;
 
 // ── Initialize ───────────────────────────────────────────────────
+// ── State Persistence (survives HMR page reloads) ────────────────
+function saveState() {
+  try {
+    sessionStorage.setItem("__om_state__", JSON.stringify({
+      messages: state.messages,
+      provider: state.provider,
+      model: state.model,
+      panelOpen: state.panelOpen,
+      activePanel: state.activePanel,
+    }));
+  } catch { /* quota exceeded or unavailable */ }
+}
+
+function restoreState() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("__om_state__") || "{}");
+    if (saved.messages?.length) state.messages = saved.messages;
+    if (saved.provider) state.provider = saved.provider;
+    if (saved.model) state.model = saved.model;
+    if (saved.panelOpen) { state.panelOpen = saved.panelOpen; state.activePanel = saved.activePanel || ""; }
+  } catch { /* parse error or unavailable */ }
+}
+
 function init() {
   if (document.querySelector("openmagic-toolbar")) return;
+
+  // Restore chat history and settings from session storage (survives HMR)
+  restoreState();
 
   const host = document.createElement("openmagic-toolbar");
   host.dataset.openmagic = "true";
@@ -168,11 +195,19 @@ function init() {
         return ws.request("config.get");
       })
       .then((msg: any) => {
-        state.provider = msg.payload?.provider || "";
-        state.model = msg.payload?.model || "";
-        state.hasApiKey = msg.payload?.hasApiKey || false;
+        // Merge server config with restored state (restored state takes precedence for provider/model)
+        const serverProvider = msg.payload?.provider || "";
+        const serverModel = msg.payload?.model || "";
+        state.provider = state.provider || serverProvider;
+        state.model = state.model || serverModel;
+        state.configuredProviders = msg.payload?.apiKeys || {};
+        state.hasApiKey = state.configuredProviders[state.provider] || false;
         state.roots = msg.payload?.roots || [];
-        if (!state.provider || !state.hasApiKey) {
+
+        // Restore panel state if we had it open before refresh
+        if (state.panelOpen && state.activePanel) {
+          openPanel(state.activePanel as "chat" | "settings");
+        } else if (!state.provider || (!state.hasApiKey && !Object.values(state.configuredProviders).some(Boolean))) {
           openPanel("settings");
         }
         updatePillButtons();
@@ -238,6 +273,7 @@ function attachGlobalEvents(root: HTMLElement) {
     if (field === "provider") {
       state.provider = target.value;
       state.model = MODEL_REGISTRY[state.provider]?.models[0]?.id || "";
+      state.hasApiKey = state.configuredProviders[state.provider] || MODEL_REGISTRY[state.provider]?.local || false;
       state.saveStatus = "";
       refreshPanelContent();
     } else if (field === "model") {
@@ -272,33 +308,53 @@ async function applyDiff(target: HTMLElement) {
   const replaceB64 = target.dataset.replace;
   if (!file || !searchB64 || !replaceB64) return;
 
-  const search = decodeBase64Utf8(searchB64);
-  const replace = decodeBase64Utf8(replaceB64);
+  let search: string, replace: string;
+  try {
+    search = decodeBase64Utf8(searchB64);
+    replace = decodeBase64Utf8(replaceB64);
+  } catch {
+    state.messages.push({ role: "system", content: `Failed to decode diff data for ${file}` });
+    refreshPanelContent();
+    return;
+  }
+
   const card = target.closest(".om-diff-card") as HTMLElement | null;
+  const filePath = resolveFilePath(file);
+
+  // Show applying state
+  if (card) {
+    const actions = card.querySelector(".om-diff-actions");
+    if (actions) actions.innerHTML = '<span class="om-spinner"></span> Applying...';
+  }
 
   try {
-    const fileResult = await ws.request("fs.read", { path: resolveFilePath(file) });
-    const content = fileResult.payload?.content;
-    const occurrences = content ? content.split(search).length - 1 : 0;
-    if (occurrences === 0) {
-      state.messages.push({ role: "system", content: `Could not find matching code in ${file}` });
-    } else if (occurrences > 1) {
-      state.messages.push({ role: "system", content: `Found ${occurrences} matches in ${file} — expected exactly 1. Edit not applied.` });
+    const fileResult = await ws.request("fs.read", { path: filePath });
+    const content = fileResult?.payload?.content;
+
+    if (!content) {
+      state.messages.push({ role: "system", content: `Could not read ${file} — file may not exist at ${filePath}` });
     } else {
-      // exactly 1 match — safe to apply
-      const writeResult = await ws.request("fs.write", { path: resolveFilePath(file), content: content.replace(search, replace) });
-      if (writeResult?.payload?.ok === false) {
-        state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload.error || "unknown"}` });
+      const occurrences = content.split(search).length - 1;
+      if (occurrences === 0) {
+        state.messages.push({ role: "system", content: `No matching code found in ${file}. The file may have changed since the suggestion was made.` });
+      } else if (occurrences > 1) {
+        state.messages.push({ role: "system", content: `Found ${occurrences} matches in ${file} — expected exactly 1. Edit not applied for safety.` });
       } else {
-        // Update the diff message to "Applied"
-        const idx = card?.dataset.diffIdx;
-        if (idx !== undefined) {
-          state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}` };
+        const writeResult = await ws.request("fs.write", { path: filePath, content: content.replace(search, replace) });
+        if (writeResult?.payload?.ok === false) {
+          state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
+        } else {
+          const idx = card?.dataset.diffIdx;
+          if (idx !== undefined) {
+            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}` };
+          } else {
+            state.messages.push({ role: "system", content: `Applied change to ${file}` });
+          }
         }
       }
     }
   } catch (e: any) {
-    state.messages.push({ role: "system", content: `Failed: ${file} - ${e.message}` });
+    state.messages.push({ role: "system", content: `Failed to apply: ${file} — ${e.message}` });
   }
 
   refreshPanelContent();
@@ -329,6 +385,13 @@ function handleAction(action: string, target: HTMLElement) {
     case "get-key": {
       const url = target.dataset.url;
       if (url) window.open(url, "_blank", "noopener");
+      break;
+    }
+    case "change-key": {
+      // Show the hidden key input field
+      const changeRow = shadow.querySelector("[data-key-change]");
+      if (changeRow) changeRow.classList.remove("om-hidden");
+      target.style.display = "none";
       break;
     }
     case "apply-diff": applyDiff(target); break;
@@ -399,13 +462,18 @@ function refreshPanelContent() {
     $panelBody.innerHTML = renderChatHTML();
     scrollChatToBottom();
   }
+  saveState();
 }
 
 // ── Settings Renderer ────────────────────────────────────────────
 
 function renderSettingsHTML(): string {
   const providerOpts = Object.entries(MODEL_REGISTRY)
-    .map(([k, p]) => `<option value="${k}" ${state.provider === k ? "selected" : ""}>${p.name}</option>`).join("");
+    .map(([k, p]) => {
+      const configured = state.configuredProviders[k] || p.local;
+      const indicator = configured ? " \u2713" : "";
+      return `<option value="${k}" ${state.provider === k ? "selected" : ""}>${p.name}${indicator}</option>`;
+    }).join("");
 
   const prov = MODEL_REGISTRY[state.provider];
   const modelOpts = prov
@@ -415,18 +483,51 @@ function renderSettingsHTML(): string {
   const isLocal = prov?.local || false;
   const keyUrl = prov?.keyUrl || "";
   const keyPh = prov?.keyPlaceholder || "Enter API key...";
+  const providerHasKey = state.configuredProviders[state.provider] || false;
 
   const updateBanner = state.updateAvailable
     ? `<div class="om-update-banner">v${state.latestVersion} available <code class="om-update-cmd">npx openmagic@latest</code></div>` : "";
 
-  const statusHtml = state.hasApiKey
-    ? `<div class="om-status om-status-success">${ICON.check} Connected</div>` : "";
+  // Show connected status if current provider has a key
+  const statusHtml = (providerHasKey || isLocal)
+    ? `<div class="om-status om-status-success">${ICON.check} ${prov?.name || "Provider"} connected</div>` : "";
 
   const saveBtnText = state.saveStatus === "saving" ? '<span class="om-spinner"></span> Saving...'
     : state.saveStatus === "saved" ? `${ICON.check} Saved` : "Save";
   const saveBtnClass = state.saveStatus === "saving" ? "om-btn om-btn-saving"
     : state.saveStatus === "saved" ? "om-btn om-btn-saved" : "om-btn";
   const saveBtnDisabled = state.saveStatus === "saving" ? "disabled" : "";
+
+  // API key section: show "configured" state if key exists, with option to change
+  let keySection = "";
+  if (!isLocal && state.provider) {
+    if (providerHasKey) {
+      keySection = `
+        <div class="om-field">
+          <label class="om-label">API Key</label>
+          <div class="om-key-configured">
+            ${ICON.check} <span>Key configured</span>
+            <button class="om-btn-change-key" data-action="change-key">Change</button>
+          </div>
+          <div class="om-key-change-row om-hidden" data-key-change>
+            <div class="om-key-row">
+              <input type="text" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+              ${keyUrl ? `<button class="om-btn-get-key" data-action="get-key" data-url="${keyUrl}">${ICON.externalLink} Get key</button>` : ""}
+            </div>
+          </div>
+        </div>`;
+    } else {
+      keySection = `
+        <div class="om-field">
+          <label class="om-label">API Key</label>
+          <div class="om-key-row">
+            <input type="text" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+            ${keyUrl ? `<button class="om-btn-get-key" data-action="get-key" data-url="${keyUrl}">${ICON.externalLink} Get key</button>` : ""}
+          </div>
+          ${keyUrl ? `<div class="om-key-hint"><a data-action="get-key" data-url="${keyUrl}">Get your ${prov?.name || ""} API key here</a></div>` : ""}
+        </div>`;
+    }
+  }
 
   return `
     ${updateBanner}
@@ -439,14 +540,7 @@ function renderSettingsHTML(): string {
         <label class="om-label">Model</label>
         <select class="om-select" data-field="model"><option value="">Select Model...</option>${modelOpts}</select>
       </div>
-      <div class="om-field ${isLocal ? "om-hidden" : ""}">
-        <label class="om-label">API Key</label>
-        <div class="om-key-row">
-          <input type="text" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
-          ${keyUrl ? `<button class="om-btn-get-key" data-action="get-key" data-url="${keyUrl}">${ICON.externalLink} Get key</button>` : ""}
-        </div>
-        ${keyUrl ? `<div class="om-key-hint"><a data-action="get-key" data-url="${keyUrl}">Get your ${prov?.name || ""} API key here</a></div>` : ""}
-      </div>
+      ${keySection}
       <button class="${saveBtnClass}" data-action="save-settings" ${saveBtnDisabled}>${saveBtnText}</button>
       ${statusHtml}
     </div>`;
@@ -532,7 +626,11 @@ async function saveSettings() {
       ws.request("config.set", payload),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Save timed out")), 8000)),
     ]);
-    state.hasApiKey = !!(apiKey || state.hasApiKey);
+    // Mark this provider as configured
+    if (apiKey && state.provider) {
+      state.configuredProviders[state.provider] = true;
+    }
+    state.hasApiKey = !!(apiKey || state.configuredProviders[state.provider]);
     state.saveStatus = "saved";
     updateSaveButton();
 

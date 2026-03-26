@@ -190,6 +190,22 @@ export const TOOLBAR_CSS = `
 .om-key-row { display: flex; gap: 6px; align-items: stretch; }
 .om-key-input { flex: 1; min-width: 0; -webkit-text-security: disc; }
 
+.om-key-configured {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; background: rgba(0, 184, 148, 0.06);
+  border: 1px solid rgba(0, 184, 148, 0.12);
+  border-radius: 8px; font-size: 12px; color: #00b894;
+}
+.om-key-configured span { flex: 1; }
+.om-btn-change-key {
+  background: none; border: 1px solid rgba(255,255,255,0.08);
+  color: #888; cursor: pointer; padding: 3px 8px;
+  border-radius: 5px; font-size: 10px; font-family: inherit;
+  transition: all 0.15s;
+}
+.om-btn-change-key:hover { color: #ccc; border-color: rgba(255,255,255,0.15); }
+.om-key-change-row { margin-top: 6px; }
+
 .om-btn-get-key {
   display: flex; align-items: center; gap: 4px;
   padding: 6px 9px; background: rgba(108, 92, 231, 0.08);

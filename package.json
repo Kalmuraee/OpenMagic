@@ -1,0 +1,65 @@
+{
+  "name": "openmagic",
+  "version": "0.2.0",
+  "description": "AI-powered coding toolbar for any web application. Select elements, capture context, and let AI modify your codebase in real-time.",
+  "type": "module",
+  "bin": {
+    "openmagic": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:toolbar": "tsup src/toolbar/index.ts --format iife --global-name OpenMagicToolbar --out-dir dist/toolbar --minify",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm run build:toolbar"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "toolbar",
+    "development",
+    "vibe-coding",
+    "openai",
+    "anthropic",
+    "gemini",
+    "developer-tools",
+    "code-modification",
+    "element-selector",
+    "screenshot"
+  ],
+  "author": "Kalmuraee",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kalmuraee/OpenMagic.git"
+  },
+  "homepage": "https://kalmuraee.github.io/OpenMagic/",
+  "bugs": {
+    "url": "https://github.com/Kalmuraee/OpenMagic/issues"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "http-proxy": "^1.18.1",
+    "open": "^10.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.15",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

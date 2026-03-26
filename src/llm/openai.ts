@@ -38,9 +38,12 @@ export async function chatOpenAICompatible(
     { role: "system", content: SYSTEM_PROMPT },
   ];
 
-  // Add context to the first user message
-  for (const msg of messages) {
-    if (msg.role === "user" && typeof msg.content === "string") {
+  // Only enrich the LAST user message with context (not all historical ones)
+  const lastUserIdx = messages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const contextParts: Parameters<typeof buildUserMessage>[1] = {};
 
       if (context.selectedElement) {
@@ -82,6 +85,8 @@ export async function chatOpenAICompatible(
       } else {
         apiMessages.push({ role: "user", content: enrichedContent });
       }
+    } else if (msg.role === "system") {
+      continue; // System prompt already added
     } else {
       apiMessages.push({
         role: msg.role,

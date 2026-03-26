@@ -18,12 +18,15 @@ export async function chatGoogle(
     parts: Array<{ text?: string; inline_data?: { mime_type: string; data: string } }>;
   }> = [];
 
-  for (const msg of messages) {
+  const lastUserIdx = messages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (msg.role === "system") continue;
 
     const role = msg.role === "assistant" ? "model" : "user";
 
-    if (msg.role === "user" && typeof msg.content === "string") {
+    if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const contextParts: Parameters<typeof buildUserMessage>[1] = {};
 
       if (context.selectedElement) {
@@ -74,17 +77,20 @@ export async function chatGoogle(
     maxOutputTokens: 8192,
   };
 
-  if (thinkingLevel && thinkingLevel !== "none") {
-    generationConfig.thinking_level = thinkingLevel.toUpperCase();
-  }
+  const thinkingConfig = (thinkingLevel && thinkingLevel !== "none")
+    ? { thinkingLevel: thinkingLevel.toUpperCase() }
+    : undefined;
 
-  const body = {
+  const body: Record<string, unknown> = {
     system_instruction: {
       parts: [{ text: SYSTEM_PROMPT }],
     },
     contents,
     generationConfig,
   };
+  if (thinkingConfig) {
+    body.thinkingConfig = thinkingConfig;
+  }
 
   try {
     const response = await fetch(url, {

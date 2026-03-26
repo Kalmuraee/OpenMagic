@@ -93,7 +93,7 @@ function getCleanOuterHTML(el: HTMLElement): string {
 }
 
 function getCssSelector(el: HTMLElement): string {
-  if (el.id) return `#${el.id}`;
+  if (el.id) return `#${CSS.escape(el.id)}`;
 
   const parts: string[] = [];
   let current: HTMLElement | null = el;
@@ -102,7 +102,7 @@ function getCssSelector(el: HTMLElement): string {
     let selector = current.tagName.toLowerCase();
 
     if (current.id) {
-      parts.unshift(`#${current.id}`);
+      parts.unshift(`#${CSS.escape(current.id)}`);
       break;
     }
 
@@ -111,13 +111,14 @@ function getCssSelector(el: HTMLElement): string {
         .trim()
         .split(/\s+/)
         .filter((c) => !c.startsWith("__") && c.length < 30)
-        .slice(0, 2);
+        .slice(0, 2)
+        .map((c) => CSS.escape(c));
       if (classes.length > 0) {
         selector += "." + classes.join(".");
       }
     }
 
-    // Add nth-child if needed for uniqueness
+    // Add nth-of-type if needed for uniqueness
     const parent = current.parentElement;
     if (parent) {
       const siblings = Array.from(parent.children).filter(
@@ -125,7 +126,7 @@ function getCssSelector(el: HTMLElement): string {
       );
       if (siblings.length > 1) {
         const index = siblings.indexOf(current) + 1;
-        selector += `:nth-child(${index})`;
+        selector += `:nth-of-type(${index})`;
       }
     }
 

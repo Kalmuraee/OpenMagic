@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.9.0";
+const CURRENT_VERSION = "0.10.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -173,6 +173,11 @@ function buildStaticDOM(): string {
         <span class="om-status-dot disconnected"></span>
       </div>
       <div class="om-panel om-hidden">
+        <div class="om-panel-header">
+          <span class="om-panel-title"></span>
+          <span class="om-panel-version">v${CURRENT_VERSION}</span>
+          <button class="om-panel-close" data-action="close-panel">${ICON.x}</button>
+        </div>
         <div class="om-panel-body"></div>
       </div>
       <div class="om-prompt-row">
@@ -272,8 +277,8 @@ function openPanel(panel: "chat" | "settings") {
   state.panelOpen = true;
   state.activePanel = panel;
   $panel.classList.remove("om-hidden");
-  const title = shadow.querySelector(".om-panel-title")!;
-  title.textContent = panel === "settings" ? "Settings" : "Chat";
+  const title = shadow.querySelector(".om-panel-title");
+  if (title) title.textContent = panel === "settings" ? "Settings" : "Chat";
   refreshPanelContent();
   updatePillButtons();
 }
@@ -356,7 +361,7 @@ function renderSettingsHTML(): string {
 // ── Chat Renderer ────────────────────────────────────────────────
 
 function renderChatHTML(): string {
-  if (!state.hasApiKey || !state.provider) {
+  if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     return `<div class="om-status om-status-error">Configure your provider in Settings first</div>`;
   }
 
@@ -469,7 +474,7 @@ async function sendPrompt() {
   const text = $promptInput.value.trim();
   if (!text || state.streaming) return;
 
-  if (!state.hasApiKey || !state.provider) {
+  if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     openPanel("settings");
     return;
   }
@@ -520,8 +525,12 @@ async function sendPrompt() {
             const fileResult = await ws.request("fs.read", { path: resolveFilePath(mod.file) });
             const content = fileResult.payload?.content;
             if (content?.includes(mod.search)) {
-              await ws.request("fs.write", { path: resolveFilePath(mod.file), content: content.replace(mod.search, mod.replace) });
-              state.messages.push({ role: "system", content: `Applied change to ${mod.file}` });
+              const writeResult = await ws.request("fs.write", { path: resolveFilePath(mod.file), content: content.replace(mod.search, mod.replace) });
+              if (writeResult?.payload?.ok === false) {
+                state.messages.push({ role: "system", content: `Write failed: ${mod.file} - ${writeResult.payload.error || "unknown"}` });
+              } else {
+                state.messages.push({ role: "system", content: `Applied change to ${mod.file}` });
+              }
             }
           } catch (e: any) {
             state.messages.push({ role: "system", content: `Failed: ${mod.file} - ${e.message}` });

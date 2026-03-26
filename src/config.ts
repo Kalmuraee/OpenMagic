@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { OpenMagicConfig } from "./shared-types.js";
@@ -30,7 +30,9 @@ export function saveConfig(updates: Partial<OpenMagicConfig>): void {
     ensureConfigDir();
     const existing = loadConfig();
     const merged = { ...existing, ...updates };
-    writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+    const tmpFile = CONFIG_FILE + ".tmp";
+    writeFileSync(tmpFile, JSON.stringify(merged, null, 2), { encoding: "utf-8", mode: 0o600 });
+    renameSync(tmpFile, CONFIG_FILE);
   } catch (e: unknown) {
     console.warn(`[OpenMagic] Warning: Could not save config to ${CONFIG_FILE}: ${(e as Error).message}`);
   }

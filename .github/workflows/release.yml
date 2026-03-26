@@ -20,11 +20,9 @@ jobs:
       - name: Check if version changed
         id: version-check
         run: |
-          # Get current version from package.json
           CURRENT=$(node -p "require('./package.json').version")
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
 
-          # Get previous version (from last commit's package.json)
           PREVIOUS=$(git show HEAD~1:package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "0.0.0")
           echo "previous=$PREVIOUS" >> $GITHUB_OUTPUT
 

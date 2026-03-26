@@ -41,7 +41,7 @@ export function createOpenMagicServer(
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       });
-      res.end(JSON.stringify({ status: "ok", version: "0.1.0" }));
+      res.end(JSON.stringify({ status: "ok", version: "0.3.0" }));
       return;
     }
 
@@ -112,7 +112,7 @@ async function handleMessage(
         id: msg.id,
         type: "handshake.ok",
         payload: {
-          version: "0.1.0",
+          version: "0.3.0",
           roots,
           config: {
             provider: config.provider,

@@ -17,9 +17,9 @@ export function connect(port: number, token: string): Promise<void> {
       ws = new WebSocket(`ws://127.0.0.1:${port}/__openmagic__/ws`);
 
       ws.onopen = () => {
-        // Send handshake
+        // Send handshake directly (bypass send() which checks connected flag)
         const handshakeId = generateId();
-        send({ id: handshakeId, type: "handshake", payload: { token } });
+        ws!.send(JSON.stringify({ id: handshakeId, type: "handshake", payload: { token } }));
 
         // Wait for handshake.ok
         handlers.set(handshakeId, (msg) => {

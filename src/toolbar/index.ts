@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.8.1";
+const CURRENT_VERSION = "0.8.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {

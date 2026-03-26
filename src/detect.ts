@@ -9,15 +9,15 @@ const COMMON_DEV_PORTS = [
   4200, // Angular
   8080, // Vue CLI, generic
   8000, // Django, Python
-  8888, // Jupyter, generic
   3001, // Common alternate
   4000, // Phoenix, generic
-  5000, // Flask
   1234, // Parcel
   4321, // Astro
   3333, // Remix
   8081, // Metro (React Native)
   9000, // generic
+  8888, // Jupyter, generic
+  5000, // Flask (last — macOS AirPlay also uses 5000)
 ];
 
 function checkPort(port: number, host: string = "127.0.0.1"): Promise<boolean> {
@@ -44,6 +44,19 @@ export interface DetectedServer {
 }
 
 export async function detectDevServer(): Promise<DetectedServer | null> {
+  // First: check ports hinted by the project's dev scripts (most reliable)
+  const scripts = detectDevScripts();
+  const scriptPorts = scripts.map((s) => s.defaultPort).filter((p, i, a) => a.indexOf(p) === i);
+
+  if (scriptPorts.length > 0) {
+    for (const port of scriptPorts) {
+      if (await checkPort(port)) {
+        return { port, host: "127.0.0.1" };
+      }
+    }
+  }
+
+  // Fallback: scan common ports
   const checks = COMMON_DEV_PORTS.map(async (port) => {
     const isOpen = await checkPort(port);
     return isOpen ? port : null;

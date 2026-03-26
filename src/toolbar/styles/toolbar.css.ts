@@ -481,4 +481,63 @@ export const TOOLBAR_CSS = `
 .om-pill-btn:hover .om-tooltip {
   opacity: 1;
 }
+
+/* Update indicator dot on pill */
+.om-update-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #00b894;
+  margin-left: 6px;
+  cursor: pointer;
+  position: relative;
+  animation: om-pulse-green 2s ease infinite;
+  flex-shrink: 0;
+}
+
+@keyframes om-pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 184, 148, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(0, 184, 148, 0); }
+}
+
+/* Update banner in settings */
+.om-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: rgba(0, 184, 148, 0.08);
+  border: 1px solid rgba(0, 184, 148, 0.2);
+  border-radius: 10px;
+  font-size: 13px;
+  color: #00b894;
+}
+
+.om-update-current {
+  font-size: 11px;
+  color: #888;
+}
+
+.om-update-cmd {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+  color: #55efc4;
+  user-select: all;
+}
+
+/* Version in panel header */
+.om-panel-version {
+  font-size: 11px;
+  color: #555;
+  margin-left: auto;
+  margin-right: 8px;
+}
 `;

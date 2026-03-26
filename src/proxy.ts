@@ -16,15 +16,20 @@ export function createProxyServer(
 ): http.Server {
   const proxy = httpProxy.createProxyServer({
     target: `http://${targetHost}:${targetPort}`,
-    ws: true,
     selfHandleResponse: true,
+    // ws: false — we handle WebSocket upgrades manually in server.on("upgrade")
   });
 
   const token = getSessionToken();
 
-  // Strip Accept-Encoding so upstream sends uncompressed HTML (enables streaming injection)
-  proxy.on("proxyReq", (proxyReq) => {
-    proxyReq.removeHeader("Accept-Encoding");
+  // Strip Accept-Encoding on HTML requests so upstream sends uncompressed (enables streaming injection)
+  // Only apply to regular HTTP requests, not WebSocket upgrades
+  proxy.on("proxyReq", (proxyReq, req) => {
+    const accept = req.headers.accept || "";
+    // Only strip for requests that might return HTML (not for API calls, assets, WS upgrades)
+    if (accept.includes("text/html") || accept.includes("*/*") || !accept) {
+      proxyReq.removeHeader("Accept-Encoding");
+    }
   });
 
   proxy.on("proxyRes", (proxyRes, req, res) => {

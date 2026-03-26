@@ -22,51 +22,79 @@ export const TOOLBAR_CSS = `
   z-index: 2147483647;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 16px;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-  border: 1px solid rgba(108, 92, 231, 0.3);
-  border-radius: 50px;
-  cursor: grab;
+  gap: 2px;
+  padding: 6px 12px 6px 6px;
+  background: linear-gradient(135deg, #13132b 0%, #1a1a3e 100%);
+  border: 1px solid rgba(108, 92, 231, 0.25);
+  border-radius: 12px;
   user-select: none;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(108, 92, 231, 0.1);
-  transition: box-shadow 0.2s, transform 0.2s;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(108, 92, 231, 0.08);
+  transition: box-shadow 0.2s, transform 0.15s;
 }
 
 .om-pill:hover {
-  box-shadow: 0 6px 32px rgba(108, 92, 231, 0.3), 0 0 0 1px rgba(108, 92, 231, 0.3);
+  box-shadow: 0 6px 32px rgba(108, 92, 231, 0.25), 0 0 0 1px rgba(108, 92, 231, 0.3);
   transform: translateY(-1px);
 }
 
-.om-pill:active {
-  cursor: grabbing;
+/* Six-dot grab handle */
+.om-grab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 28px;
+  color: #444;
+  cursor: grab;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
 }
 
-.om-pill-logo {
-  font-size: 18px;
-  line-height: 1;
+.om-grab:hover {
+  color: #888;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.om-grab:active {
+  cursor: grabbing;
+  color: #a29bfe;
+}
+
+/* Brand */
+.om-pill-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.om-pill-icon {
+  color: #a29bfe;
+  flex-shrink: 0;
 }
 
 .om-pill-text {
   font-size: 12px;
-  font-weight: 600;
-  color: #a29bfe;
-  letter-spacing: 0.5px;
+  font-weight: 700;
+  color: #c4b5fd;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 .om-pill-btn {
   background: none;
   border: none;
-  color: #e0e0e0;
+  color: #888;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 16px;
+  padding: 6px;
+  border-radius: 8px;
   line-height: 1;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
 
 .om-pill-btn:hover {
@@ -539,5 +567,79 @@ export const TOOLBAR_CSS = `
   color: #555;
   margin-left: auto;
   margin-right: 8px;
+}
+
+.om-header-icon {
+  color: #a29bfe;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+/* Auth tabs */
+.om-auth-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.om-auth-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #888;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.om-auth-tab:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.om-auth-tab.active {
+  background: rgba(108, 92, 231, 0.15);
+  color: #a29bfe;
+}
+
+.om-auth-hint {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #888;
+  line-height: 1.6;
+}
+
+.om-auth-hint p {
+  margin-bottom: 6px;
+}
+
+.om-auth-hint ol {
+  padding-left: 18px;
+}
+
+.om-auth-hint li {
+  margin-bottom: 3px;
+}
+
+.om-auth-hint code {
+  background: rgba(108, 92, 231, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #a29bfe;
+}
+
+.om-auth-hint strong {
+  color: #ccc;
 }
 `;

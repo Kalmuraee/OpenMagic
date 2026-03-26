@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.8.2";
+const CURRENT_VERSION = "0.9.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -88,8 +88,7 @@ const state = {
 
 // ── DOM refs (created once) ──────────────────────────────────────
 let shadow: ShadowRoot;
-let $pill: HTMLDivElement;
-let $promptBar: HTMLDivElement;
+let $toolbar: HTMLDivElement;
 let $promptInput: HTMLInputElement;
 let $promptCtx: HTMLDivElement;
 let $panel: HTMLDivElement;
@@ -114,8 +113,7 @@ function init() {
   root.innerHTML = buildStaticDOM();
 
   // Cache refs
-  $pill = root.querySelector(".om-pill")!;
-  $promptBar = root.querySelector(".om-prompt-bar")!;
+  $toolbar = root.querySelector(".om-toolbar")!;
   $promptInput = root.querySelector(".om-prompt-input")!;
   $promptCtx = root.querySelector(".om-prompt-context")!;
   $panel = root.querySelector(".om-panel")!;
@@ -159,31 +157,29 @@ function init() {
 
 function buildStaticDOM(): string {
   return `
-    <div class="om-panel om-hidden">
-      <div class="om-panel-header">
-        <span class="om-panel-title"></span>
-        <span class="om-panel-version">v${CURRENT_VERSION}</span>
-        <button class="om-panel-close" data-action="close-panel">${ICON.x}</button>
+    <div class="om-toolbar">
+      <div class="om-toolbar-header">
+        <span class="om-grab">${ICON.grip}</span>
+        <span class="om-pill-brand">
+          <span class="om-pill-icon">${ICON.sparkle}</span>
+          <span class="om-pill-text">OpenMagic</span>
+        </span>
+        <span class="om-pill-divider"></span>
+        <button class="om-pill-btn" data-action="select" title="Select element">${ICON.crosshair}</button>
+        <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
+        <span class="om-pill-divider"></span>
+        <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
+        <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
+        <span class="om-status-dot disconnected"></span>
       </div>
-      <div class="om-panel-body"></div>
-    </div>
-    <div class="om-prompt-bar">
-      <div class="om-prompt-context"></div>
-      <input class="om-prompt-input" type="text" placeholder="Describe what you want to change..." />
-      <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
-    </div>
-    <div class="om-pill">
-      <span class="om-grab">${ICON.grip}</span>
-      <span class="om-pill-brand">
-        <span class="om-pill-icon">${ICON.sparkle}</span>
-        <span class="om-pill-text">OpenMagic</span>
-      </span>
-      <span class="om-pill-divider"></span>
-      <button class="om-pill-btn" data-action="select" title="Select element">${ICON.crosshair}</button>
-      <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
-      <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
-      <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
-      <span class="om-status-dot disconnected"></span>
+      <div class="om-panel om-hidden">
+        <div class="om-panel-body"></div>
+      </div>
+      <div class="om-prompt-row">
+        <div class="om-prompt-context"></div>
+        <input class="om-prompt-input" type="text" placeholder="Describe what to change..." autocomplete="off" />
+        <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
+      </div>
     </div>`;
 }
 
@@ -378,8 +374,10 @@ function renderChatHTML(): string {
 }
 
 function scrollChatToBottom() {
-  const el = $panelBody.querySelector(".om-chat-messages");
-  if (el) el.scrollTop = el.scrollHeight;
+  requestAnimationFrame(() => {
+    const el = $panelBody.querySelector(".om-chat-messages");
+    if (el) el.scrollTop = el.scrollHeight;
+  });
 }
 
 // ── Save Settings ────────────────────────────────────────────────
@@ -538,6 +536,7 @@ async function sendPrompt() {
   state.streaming = false;
   state.streamContent = "";
   refreshPanelContent();
+  scrollChatToBottom();
 }
 
 function resolveFilePath(rel: string): string {
@@ -603,33 +602,23 @@ async function takeScreenshot() {
 function setupDraggable() {
   let active = false, startX = 0, startY = 0, origX = 0, origY = 0;
 
-  $pill.addEventListener("mousedown", (e) => {
+  $toolbar.addEventListener("mousedown", (e) => {
     const t = e.target as HTMLElement;
     if (t.closest("[data-action]")) return;
     if (!t.closest(".om-grab") && !t.closest(".om-pill-brand")) return;
     active = true;
     startX = e.clientX; startY = e.clientY;
-    const r = $pill.getBoundingClientRect();
+    const r = $toolbar.getBoundingClientRect();
     origX = r.left; origY = r.top;
     e.preventDefault();
   });
 
   document.addEventListener("mousemove", (e) => {
     if (!active) return;
-    $pill.style.left = (origX + e.clientX - startX) + "px";
-    $pill.style.top = (origY + e.clientY - startY) + "px";
-    $pill.style.right = "auto";
-    $pill.style.bottom = "auto";
-    // Move prompt bar and panel with pill
-    const pillRect = $pill.getBoundingClientRect();
-    $promptBar.style.right = "auto";
-    $promptBar.style.bottom = "auto";
-    $promptBar.style.left = pillRect.left + "px";
-    $promptBar.style.top = (pillRect.top - 42) + "px";
-    $panel.style.right = "auto";
-    $panel.style.bottom = "auto";
-    $panel.style.left = pillRect.left + "px";
-    $panel.style.top = (pillRect.top - 42 - ($panel.classList.contains("om-hidden") ? 0 : $panel.offsetHeight + 6)) + "px";
+    $toolbar.style.left = (origX + e.clientX - startX) + "px";
+    $toolbar.style.top = (origY + e.clientY - startY) + "px";
+    $toolbar.style.right = "auto";
+    $toolbar.style.bottom = "auto";
   });
 
   document.addEventListener("mouseup", () => { active = false; });
@@ -661,7 +650,8 @@ function showUpdateDot() {
   dot.className = "om-update-dot";
   dot.title = `v${state.latestVersion} available`;
   dot.addEventListener("click", () => openPanel("settings"));
-  $pill.appendChild(dot);
+  const header = shadow.querySelector(".om-toolbar-header");
+  if (header) header.appendChild(dot);
 }
 
 // ── Boot ─────────────────────────────────────────────────────────

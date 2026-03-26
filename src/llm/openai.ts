@@ -10,6 +10,7 @@ interface OpenAICompatibleRequest {
   }>;
   stream: boolean;
   max_tokens?: number;
+  max_completion_tokens?: number;
   reasoning_effort?: string;
 }
 
@@ -89,19 +90,33 @@ export async function chatOpenAICompatible(
     }
   }
 
+  // GPT-5.x, o3, o4 models require max_completion_tokens instead of max_tokens
+  const usesCompletionTokens = provider === "openai" && (
+    model.startsWith("gpt-5") || model.startsWith("o3") || model.startsWith("o4") || model.startsWith("codex")
+  );
+
   const body: OpenAICompatibleRequest = {
     model,
     messages: apiMessages,
     stream: true,
-    max_tokens: 4096,
   };
+
+  if (usesCompletionTokens) {
+    body.max_completion_tokens = 4096;
+  } else {
+    body.max_tokens = 4096;
+  }
 
   // Add thinking/reasoning config if the model supports it
   const modelInfo = providerConfig.models.find((m) => m.id === model);
   if (modelInfo?.thinking?.supported && modelInfo.thinking.paramType === "level") {
     body.reasoning_effort = modelInfo.thinking.defaultLevel || "medium";
-    // Reasoning models typically need higher max_tokens
-    body.max_tokens = Math.min(modelInfo.maxOutput, 16384);
+    const limit = Math.min(modelInfo.maxOutput, 16384);
+    if (usesCompletionTokens) {
+      body.max_completion_tokens = limit;
+    } else {
+      body.max_tokens = limit;
+    }
   }
 
   try {

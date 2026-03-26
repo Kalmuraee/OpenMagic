@@ -1,13 +1,7 @@
 import http from "node:http";
-import { gunzip, inflate, brotliDecompress } from "node:zlib";
-import { promisify } from "node:util";
 import httpProxy from "http-proxy";
 import { getSessionToken } from "./security.js";
 import { attachOpenMagic } from "./server.js";
-
-const gunzipAsync = promisify(gunzip);
-const inflateAsync = promisify(inflate);
-const brotliAsync = promisify(brotliDecompress);
 
 /**
  * Create a single-port proxy server that:
@@ -28,49 +22,43 @@ export function createProxyServer(
 
   const token = getSessionToken();
 
+  // Strip Accept-Encoding so upstream sends uncompressed HTML (enables streaming injection)
+  proxy.on("proxyReq", (proxyReq) => {
+    proxyReq.removeHeader("Accept-Encoding");
+  });
+
   proxy.on("proxyRes", (proxyRes, req, res) => {
     const contentType = proxyRes.headers["content-type"] || "";
     const isHtml = contentType.includes("text/html");
 
     if (!isHtml) {
+      // Non-HTML: pass through unchanged
       res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
       proxyRes.pipe(res);
       return;
     }
 
-    collectBody(proxyRes)
-      .then((body) => {
-        const toolbarScript = buildInjectionScript(token);
-        if (body.includes("</body>")) {
-          body = body.replace("</body>", `${toolbarScript}</body>`);
-        } else if (body.includes("</html>")) {
-          body = body.replace("</html>", `${toolbarScript}</html>`);
-        } else {
-          body += toolbarScript;
-        }
+    // HTML: stream through and append toolbar script at the end
+    const headers = { ...proxyRes.headers };
+    delete headers["content-length"]; // Length will change
+    delete headers["content-encoding"]; // We stripped Accept-Encoding
+    delete headers["transfer-encoding"];
+    delete headers["content-security-policy"];
+    delete headers["content-security-policy-report-only"];
+    delete headers["x-content-security-policy"];
+    delete headers["etag"];
+    delete headers["last-modified"];
+    headers["cache-control"] = "no-store";
 
-        const headers = { ...proxyRes.headers };
-        delete headers["content-length"];
-        delete headers["content-encoding"];
-        delete headers["transfer-encoding"];
-        delete headers["content-security-policy"];
-        delete headers["content-security-policy-report-only"];
-        delete headers["x-content-security-policy"];
-        delete headers["etag"];
-        delete headers["last-modified"];
-        headers["cache-control"] = "no-store";
+    res.writeHead(proxyRes.statusCode || 200, headers);
 
-        res.writeHead(proxyRes.statusCode || 200, headers);
-        res.end(body);
-      })
-      .catch(() => {
-        try {
-          res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-          res.end();
-        } catch {
-          // Connection closed
-        }
-      });
+    // Stream the response body through
+    proxyRes.pipe(res, { end: false });
+
+    // When the upstream finishes, append the toolbar script
+    proxyRes.on("end", () => {
+      res.end(buildInjectionScript(token));
+    });
   });
 
   proxy.on("error", (err, _req, res) => {
@@ -110,37 +98,6 @@ export function createProxyServer(
   });
 
   return server;
-}
-
-async function collectBody(stream: http.IncomingMessage): Promise<string> {
-  const rawBuffer = await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
-    stream.on("error", reject);
-  });
-
-  const encoding = (stream.headers["content-encoding"] || "").toLowerCase();
-
-  if (!encoding || encoding === "identity") {
-    return rawBuffer.toString("utf-8");
-  }
-
-  try {
-    let decompressed: Buffer;
-    if (encoding === "gzip" || encoding === "x-gzip") {
-      decompressed = await gunzipAsync(rawBuffer);
-    } else if (encoding === "deflate") {
-      decompressed = await inflateAsync(rawBuffer);
-    } else if (encoding === "br") {
-      decompressed = await brotliAsync(rawBuffer);
-    } else {
-      return rawBuffer.toString("utf-8");
-    }
-    return decompressed.toString("utf-8");
-  } catch {
-    return rawBuffer.toString("utf-8");
-  }
 }
 
 // Same-origin injection — toolbar.js and WS served from THIS server

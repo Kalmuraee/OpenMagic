@@ -7,6 +7,7 @@ let messageQueue: string[] = [];
 let connected = false;
 let shouldReconnect = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
 
 function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -29,7 +30,8 @@ export function connect(port: number, token: string): Promise<void> {
     try {
       // Same-origin WebSocket — use page hostname and given port
       const wsHost = window.location.hostname || "127.0.0.1";
-      ws = new WebSocket(`ws://${wsHost}:${port}/__openmagic__/ws`);
+      const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${wsProto}//${wsHost}:${port}/__openmagic__/ws`);
 
       ws.onopen = () => {
         // Send handshake directly (bypass send() which checks connected flag)
@@ -40,6 +42,7 @@ export function connect(port: number, token: string): Promise<void> {
           if (msg.type === "handshake.ok") {
             clearTimeout(handshakeTimeout);
             connected = true;
+            reconnectAttempt = 0;
             // Flush queued messages
             for (const queued of messageQueue) {
               ws?.send(queued);
@@ -75,6 +78,12 @@ export function connect(port: number, token: string): Promise<void> {
         const wasConnected = connected;
         connected = false;
 
+        // Reject all pending handlers
+        handlers.forEach((handler, id) => {
+          handler({ type: "error", id, payload: { message: "Connection lost" } });
+        });
+        handlers.clear();
+
         if (!wasConnected && !settled) {
           // Connection closed before handshake completed
           clearTimeout(handshakeTimeout);
@@ -85,6 +94,8 @@ export function connect(port: number, token: string): Promise<void> {
 
         // Only reconnect if we were previously connected and should reconnect
         if (wasConnected && shouldReconnect && !reconnectTimer) {
+          const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempt), 30000);
+          reconnectAttempt++;
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             connect(port, token).then(() => {
@@ -93,7 +104,7 @@ export function connect(port: number, token: string): Promise<void> {
                 handler({ type: "reconnected", payload: {} });
               }
             }).catch(() => {});
-          }, 2000);
+          }, delay);
         }
       };
 

@@ -191,6 +191,15 @@ This file is in your home directory, never in your project. It won't be committe
 - **Path sandboxing** — File operations are restricted to configured root directories. The server cannot read/write outside your project.
 - **API keys stay local** — Keys are stored in `~/.openmagic/config.json` on your machine. They are proxied through the local server and never exposed to the browser or any third party.
 - **Zero project modification** — OpenMagic never modifies your `package.json`, config files, or source code during installation. The toolbar exists only in the proxy layer.
+- **Symlink protection** — File operations resolve symlinks and reject paths that escape the project root.
+- **Diff preview** — AI-proposed code changes are shown as diffs with Apply/Reject buttons. Nothing is auto-applied.
+
+### Known Limitations
+
+OpenMagic uses a reverse proxy which introduces these tradeoffs:
+
+- **Origin change** — Your app runs on `localhost:3000` but is accessed via `localhost:4567`. This can affect OAuth redirects, `localStorage` isolation, and Service Worker scope. Most dev workflows are unaffected, but if your app relies on `window.location.origin`, you may need to adjust your dev config.
+- **CSP meta tags** — OpenMagic strips CSP response headers to allow the toolbar script. However, CSP set via `<meta>` tags in your HTML cannot be modified and may block the toolbar on strict CSP pages.
 
 ## Comparison
 

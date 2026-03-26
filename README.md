@@ -286,9 +286,13 @@ src/
 - [ ] Git integration (auto-branch, auto-commit)
 - [ ] VS Code extension for side-by-side view
 
+## Author
+
+**Khalid Almuraee** ([@kalmuraee](https://github.com/kalmuraee))
+
 ## License
 
-MIT
+MIT - Copyright (c) 2026 Khalid Almuraee. See [LICENSE](./LICENSE) for details.
 
 ---
 

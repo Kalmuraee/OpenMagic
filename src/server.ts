@@ -19,7 +19,7 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.11.0";
+const VERSION = "0.13.0";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface ClientState {
@@ -135,7 +135,7 @@ async function handleMessage(
             provider: config.provider,
             model: config.model,
             hasApiKey: !!config.apiKey,
-            apiKeys: config.apiKeys || {},
+            apiKeys: Object.fromEntries(Object.entries(config.apiKeys || {}).map(([k]) => [k, true])),
           },
         },
       });
@@ -209,7 +209,7 @@ async function handleMessage(
       await handleLlmChat(
         {
           provider,
-          model: payload.model || config.model || "gpt-4o",
+          model: payload.model || config.model || MODEL_REGISTRY[provider]?.models[0]?.id || "gpt-4o",
           apiKey,
           messages: payload.messages,
           context: payload.context,
@@ -260,12 +260,12 @@ async function handleMessage(
       } else if (payload.apiKey !== undefined) {
         updates.apiKey = payload.apiKey;
       }
-      saveConfig(updates);
-      send(ws, {
-        id: msg.id,
-        type: "config.saved",
-        payload: { ok: true },
-      });
+      const result = saveConfig(updates);
+      if (!result.ok) {
+        sendError(ws, "config_error", result.error || "Failed to save", msg.id);
+      } else {
+        send(ws, { id: msg.id, type: "config.saved", payload: { ok: true } });
+      }
       break;
     }
 

@@ -1,171 +1,134 @@
 import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
-import {
-  inspectElement,
-  showHighlight,
-  hideHighlight,
-  removeHighlight,
-  type SelectedElement,
-} from "./services/dom-inspector.js";
+import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshot } from "./services/capture.js";
-import {
-  installNetworkCapture,
-  installConsoleCapture,
-  buildContext,
-} from "./services/context-builder.js";
+import { installNetworkCapture, installConsoleCapture, buildContext } from "./services/context-builder.js";
 
-// Inline model registry (bundled into toolbar IIFE)
-const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean }> = {
-  openai: { name: "OpenAI", models: [
-    { id: "gpt-5.4", name: "GPT-5.4" },
-    { id: "gpt-5.4-pro", name: "GPT-5.4 Pro" },
-    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
-    { id: "gpt-5.4-nano", name: "GPT-5.4 Nano" },
-    { id: "gpt-5.2", name: "GPT-5.2 Thinking" },
-    { id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-    { id: "o3", name: "o3 (Reasoning)" },
-    { id: "o4-mini", name: "o4-mini (Reasoning)" },
-    { id: "gpt-4.1", name: "GPT-4.1" },
-    { id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-    { id: "codex-mini-latest", name: "Codex Mini" },
-  ], keyPlaceholder: "sk-..." },
-  anthropic: { name: "Anthropic", models: [
-    { id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-    { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
-    { id: "claude-sonnet-4-5-20250929", name: "Claude Sonnet 4.5" },
-    { id: "claude-opus-4-5-20251101", name: "Claude Opus 4.5" },
-    { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
-    { id: "claude-opus-4-20250514", name: "Claude Opus 4" },
-  ], keyPlaceholder: "sk-ant-..." },
-  google: { name: "Google Gemini", models: [
-    { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
-    { id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
-    { id: "gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite" },
-    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
-    { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite" },
-  ], keyPlaceholder: "AIza..." },
-  xai: { name: "xAI (Grok)", models: [
-    { id: "grok-4.20-0309-reasoning", name: "Grok 4.20 Reasoning" },
-    { id: "grok-4.20-0309-non-reasoning", name: "Grok 4.20" },
-    { id: "grok-4-1-fast-reasoning", name: "Grok 4.1 Fast Reasoning" },
-    { id: "grok-4-1-fast-non-reasoning", name: "Grok 4.1 Fast" },
-  ], keyPlaceholder: "xai-..." },
-  deepseek: { name: "DeepSeek", models: [
-    { id: "deepseek-chat", name: "DeepSeek V3.2" },
-    { id: "deepseek-reasoner", name: "DeepSeek R1" },
-  ], keyPlaceholder: "sk-..." },
-  mistral: { name: "Mistral", models: [
-    { id: "mistral-large-3-25-12", name: "Mistral Large 3" },
-    { id: "mistral-small-4-0-26-03", name: "Mistral Small 4" },
-    { id: "codestral-2508", name: "Codestral" },
-    { id: "devstral-2-25-12", name: "Devstral 2" },
-    { id: "magistral-medium-1-2-25-09", name: "Magistral Medium" },
-  ], keyPlaceholder: "..." },
-  groq: { name: "Groq", models: [
-    { id: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B" },
-    { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
-    { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
-    { id: "qwen/qwen3-32b", name: "Qwen 3 32B" },
-  ], keyPlaceholder: "gsk_..." },
-  minimax: { name: "MiniMax", models: [
-    { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
-    { id: "MiniMax-M2.7-highspeed", name: "M2.7 Highspeed" },
-    { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
-  ], keyPlaceholder: "MiniMax key..." },
-  moonshot: { name: "Kimi (Moonshot)", models: [
-    { id: "kimi-k2.5", name: "Kimi K2.5" },
-    { id: "kimi-k2-thinking", name: "Kimi K2 Thinking" },
-  ], keyPlaceholder: "Moonshot key..." },
-  qwen: { name: "Qwen (Alibaba)", models: [
-    { id: "qwen3.5-plus", name: "Qwen 3.5 Plus" },
-    { id: "qwen-max", name: "Qwen Max" },
-    { id: "qwen-turbo", name: "Qwen Turbo" },
-  ], keyPlaceholder: "DashScope key..." },
-  zhipu: { name: "Zhipu AI (GLM)", models: [
-    { id: "glm-5", name: "GLM-5" },
-    { id: "glm-4.7", name: "GLM-4.7" },
-    { id: "glm-4.6", name: "GLM-4.6" },
-  ], keyPlaceholder: "Zhipu key..." },
-  doubao: { name: "Doubao (ByteDance)", models: [
-    { id: "doubao-seed-2-0-pro", name: "Doubao Seed 2.0 Pro" },
-    { id: "doubao-seed-2-0-code", name: "Doubao Seed 2.0 Code" },
-  ], keyPlaceholder: "Volcano key..." },
-  ollama: { name: "Ollama (Local)", models: [], keyPlaceholder: "not required", local: true },
-  openrouter: { name: "OpenRouter", models: [], keyPlaceholder: "sk-or-..." },
+// ── SVG Icons (Lucide-style) ─────────────────────────────────────
+const ICON = {
+  sparkle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>`,
+  crosshair: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>`,
+  camera: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`,
+  chat: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+  settings: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  send: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
+  x: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  externalLink: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
+  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`,
+  grip: `<svg width="7" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>`,
 };
 
-const CURRENT_VERSION = "0.7.0";
+// ── Model Registry (inline for browser bundle) ───────────────────
+const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean; keyUrl?: string }> = {
+  openai: { name: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", keyPlaceholder: "sk-...", models: [
+    { id: "gpt-5.4", name: "GPT-5.4" }, { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+    { id: "gpt-5.2", name: "GPT-5.2 Thinking" }, { id: "o3", name: "o3" }, { id: "o4-mini", name: "o4-mini" },
+    { id: "gpt-4.1", name: "GPT-4.1" }, { id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+  ]},
+  anthropic: { name: "Anthropic", keyUrl: "https://console.anthropic.com/settings/keys", keyPlaceholder: "sk-ant-...", models: [
+    { id: "claude-opus-4-6", name: "Claude Opus 4.6" }, { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
+  ]},
+  google: { name: "Google Gemini", keyUrl: "https://aistudio.google.com/apikey", keyPlaceholder: "AIza...", models: [
+    { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" }, { id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }, { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+  ]},
+  xai: { name: "xAI (Grok)", keyUrl: "https://console.x.ai/team/default/api-keys", keyPlaceholder: "xai-...", models: [
+    { id: "grok-4.20-0309-reasoning", name: "Grok 4.20 Reasoning" }, { id: "grok-4-1-fast-non-reasoning", name: "Grok 4.1 Fast" },
+  ]},
+  deepseek: { name: "DeepSeek", keyUrl: "https://platform.deepseek.com/api_keys", keyPlaceholder: "sk-...", models: [
+    { id: "deepseek-chat", name: "DeepSeek V3.2" }, { id: "deepseek-reasoner", name: "DeepSeek R1" },
+  ]},
+  mistral: { name: "Mistral", keyUrl: "https://console.mistral.ai/api-keys", keyPlaceholder: "...", models: [
+    { id: "mistral-large-3-25-12", name: "Mistral Large 3" }, { id: "codestral-2508", name: "Codestral" }, { id: "devstral-2-25-12", name: "Devstral 2" },
+  ]},
+  groq: { name: "Groq", keyUrl: "https://console.groq.com/keys", keyPlaceholder: "gsk_...", models: [
+    { id: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout" }, { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
+  ]},
+  minimax: { name: "MiniMax", keyUrl: "https://platform.minimax.chat/user-center/basic-information/interface-key", keyPlaceholder: "MiniMax key...", models: [
+    { id: "MiniMax-M2.7", name: "MiniMax M2.7" }, { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
+  ]},
+  moonshot: { name: "Kimi (Moonshot)", keyUrl: "https://platform.moonshot.cn/console/api-keys", keyPlaceholder: "Moonshot key...", models: [
+    { id: "kimi-k2.5", name: "Kimi K2.5" }, { id: "kimi-k2-thinking", name: "Kimi K2 Thinking" },
+  ]},
+  qwen: { name: "Qwen (Alibaba)", keyUrl: "https://dashscope.console.aliyun.com/apiKey", keyPlaceholder: "DashScope key...", models: [
+    { id: "qwen3.5-plus", name: "Qwen 3.5 Plus" }, { id: "qwen-max", name: "Qwen Max" },
+  ]},
+  zhipu: { name: "Zhipu AI (GLM)", keyUrl: "https://open.bigmodel.cn/usercenter/apikeys", keyPlaceholder: "Zhipu key...", models: [
+    { id: "glm-5", name: "GLM-5" }, { id: "glm-4.7", name: "GLM-4.7" },
+  ]},
+  doubao: { name: "Doubao (ByteDance)", keyUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", keyPlaceholder: "Volcano key...", models: [
+    { id: "doubao-seed-2-0-pro", name: "Doubao Seed 2.0 Pro" }, { id: "doubao-seed-2-0-code", name: "Doubao Seed 2.0 Code" },
+  ]},
+  ollama: { name: "Ollama (Local)", keyPlaceholder: "not required", local: true, models: [] },
+  openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
+};
 
-// --- State ---
-interface AppState {
-  connected: boolean;
-  panelOpen: boolean;
-  activePanel: "chat" | "settings" | null;
-  selecting: boolean;
-  selectedElement: SelectedElement | null;
-  screenshot: string | null;
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
-  streaming: boolean;
-  streamContent: string;
-  provider: string;
-  model: string;
-  hasApiKey: boolean;
-  roots: string[];
-  updateAvailable: boolean;
-  latestVersion: string;
-}
+const CURRENT_VERSION = "0.8.0";
 
-const state: AppState = {
+// ── State ────────────────────────────────────────────────────────
+const state = {
   connected: false,
   panelOpen: false,
-  activePanel: null,
+  activePanel: "" as "" | "chat" | "settings",
   selecting: false,
-  selectedElement: null,
-  screenshot: null,
-  messages: [],
+  selectedElement: null as SelectedElement | null,
+  screenshot: null as string | null,
+  messages: [] as { role: "user" | "assistant" | "system"; content: string }[],
   streaming: false,
   streamContent: "",
   provider: "",
   model: "",
   hasApiKey: false,
-  roots: [],
+  roots: [] as string[],
   updateAvailable: false,
   latestVersion: "",
+  saveStatus: "" as "" | "saving" | "saved" | "error",
 };
 
-// --- DOM References ---
+// ── DOM refs (created once) ──────────────────────────────────────
 let shadow: ShadowRoot;
-let container: HTMLDivElement;
+let $pill: HTMLDivElement;
+let $promptBar: HTMLDivElement;
+let $promptInput: HTMLInputElement;
+let $promptCtx: HTMLDivElement;
+let $panel: HTMLDivElement;
+let $panelBody: HTMLDivElement;
 
-// --- Initialize ---
+// ── Initialize ───────────────────────────────────────────────────
 function init() {
-  // Don't initialize if already loaded
   if (document.querySelector("openmagic-toolbar")) return;
 
-  // Create custom element
   const host = document.createElement("openmagic-toolbar");
   host.dataset.openmagic = "true";
   shadow = host.attachShadow({ mode: "closed" });
 
-  // Inject styles
   const style = document.createElement("style");
   style.textContent = TOOLBAR_CSS;
   shadow.appendChild(style);
 
-  // Create container
-  container = document.createElement("div");
-  shadow.appendChild(container);
+  const root = document.createElement("div");
+  shadow.appendChild(root);
 
-  // Mount
+  // Build DOM structure ONCE
+  root.innerHTML = buildStaticDOM();
+
+  // Cache refs
+  $pill = root.querySelector(".om-pill")!;
+  $promptBar = root.querySelector(".om-prompt-bar")!;
+  $promptInput = root.querySelector(".om-prompt-input")!;
+  $promptCtx = root.querySelector(".om-prompt-context")!;
+  $panel = root.querySelector(".om-panel")!;
+  $panelBody = root.querySelector(".om-panel-body")!;
+
   document.body.appendChild(host);
 
-  // Install captures
+  // Attach event delegation ONCE
+  attachGlobalEvents(root);
+  setupDraggable();
+
   installNetworkCapture();
   installConsoleCapture();
-
-  // Check for updates (non-blocking)
   checkForUpdates();
 
   // Connect to server
@@ -174,374 +137,333 @@ function init() {
     ws.connect(config.wsPort, config.token)
       .then(() => {
         state.connected = true;
-        // Fetch config
-        ws.request("config.get").then((msg: any) => {
-          state.provider = msg.payload?.provider || "";
-          state.model = msg.payload?.model || "";
-          state.hasApiKey = msg.payload?.hasApiKey || false;
-          state.roots = msg.payload?.roots || [];
-
-          // If not configured, open settings
-          if (!state.provider || !state.hasApiKey) {
-            state.panelOpen = true;
-            state.activePanel = "settings";
-          }
-
-          render();
-        });
+        updateStatusDot();
+        return ws.request("config.get");
       })
-      .catch((e: Error) => {
-        console.error("[OpenMagic] Connection failed:", e);
+      .then((msg: any) => {
+        state.provider = msg.payload?.provider || "";
+        state.model = msg.payload?.model || "";
+        state.hasApiKey = msg.payload?.hasApiKey || false;
+        state.roots = msg.payload?.roots || [];
+        if (!state.provider || !state.hasApiKey) {
+          openPanel("settings");
+        }
+        updatePillButtons();
+      })
+      .catch(() => {
         state.connected = false;
-        render();
+        updateStatusDot();
       });
   }
-
-  render();
 }
 
-// --- Render ---
-function render() {
-  container.innerHTML = "";
-
-  // Panel (if open)
-  if (state.panelOpen && state.activePanel) {
-    const panel = document.createElement("div");
-    panel.className = "om-panel";
-
-    if (state.activePanel === "settings") {
-      panel.innerHTML = renderSettings();
-    } else if (state.activePanel === "chat") {
-      panel.innerHTML = renderChat();
-    }
-
-    container.appendChild(panel);
-    attachPanelEvents(panel);
-  }
-
-  // Floating pill
-  const pill = document.createElement("div");
-  pill.className = "om-pill";
-  pill.innerHTML = `
-    <span class="om-grab" title="Drag to move">
-      <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>
-    </span>
-    <span class="om-pill-brand">
-      <svg class="om-pill-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>
-      <span class="om-pill-text">OpenMagic</span>
-    </span>
-    <span class="om-pill-divider"></span>
-    <button class="om-pill-btn ${state.selecting ? "active" : ""}" data-action="select" title="Select Element">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>
-    </button>
-    <button class="om-pill-btn" data-action="screenshot" title="Screenshot">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
-    </button>
-    <button class="om-pill-btn ${state.activePanel === "chat" ? "active" : ""}" data-action="chat" title="Chat with AI">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    </button>
-    <button class="om-pill-btn ${state.activePanel === "settings" ? "active" : ""}" data-action="settings" title="Settings">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-    </button>
-  `;
-
-  // Connection indicator
-  if (!state.connected) {
-    const dot = document.createElement("span");
-    dot.style.cssText = "width:8px;height:8px;border-radius:50%;background:#e94560;margin-left:4px;";
-    pill.appendChild(dot);
-  }
-
-  // Update indicator
-  if (state.updateAvailable) {
-    const updateDot = document.createElement("span");
-    updateDot.className = "om-update-dot";
-    updateDot.title = `Update available: v${state.latestVersion}`;
-    updateDot.addEventListener("click", (e) => {
-      e.stopPropagation();
-      state.panelOpen = true;
-      state.activePanel = "settings";
-      render();
-    });
-    pill.appendChild(updateDot);
-  }
-
-  container.appendChild(pill);
-
-  // Draggable
-  makeDraggable(pill);
-
-  // Pill button events
-  pill.querySelectorAll(".om-pill-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const action = (btn as HTMLElement).dataset.action;
-
-      if (action === "select") {
-        toggleSelectMode();
-      } else if (action === "screenshot") {
-        takeScreenshot();
-      } else if (action === "chat") {
-        togglePanel("chat");
-      } else if (action === "settings") {
-        togglePanel("settings");
-      }
-    });
-  });
-}
-
-// --- Renderers ---
-
-function renderSettings(): string {
-  const providerOptions = Object.entries(MODEL_REGISTRY)
-    .map(([key, p]) => `<option value="${key}" ${state.provider === key ? "selected" : ""}>${p.name}</option>`)
-    .join("");
-
-  const currentProvider = MODEL_REGISTRY[state.provider];
-  const modelOptions = currentProvider
-    ? currentProvider.models.map((m) =>
-        `<option value="${m.id}" ${state.model === m.id ? "selected" : ""}>${m.name}</option>`
-      ).join("")
-    : '<option value="">Select a provider first</option>';
-
-  const keyPlaceholder = currentProvider?.keyPlaceholder || "Enter API key...";
-  const isLocal = currentProvider?.local || false;
-
-  const updateBanner = state.updateAvailable
-    ? `<div class="om-update-banner">
-        <span>🚀 v${state.latestVersion} available</span>
-        <span class="om-update-current">current: v${CURRENT_VERSION}</span>
-        <code class="om-update-cmd">npx openmagic@latest</code>
-       </div>`
-    : "";
-
-  // Provider → API key page URLs
-  const KEY_URLS: Record<string, string> = {
-    openai: "https://platform.openai.com/api-keys",
-    anthropic: "https://console.anthropic.com/settings/keys",
-    google: "https://aistudio.google.com/apikey",
-    xai: "https://console.x.ai/team/default/api-keys",
-    deepseek: "https://platform.deepseek.com/api_keys",
-    mistral: "https://console.mistral.ai/api-keys",
-    groq: "https://console.groq.com/keys",
-    minimax: "https://platform.minimax.chat/user-center/basic-information/interface-key",
-    moonshot: "https://platform.moonshot.cn/console/api-keys",
-    qwen: "https://dashscope.console.aliyun.com/apiKey",
-    zhipu: "https://open.bigmodel.cn/usercenter/apikeys",
-    doubao: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
-    openrouter: "https://openrouter.ai/settings/keys",
-  };
-
-  const keyUrl = KEY_URLS[state.provider] || "";
-  const providerName = currentProvider?.name || "provider";
-
+function buildStaticDOM(): string {
   return `
-    <div class="om-panel-header">
-      <svg class="om-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-      <span class="om-panel-title">Settings</span>
-      <span class="om-panel-version">v${CURRENT_VERSION}</span>
-      <button class="om-panel-close" data-action="close">&times;</button>
-    </div>
-    <div class="om-panel-body">
-      ${updateBanner}
-      <div class="om-settings">
-        <div class="om-field">
-          <label class="om-label">Provider</label>
-          <select class="om-select" data-field="provider">
-            <option value="">Select Provider...</option>
-            ${providerOptions}
-          </select>
-        </div>
-
-        <div class="om-field">
-          <label class="om-label">Model</label>
-          <select class="om-select" data-field="model">
-            <option value="">Select Model...</option>
-            ${modelOptions}
-          </select>
-        </div>
-
-        <div class="om-field ${isLocal ? "om-hidden" : ""}">
-          <label class="om-label">API Key</label>
-          <div class="om-key-row">
-            <input type="password" class="om-input om-key-input" data-field="apiKey"
-                   placeholder="${keyPlaceholder}"
-                   value="" />
-            ${keyUrl ? `<button class="om-btn-connect" data-action="get-key" data-url="${keyUrl}" title="Get API key from ${providerName}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-              Get key
-            </button>` : ""}
-          </div>
-          ${state.provider && !isLocal ? `<div class="om-key-hint">Paste your ${providerName} API key above.${keyUrl ? ` <a data-action="get-key" data-url="${keyUrl}">Get one here &rarr;</a>` : ""}</div>` : ""}
-        </div>
-
-        <button class="om-btn" data-action="save-settings">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Save
-        </button>
-
-        ${state.hasApiKey ? `<div class="om-status om-status-success">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          Connected
-        </div>` : ""}
-      </div>
-    </div>
-  `;
-}
-
-function renderChat(): string {
-  if (!state.hasApiKey || !state.provider) {
-    return `
+    <div class="om-panel om-hidden">
       <div class="om-panel-header">
-        <span class="om-panel-title">Chat</span>
-        <button class="om-panel-close" data-action="close">&times;</button>
+        <span class="om-panel-title"></span>
+        <span class="om-panel-version">v${CURRENT_VERSION}</span>
+        <button class="om-panel-close" data-action="close-panel">${ICON.x}</button>
       </div>
-      <div class="om-panel-body">
-        <div class="om-status om-status-error">
-          Configure your LLM provider in Settings first
-        </div>
-      </div>
-    `;
-  }
-
-  const messagesHtml = state.messages
-    .map((m) => `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`)
-    .join("");
-
-  const streamHtml = state.streaming
-    ? `<div class="om-msg om-msg-assistant"><div class="om-loading"><div class="om-spinner"></div> Thinking...</div>${escapeHtml(state.streamContent)}</div>`
-    : "";
-
-  const contextChips: string[] = [];
-  if (state.selectedElement) {
-    contextChips.push(`<span class="om-context-chip">🎯 ${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""} <button class="om-context-chip-remove" data-action="clear-element">&times;</button></span>`);
-  }
-  if (state.screenshot) {
-    contextChips.push(`<span class="om-context-chip">📸 Screenshot <button class="om-context-chip-remove" data-action="clear-screenshot">&times;</button></span>`);
-  }
-
-  return `
-    <div class="om-panel-header">
-      <span class="om-panel-title">Chat — ${MODEL_REGISTRY[state.provider]?.name || state.provider} / ${state.model}</span>
-      <button class="om-panel-close" data-action="close">&times;</button>
+      <div class="om-panel-body"></div>
     </div>
-    <div class="om-panel-body">
-      ${contextChips.length > 0 ? `<div class="om-context-bar">${contextChips.join("")}</div>` : ""}
-      ${state.selectedElement ? `<div class="om-element-info">&lt;${state.selectedElement.tagName}${state.selectedElement.id ? ' id="' + state.selectedElement.id + '"' : ""}${state.selectedElement.className ? ' class="' + state.selectedElement.className.toString().slice(0, 60) + '"' : ""}&gt;</div>` : ""}
-      <div class="om-chat-messages">
-        ${messagesHtml || '<div style="color:#555;text-align:center;padding:40px 0;font-size:13px;">Select an element or describe what you want to change</div>'}
-        ${streamHtml}
-      </div>
-      <div class="om-chat-input-wrap">
-        <textarea class="om-chat-input" placeholder="Describe the change you want..."
-                  rows="1" ${state.streaming ? "disabled" : ""}></textarea>
-        <button class="om-chat-send" data-action="send" ${state.streaming ? "disabled" : ""}>
-          ${state.streaming ? "..." : "Send"}
-        </button>
-      </div>
+    <div class="om-prompt-bar">
+      <div class="om-prompt-context"></div>
+      <input class="om-prompt-input" type="text" placeholder="Describe what you want to change..." />
+      <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
     </div>
-  `;
+    <div class="om-pill">
+      <span class="om-grab">${ICON.grip}</span>
+      <span class="om-pill-brand">
+        <span class="om-pill-icon">${ICON.sparkle}</span>
+        <span class="om-pill-text">OpenMagic</span>
+      </span>
+      <span class="om-pill-divider"></span>
+      <button class="om-pill-btn" data-action="select" title="Select element">${ICON.crosshair}</button>
+      <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
+      <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
+      <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
+      <span class="om-status-dot disconnected"></span>
+    </div>`;
 }
 
-// --- Event Handlers ---
-
-function attachPanelEvents(panel: HTMLElement) {
-  // Close button
-  panel.querySelector('[data-action="close"]')?.addEventListener("click", () => {
-    state.panelOpen = false;
-    state.activePanel = null;
-    render();
+// ── Event Delegation (attached ONCE) ─────────────────────────────
+function attachGlobalEvents(root: HTMLElement) {
+  // Click delegation
+  root.addEventListener("click", (e) => {
+    const target = (e.target as HTMLElement).closest("[data-action]") as HTMLElement | null;
+    if (!target) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const action = target.dataset.action!;
+    handleAction(action, target);
   });
 
-  // Settings: provider change
-  panel.querySelector('[data-field="provider"]')?.addEventListener("change", (e) => {
-    state.provider = (e.target as HTMLSelectElement).value;
-    state.model = "";
-    render();
-  });
+  // Change delegation (dropdowns)
+  root.addEventListener("change", (e) => {
+    const target = e.target as HTMLSelectElement;
+    const field = target.dataset.field;
+    if (!field) return;
 
-  // Settings: model change
-  panel.querySelector('[data-field="model"]')?.addEventListener("change", (e) => {
-    state.model = (e.target as HTMLSelectElement).value;
-  });
-
-  // Settings: "Get key" button — opens provider's API key page
-  panel.querySelectorAll('[data-action="get-key"]').forEach((el) => {
-    el.addEventListener("click", (e) => {
-      e.preventDefault();
-      const url = (el as HTMLElement).dataset.url;
-      if (url) window.open(url, "_blank", "noopener");
-    });
-  });
-
-  // Settings: save
-  panel.querySelector('[data-action="save-settings"]')?.addEventListener("click", () => {
-    const apiKeyInput = panel.querySelector('[data-field="apiKey"]') as HTMLInputElement;
-    const apiKey = apiKeyInput?.value || "";
-
-    const payload: any = {
-      provider: state.provider,
-      model: state.model,
-    };
-    if (apiKey) {
-      payload.apiKey = apiKey;
+    if (field === "provider") {
+      state.provider = target.value;
+      state.model = "";
+      state.saveStatus = "";
+      refreshPanelContent();
+    } else if (field === "model") {
+      state.model = target.value;
     }
-
-    ws.request("config.set", payload).then(() => {
-      state.hasApiKey = true;
-      render();
-    }).catch((e: Error) => {
-      console.error("[OpenMagic] Failed to save config:", e);
-    });
   });
 
-  // Chat: send
-  panel.querySelector('[data-action="send"]')?.addEventListener("click", () => {
-    sendMessage(panel);
-  });
-
-  // Chat: enter to send
-  const input = panel.querySelector(".om-chat-input") as HTMLTextAreaElement;
-  input?.addEventListener("keydown", (e) => {
+  // Prompt input: Enter to send
+  $promptInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage(panel);
+      sendPrompt();
     }
-  });
-
-  // Auto-resize textarea
-  input?.addEventListener("input", () => {
-    input.style.height = "auto";
-    input.style.height = Math.min(input.scrollHeight, 120) + "px";
-  });
-
-  // Clear context
-  panel.querySelector('[data-action="clear-element"]')?.addEventListener("click", () => {
-    state.selectedElement = null;
-    render();
-  });
-
-  panel.querySelector('[data-action="clear-screenshot"]')?.addEventListener("click", () => {
-    state.screenshot = null;
-    render();
   });
 }
 
-async function sendMessage(panel: HTMLElement) {
-  const input = panel.querySelector(".om-chat-input") as HTMLTextAreaElement;
-  if (!input) return;
+function handleAction(action: string, target: HTMLElement) {
+  switch (action) {
+    case "select": toggleSelectMode(); break;
+    case "screenshot": takeScreenshot(); break;
+    case "chat": togglePanel("chat"); break;
+    case "settings": togglePanel("settings"); break;
+    case "close-panel": closePanel(); break;
+    case "prompt-send": sendPrompt(); break;
+    case "save-settings": saveSettings(); break;
+    case "get-key": {
+      const url = target.dataset.url;
+      if (url) window.open(url, "_blank", "noopener");
+      break;
+    }
+    case "clear-element": state.selectedElement = null; updatePromptContext(); break;
+    case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
+  }
+}
 
-  const text = input.value.trim();
+// ── Targeted UI Updates (no full DOM rebuild) ────────────────────
+
+function updateStatusDot() {
+  const dot = shadow.querySelector(".om-status-dot");
+  if (dot) {
+    dot.className = `om-status-dot ${state.connected ? "connected" : "disconnected"}`;
+  }
+}
+
+function updatePillButtons() {
+  shadow.querySelectorAll(".om-pill-btn").forEach((btn) => {
+    const action = (btn as HTMLElement).dataset.action;
+    btn.classList.toggle("active", action === state.activePanel || (action === "select" && state.selecting));
+  });
+}
+
+function updatePromptContext() {
+  const chips: string[] = [];
+  if (state.selectedElement) {
+    chips.push(`<span class="om-prompt-chip">${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+  }
+  if (state.screenshot) {
+    chips.push(`<span class="om-prompt-chip">Screenshot <button class="om-prompt-chip-x" data-action="clear-screenshot">${ICON.x}</button></span>`);
+  }
+  $promptCtx.innerHTML = chips.join("");
+}
+
+// ── Panel Management ─────────────────────────────────────────────
+
+function openPanel(panel: "chat" | "settings") {
+  state.panelOpen = true;
+  state.activePanel = panel;
+  $panel.classList.remove("om-hidden");
+  const title = shadow.querySelector(".om-panel-title")!;
+  title.textContent = panel === "settings" ? "Settings" : "Chat";
+  refreshPanelContent();
+  updatePillButtons();
+}
+
+function closePanel() {
+  state.panelOpen = false;
+  state.activePanel = "";
+  $panel.classList.add("om-hidden");
+  updatePillButtons();
+}
+
+function togglePanel(panel: "chat" | "settings") {
+  if (state.panelOpen && state.activePanel === panel) {
+    closePanel();
+  } else {
+    openPanel(panel);
+  }
+}
+
+function refreshPanelContent() {
+  if (state.activePanel === "settings") {
+    $panelBody.innerHTML = renderSettingsHTML();
+  } else if (state.activePanel === "chat") {
+    $panelBody.innerHTML = renderChatHTML();
+    scrollChatToBottom();
+  }
+}
+
+// ── Settings Renderer ────────────────────────────────────────────
+
+function renderSettingsHTML(): string {
+  const providerOpts = Object.entries(MODEL_REGISTRY)
+    .map(([k, p]) => `<option value="${k}" ${state.provider === k ? "selected" : ""}>${p.name}</option>`).join("");
+
+  const prov = MODEL_REGISTRY[state.provider];
+  const modelOpts = prov
+    ? prov.models.map(m => `<option value="${m.id}" ${state.model === m.id ? "selected" : ""}>${m.name}</option>`).join("")
+    : '<option value="">Select provider first</option>';
+
+  const isLocal = prov?.local || false;
+  const keyUrl = prov?.keyUrl || "";
+  const keyPh = prov?.keyPlaceholder || "Enter API key...";
+
+  const updateBanner = state.updateAvailable
+    ? `<div class="om-update-banner">v${state.latestVersion} available <code class="om-update-cmd">npx openmagic@latest</code></div>` : "";
+
+  const statusHtml = state.hasApiKey
+    ? `<div class="om-status om-status-success">${ICON.check} Connected</div>` : "";
+
+  const saveBtnText = state.saveStatus === "saving" ? '<span class="om-spinner"></span> Saving...'
+    : state.saveStatus === "saved" ? `${ICON.check} Saved` : "Save";
+  const saveBtnClass = state.saveStatus === "saving" ? "om-btn om-btn-saving"
+    : state.saveStatus === "saved" ? "om-btn om-btn-saved" : "om-btn";
+  const saveBtnDisabled = state.saveStatus === "saving" ? "disabled" : "";
+
+  return `
+    ${updateBanner}
+    <div class="om-settings">
+      <div class="om-field">
+        <label class="om-label">Provider</label>
+        <select class="om-select" data-field="provider"><option value="">Select Provider...</option>${providerOpts}</select>
+      </div>
+      <div class="om-field">
+        <label class="om-label">Model</label>
+        <select class="om-select" data-field="model"><option value="">Select Model...</option>${modelOpts}</select>
+      </div>
+      <div class="om-field ${isLocal ? "om-hidden" : ""}">
+        <label class="om-label">API Key</label>
+        <div class="om-key-row">
+          <input type="password" class="om-input om-key-input" data-field="apiKey" placeholder="${keyPh}" />
+          ${keyUrl ? `<button class="om-btn-get-key" data-action="get-key" data-url="${keyUrl}">${ICON.externalLink} Get key</button>` : ""}
+        </div>
+        ${keyUrl ? `<div class="om-key-hint"><a data-action="get-key" data-url="${keyUrl}">Get your ${prov?.name || ""} API key here</a></div>` : ""}
+      </div>
+      <button class="${saveBtnClass}" data-action="save-settings" ${saveBtnDisabled}>${saveBtnText}</button>
+      ${statusHtml}
+    </div>`;
+}
+
+// ── Chat Renderer ────────────────────────────────────────────────
+
+function renderChatHTML(): string {
+  if (!state.hasApiKey || !state.provider) {
+    return `<div class="om-status om-status-error">Configure your provider in Settings first</div>`;
+  }
+
+  const msgs = state.messages.map(m =>
+    `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`
+  ).join("");
+
+  const streamHtml = state.streaming
+    ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span>${escapeHtml(state.streamContent)}</div>` : "";
+
+  const empty = !state.messages.length && !state.streaming
+    ? `<div class="om-chat-empty">Select an element or type below to start</div>` : "";
+
+  return `<div class="om-chat-messages">${empty}${msgs}${streamHtml}</div>`;
+}
+
+function scrollChatToBottom() {
+  const el = $panelBody.querySelector(".om-chat-messages");
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+// ── Save Settings ────────────────────────────────────────────────
+
+async function saveSettings() {
+  const apiKeyInput = $panelBody.querySelector('[data-field="apiKey"]') as HTMLInputElement;
+  const apiKey = apiKeyInput?.value || "";
+
+  if (!state.provider) return;
+
+  const payload: any = { provider: state.provider, model: state.model };
+  if (apiKey) payload.apiKey = apiKey;
+
+  state.saveStatus = "saving";
+  updateSaveButton();
+
+  try {
+    await ws.request("config.set", payload);
+    state.hasApiKey = !!(apiKey || state.hasApiKey);
+    state.saveStatus = "saved";
+    updateSaveButton();
+
+    // Auto-transition to chat after 1s
+    setTimeout(() => {
+      state.saveStatus = "";
+      if (state.activePanel === "settings") {
+        openPanel("chat");
+      }
+    }, 1200);
+  } catch (e: any) {
+    state.saveStatus = "error";
+    updateSaveButton();
+    setTimeout(() => { state.saveStatus = ""; refreshPanelContent(); }, 3000);
+  }
+}
+
+function updateSaveButton() {
+  const btn = $panelBody.querySelector('[data-action="save-settings"]');
+  if (!btn) return;
+  if (state.saveStatus === "saving") {
+    btn.innerHTML = '<span class="om-spinner"></span> Saving...';
+    btn.className = "om-btn om-btn-saving";
+    (btn as HTMLButtonElement).disabled = true;
+  } else if (state.saveStatus === "saved") {
+    btn.innerHTML = `${ICON.check} Saved`;
+    btn.className = "om-btn om-btn-saved";
+    (btn as HTMLButtonElement).disabled = false;
+  } else if (state.saveStatus === "error") {
+    btn.innerHTML = "Save failed - try again";
+    btn.className = "om-btn";
+    (btn as HTMLButtonElement).disabled = false;
+  } else {
+    btn.innerHTML = "Save";
+    btn.className = "om-btn";
+    (btn as HTMLButtonElement).disabled = false;
+  }
+}
+
+// ── Send Prompt ──────────────────────────────────────────────────
+
+async function sendPrompt() {
+  const text = $promptInput.value.trim();
   if (!text || state.streaming) return;
+
+  if (!state.hasApiKey || !state.provider) {
+    openPanel("settings");
+    return;
+  }
 
   // Add user message
   state.messages.push({ role: "user", content: text });
   state.streaming = true;
   state.streamContent = "";
-  render();
+  $promptInput.value = "";
 
-  // Build context
-  const context = buildContext(state.selectedElement, state.screenshot);
+  // Open chat panel
+  openPanel("chat");
+
+  // Build context — includes page info, selected element, screenshot, network/console logs
+  const context: any = buildContext(state.selectedElement, state.screenshot);
+
+  // Add current page context
+  context.pageUrl = window.location.href;
+  context.pageTitle = document.title;
 
   try {
     const result = await ws.stream(
@@ -549,44 +471,35 @@ async function sendMessage(panel: HTMLElement) {
       {
         provider: state.provider,
         model: state.model,
-        messages: state.messages.map((m) => ({ role: m.role, content: m.content })),
+        messages: state.messages.map(m => ({ role: m.role, content: m.content })),
         context,
       },
       (chunk: string) => {
         state.streamContent += chunk;
-        // Update streaming message in place
-        const msgContainer = shadow.querySelector(".om-chat-messages");
-        const streamEl = msgContainer?.querySelector(".om-msg-assistant:last-child");
-        if (streamEl) {
-          streamEl.innerHTML = escapeHtml(state.streamContent);
+        // Update the streaming message in-place
+        const msgEl = $panelBody.querySelector(".om-msg-assistant:last-child");
+        if (msgEl) {
+          msgEl.innerHTML = `<span class="om-spinner"></span>${escapeHtml(state.streamContent)}`;
+          scrollChatToBottom();
         }
       }
     );
 
-    // Add assistant message
     state.messages.push({ role: "assistant", content: state.streamContent || result?.content || "" });
 
-    // Handle modifications
-    if (result?.modifications && result.modifications.length > 0) {
+    // Apply code modifications if any
+    if (result?.modifications?.length) {
       for (const mod of result.modifications) {
         if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
-          // Read the file first
           try {
             const fileResult = await ws.request("fs.read", { path: resolveFilePath(mod.file) });
             const content = fileResult.payload?.content;
-            if (content && content.includes(mod.search)) {
-              const newContent = content.replace(mod.search, mod.replace);
-              await ws.request("fs.write", { path: resolveFilePath(mod.file), content: newContent });
-              state.messages.push({
-                role: "system",
-                content: `Applied change to ${mod.file}`,
-              });
+            if (content?.includes(mod.search)) {
+              await ws.request("fs.write", { path: resolveFilePath(mod.file), content: content.replace(mod.search, mod.replace) });
+              state.messages.push({ role: "system", content: `Applied change to ${mod.file}` });
             }
           } catch (e: any) {
-            state.messages.push({
-              role: "system",
-              content: `Failed to apply change to ${mod.file}: ${e.message}`,
-            });
+            state.messages.push({ role: "system", content: `Failed: ${mod.file} - ${e.message}` });
           }
         }
       }
@@ -597,203 +510,134 @@ async function sendMessage(panel: HTMLElement) {
 
   state.streaming = false;
   state.streamContent = "";
-  render();
+  refreshPanelContent();
 }
 
-function resolveFilePath(relativePath: string): string {
-  // Resolve relative to first root
-  if (state.roots.length > 0) {
-    return state.roots[0] + "/" + relativePath;
-  }
-  return relativePath;
+function resolveFilePath(rel: string): string {
+  return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
 }
 
-// --- Select Mode ---
+// ── Select Mode ──────────────────────────────────────────────────
 
 let selectHandler: ((e: MouseEvent) => void) | null = null;
 let hoverHandler: ((e: MouseEvent) => void) | null = null;
 
 function toggleSelectMode() {
-  if (state.selecting) {
-    exitSelectMode();
-  } else {
-    enterSelectMode();
-  }
+  state.selecting ? exitSelectMode() : enterSelectMode();
 }
 
 function enterSelectMode() {
   state.selecting = true;
   document.body.style.cursor = "crosshair";
+  updatePillButtons();
 
   hoverHandler = (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (isOpenMagicElement(target)) return;
-    const rect = target.getBoundingClientRect();
-    showHighlight({
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    });
+    const t = e.target as HTMLElement;
+    if (t.closest("openmagic-toolbar") || t.dataset?.openmagic) return;
+    const r = t.getBoundingClientRect();
+    showHighlight({ x: r.x, y: r.y, width: r.width, height: r.height });
   };
 
   selectHandler = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-
-    const target = e.target as HTMLElement;
-    if (isOpenMagicElement(target)) return;
-
-    state.selectedElement = inspectElement(target);
+    const t = e.target as HTMLElement;
+    if (t.closest("openmagic-toolbar") || t.dataset?.openmagic) return;
+    state.selectedElement = inspectElement(t);
     exitSelectMode();
-
-    // Open chat if not open
-    if (state.activePanel !== "chat") {
-      state.panelOpen = true;
-      state.activePanel = "chat";
-    }
-
-    render();
+    updatePromptContext();
+    $promptInput.focus();
   };
 
   document.addEventListener("mousemove", hoverHandler, true);
   document.addEventListener("click", selectHandler, true);
-
-  render();
 }
 
 function exitSelectMode() {
   state.selecting = false;
   document.body.style.cursor = "";
   hideHighlight();
-
-  if (hoverHandler) {
-    document.removeEventListener("mousemove", hoverHandler, true);
-    hoverHandler = null;
-  }
-  if (selectHandler) {
-    document.removeEventListener("click", selectHandler, true);
-    selectHandler = null;
-  }
-
-  render();
+  if (hoverHandler) { document.removeEventListener("mousemove", hoverHandler, true); hoverHandler = null; }
+  if (selectHandler) { document.removeEventListener("click", selectHandler, true); selectHandler = null; }
+  updatePillButtons();
 }
-
-// --- Screenshot ---
 
 async function takeScreenshot() {
-  const screenshot = await captureScreenshot();
-  if (screenshot) {
-    state.screenshot = screenshot;
-    // Open chat
-    state.panelOpen = true;
-    state.activePanel = "chat";
-    render();
+  const ss = await captureScreenshot();
+  if (ss) {
+    state.screenshot = ss;
+    updatePromptContext();
+    $promptInput.focus();
   }
 }
 
-// --- Panel Toggle ---
+// ── Draggable (setup ONCE) ───────────────────────────────────────
 
-function togglePanel(panel: "chat" | "settings") {
-  if (state.panelOpen && state.activePanel === panel) {
-    state.panelOpen = false;
-    state.activePanel = null;
-  } else {
-    state.panelOpen = true;
-    state.activePanel = panel;
-  }
-  render();
-}
+function setupDraggable() {
+  let active = false, startX = 0, startY = 0, origX = 0, origY = 0;
 
-// --- Draggable ---
-
-function makeDraggable(el: HTMLElement) {
-  let isDragging = false;
-  let startX = 0;
-  let startY = 0;
-  let origX = 0;
-  let origY = 0;
-
-  el.addEventListener("mousedown", (e) => {
-    // Only drag from the grab handle or brand area, not buttons
-    const target = e.target as HTMLElement;
-    if (target.closest(".om-pill-btn")) return;
-    if (!target.closest(".om-grab") && !target.closest(".om-pill-brand")) return;
-
-    isDragging = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    const rect = el.getBoundingClientRect();
-    origX = rect.left;
-    origY = rect.top;
+  $pill.addEventListener("mousedown", (e) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("[data-action]")) return;
+    if (!t.closest(".om-grab") && !t.closest(".om-pill-brand")) return;
+    active = true;
+    startX = e.clientX; startY = e.clientY;
+    const r = $pill.getBoundingClientRect();
+    origX = r.left; origY = r.top;
     e.preventDefault();
   });
 
   document.addEventListener("mousemove", (e) => {
-    if (!isDragging) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    el.style.position = "fixed";
-    el.style.left = origX + dx + "px";
-    el.style.top = origY + dy + "px";
-    el.style.right = "auto";
-    el.style.bottom = "auto";
+    if (!active) return;
+    $pill.style.left = (origX + e.clientX - startX) + "px";
+    $pill.style.top = (origY + e.clientY - startY) + "px";
+    $pill.style.right = "auto";
+    $pill.style.bottom = "auto";
+    // Move prompt bar and panel with pill
+    const pillRect = $pill.getBoundingClientRect();
+    $promptBar.style.right = "auto";
+    $promptBar.style.bottom = "auto";
+    $promptBar.style.left = pillRect.left + "px";
+    $promptBar.style.top = (pillRect.top - 42) + "px";
+    $panel.style.right = "auto";
+    $panel.style.bottom = "auto";
+    $panel.style.left = pillRect.left + "px";
+    $panel.style.top = (pillRect.top - 42 - ($panel.classList.contains("om-hidden") ? 0 : $panel.offsetHeight + 6)) + "px";
   });
 
-  document.addEventListener("mouseup", () => {
-    isDragging = false;
-  });
+  document.addEventListener("mouseup", () => { active = false; });
 }
 
-// --- Helpers ---
-
-function isOpenMagicElement(el: HTMLElement): boolean {
-  return !!el.closest("openmagic-toolbar") || !!el.dataset?.openmagic;
-}
+// ── Helpers ──────────────────────────────────────────────────────
 
 function escapeHtml(text: string): string {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
+  const d = document.createElement("div");
+  d.textContent = text;
+  return d.innerHTML;
 }
 
-// --- Update Check ---
-
-function checkForUpdates(): void {
-  // Query npm registry for latest version (non-blocking, silent fail)
+function checkForUpdates() {
   fetch("https://registry.npmjs.org/openmagic/latest", {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(5000),
-  })
-    .then((res) => {
-      if (!res.ok) return;
-      return res.json();
-    })
-    .then((data) => {
-      if (!data?.version) return;
-      const latest = data.version;
-      if (isNewerVersion(latest, CURRENT_VERSION)) {
-        state.updateAvailable = true;
-        state.latestVersion = latest;
-        render();
-      }
-    })
-    .catch(() => {
-      // Silently ignore — update check is best-effort
-    });
+  }).then(r => r.ok ? r.json() : null).then(d => {
+    if (!d?.version) return;
+    const l = d.version.split(".").map(Number), c = CURRENT_VERSION.split(".").map(Number);
+    for (let i = 0; i < 3; i++) { if ((l[i]||0) > (c[i]||0)) { state.updateAvailable = true; state.latestVersion = d.version; showUpdateDot(); return; } if ((l[i]||0) < (c[i]||0)) return; }
+  }).catch(() => {});
 }
 
-function isNewerVersion(latest: string, current: string): boolean {
-  const l = latest.split(".").map(Number);
-  const c = current.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((l[i] || 0) > (c[i] || 0)) return true;
-    if ((l[i] || 0) < (c[i] || 0)) return false;
-  }
-  return false;
+function showUpdateDot() {
+  const existing = shadow.querySelector(".om-update-dot");
+  if (existing) return;
+  const dot = document.createElement("span");
+  dot.className = "om-update-dot";
+  dot.title = `v${state.latestVersion} available`;
+  dot.addEventListener("click", () => openPanel("settings"));
+  $pill.appendChild(dot);
 }
 
-// --- Boot ---
+// ── Boot ─────────────────────────────────────────────────────────
 if (typeof window !== "undefined") {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

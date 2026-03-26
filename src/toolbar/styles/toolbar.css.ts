@@ -575,71 +575,61 @@ export const TOOLBAR_CSS = `
   flex-shrink: 0;
 }
 
-/* Auth tabs */
-.om-auth-tabs {
+/* API Key row with connect button */
+.om-key-row {
   display: flex;
-  gap: 0;
-  margin-bottom: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  overflow: hidden;
+  gap: 8px;
+  align-items: stretch;
 }
 
-.om-auth-tab {
+.om-key-input {
   flex: 1;
-  background: transparent;
-  border: none;
-  color: #888;
+  min-width: 0;
+}
+
+.om-btn-connect {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   padding: 8px 12px;
+  background: rgba(108, 92, 231, 0.12);
+  border: 1px solid rgba(108, 92, 231, 0.25);
+  border-radius: 8px;
+  color: #a29bfe;
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s;
 }
 
-.om-auth-tab:hover {
-  color: #ccc;
-  background: rgba(255, 255, 255, 0.03);
+.om-btn-connect:hover {
+  background: rgba(108, 92, 231, 0.2);
+  border-color: rgba(108, 92, 231, 0.4);
+  color: #c4b5fd;
 }
 
-.om-auth-tab.active {
-  background: rgba(108, 92, 231, 0.15);
-  color: #a29bfe;
-}
-
-.om-auth-hint {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin-top: 8px;
-  font-size: 12px;
-  color: #888;
-  line-height: 1.6;
-}
-
-.om-auth-hint p {
-  margin-bottom: 6px;
-}
-
-.om-auth-hint ol {
-  padding-left: 18px;
-}
-
-.om-auth-hint li {
-  margin-bottom: 3px;
-}
-
-.om-auth-hint code {
-  background: rgba(108, 92, 231, 0.1);
-  padding: 1px 5px;
-  border-radius: 3px;
+.om-key-hint {
   font-size: 11px;
-  color: #a29bfe;
+  color: #666;
+  margin-top: 6px;
+  line-height: 1.5;
 }
 
-.om-auth-hint strong {
-  color: #ccc;
+.om-key-hint a {
+  color: #a29bfe;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.om-key-hint a:hover {
+  text-decoration: underline;
+  color: #c4b5fd;
+}
+
+.om-status svg {
+  vertical-align: -2px;
+  margin-right: 4px;
 }
 `;

@@ -141,6 +141,7 @@ export interface OpenMagicConfig {
   provider?: string;
   model?: string;
   apiKey?: string;
+  apiKeys?: Record<string, string>; // per-provider key storage
   roots: string[];
   proxyPort: number;
   targetPort: number;

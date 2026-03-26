@@ -2,16 +2,23 @@ import http from "node:http";
 import { gunzip, inflate, brotliDecompress } from "node:zlib";
 import { promisify } from "node:util";
 import httpProxy from "http-proxy";
+import { getSessionToken } from "./security.js";
+import { attachOpenMagic } from "./server.js";
 
 const gunzipAsync = promisify(gunzip);
 const inflateAsync = promisify(inflate);
 const brotliAsync = promisify(brotliDecompress);
-import { getSessionToken } from "./security.js";
 
+/**
+ * Create a single-port proxy server that:
+ * 1. Serves /__openmagic__/* (toolbar bundle, health, WebSocket)
+ * 2. Proxies everything else to the dev server
+ * 3. Injects the toolbar script into HTML responses
+ */
 export function createProxyServer(
   targetHost: string,
   targetPort: number,
-  serverPort: number
+  roots: string[]
 ): http.Server {
   const proxy = httpProxy.createProxyServer({
     target: `http://${targetHost}:${targetPort}`,
@@ -26,17 +33,14 @@ export function createProxyServer(
     const isHtml = contentType.includes("text/html");
 
     if (!isHtml) {
-      // Pass through non-HTML responses unchanged
       res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
       proxyRes.pipe(res);
       return;
     }
 
-    // For HTML responses, collect the body, decompress if needed, and inject toolbar
     collectBody(proxyRes)
       .then((body) => {
-        // Inject toolbar script before </body> or at end
-        const toolbarScript = buildInjectionScript(serverPort, token);
+        const toolbarScript = buildInjectionScript(token);
         if (body.includes("</body>")) {
           body = body.replace("</body>", `${toolbarScript}</body>`);
         } else if (body.includes("</html>")) {
@@ -45,7 +49,6 @@ export function createProxyServer(
           body += toolbarScript;
         }
 
-        // Send uncompressed response (we decoded it)
         const headers = { ...proxyRes.headers };
         delete headers["content-length"];
         delete headers["content-encoding"];
@@ -60,20 +63,18 @@ export function createProxyServer(
         res.end(body);
       })
       .catch(() => {
-        // If decompression/collection fails, proxy the raw response
-        // This ensures the app still works even if injection fails
         try {
           res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
           res.end();
         } catch {
-          // Response already sent or connection closed
+          // Connection closed
         }
       });
   });
 
   proxy.on("error", (err, _req, res) => {
     if (res instanceof http.ServerResponse && !res.headersSent) {
-      const toolbarScript = buildInjectionScript(serverPort, token);
+      const toolbarScript = buildInjectionScript(token);
       res.writeHead(502, { "Content-Type": "text/html" });
       res.end(
         `<html><body style="font-family:system-ui;padding:40px;background:#1a1a2e;color:#e0e0e0;">
@@ -87,18 +88,23 @@ export function createProxyServer(
     }
   });
 
+  // Shared reference for the handler — set after server creation
+  let omHandle: ((req: http.IncomingMessage, res: http.ServerResponse) => boolean) | null = null;
+
   const server = http.createServer((req, res) => {
-    if (req.url?.startsWith("/__openmagic__/")) {
-      handleToolbarAsset(req, res, serverPort);
-      return;
-    }
+    if (omHandle && omHandle(req, res)) return;
     proxy.web(req, res);
   });
 
+  // Attach OpenMagic WS + endpoints to THIS server (same port)
+  const om = attachOpenMagic(server, roots);
+  omHandle = om.handleRequest;
+
+  // Handle WebSocket upgrades
   server.on("upgrade", (req, socket, head) => {
-    if (req.url?.startsWith("/__openmagic__")) {
-      return;
-    }
+    // OpenMagic WS is handled by the WSS attached to this server
+    if (req.url?.startsWith("/__openmagic__")) return;
+    // Everything else (HMR, etc.) goes to dev server
     proxy.ws(req, socket, head);
   });
 
@@ -106,7 +112,6 @@ export function createProxyServer(
 }
 
 async function collectBody(stream: http.IncomingMessage): Promise<string> {
-  // Buffer raw data first, then decompress — avoids consumed-stream problem
   const rawBuffer = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
     stream.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -120,7 +125,6 @@ async function collectBody(stream: http.IncomingMessage): Promise<string> {
     return rawBuffer.toString("utf-8");
   }
 
-  // Try decompression — fall back to raw on failure
   try {
     let decompressed: Buffer;
     if (encoding === "gzip" || encoding === "x-gzip") {
@@ -134,34 +138,22 @@ async function collectBody(stream: http.IncomingMessage): Promise<string> {
     }
     return decompressed.toString("utf-8");
   } catch {
-    // Decompression failed — try raw (might be uncompressed despite header)
     return rawBuffer.toString("utf-8");
   }
 }
 
-function handleToolbarAsset(
-  _req: http.IncomingMessage,
-  res: http.ServerResponse,
-  _serverPort: number
-): void {
-  res.writeHead(404, { "Content-Type": "text/plain" });
-  res.end("Not found");
-}
-
-function buildInjectionScript(serverPort: number, token: string): string {
+// Same-origin injection — toolbar.js and WS served from THIS server
+function buildInjectionScript(token: string): string {
   return `
 <script data-openmagic="true">
 (function() {
   if (window.__OPENMAGIC_LOADED__) return;
   window.__OPENMAGIC_LOADED__ = true;
-  window.__OPENMAGIC_CONFIG__ = {
-    wsPort: ${serverPort},
-    token: "${token}"
-  };
-  var script = document.createElement("script");
-  script.src = "http://127.0.0.1:${serverPort}/__openmagic__/toolbar.js";
-  script.dataset.openmagic = "true";
-  document.body.appendChild(script);
+  window.__OPENMAGIC_TOKEN__ = "${token}";
+  var s = document.createElement("script");
+  s.src = "/__openmagic__/toolbar.js";
+  s.dataset.openmagic = "true";
+  document.body.appendChild(s);
 })();
 </script>`;
 }

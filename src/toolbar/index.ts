@@ -64,7 +64,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.10.0";
+const CURRENT_VERSION = "0.11.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -129,10 +129,11 @@ function init() {
   installConsoleCapture();
   checkForUpdates();
 
-  // Connect to server
-  const config = (window as any).__OPENMAGIC_CONFIG__;
-  if (config) {
-    ws.connect(config.wsPort, config.token)
+  // Connect to server — same origin (single port)
+  const token = (window as any).__OPENMAGIC_TOKEN__;
+  const wsPort = parseInt(window.location.port, 10) || (window.location.protocol === "https:" ? 443 : 80);
+  if (token) {
+    ws.connect(wsPort, token)
       .then(() => {
         state.connected = true;
         updateStatusDot();
@@ -490,10 +491,16 @@ async function sendPrompt() {
 
   // Build context — includes page info, selected element, screenshot, network/console logs
   const context: any = buildContext(state.selectedElement, state.screenshot);
-
-  // Add current page context
   context.pageUrl = window.location.href;
   context.pageTitle = document.title;
+
+  // Grounding loop: fetch project tree + relevant source files before LLM call
+  try {
+    const treeResult = await ws.request("fs.list", {});
+    if (treeResult?.payload?.projectTree) {
+      context.projectTree = treeResult.payload.projectTree;
+    }
+  } catch { /* non-critical */ }
 
   try {
     const result = await ws.stream(
@@ -584,8 +591,19 @@ function enterSelectMode() {
     $promptInput.focus();
   };
 
+  // ESC to cancel
+  const escHandler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      exitSelectMode();
+    }
+  };
+
   document.addEventListener("mousemove", hoverHandler, true);
   document.addEventListener("click", selectHandler, true);
+  document.addEventListener("keydown", escHandler, true);
+
+  // Store for cleanup
+  (enterSelectMode as any)._escHandler = escHandler;
 }
 
 function exitSelectMode() {
@@ -594,6 +612,8 @@ function exitSelectMode() {
   hideHighlight();
   if (hoverHandler) { document.removeEventListener("mousemove", hoverHandler, true); hoverHandler = null; }
   if (selectHandler) { document.removeEventListener("click", selectHandler, true); selectHandler = null; }
+  const escH = (enterSelectMode as any)._escHandler;
+  if (escH) { document.removeEventListener("keydown", escH, true); (enterSelectMode as any)._escHandler = null; }
   updatePillButtons();
 }
 

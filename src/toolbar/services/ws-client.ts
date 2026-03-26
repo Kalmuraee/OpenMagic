@@ -27,7 +27,9 @@ export function connect(port: number, token: string): Promise<void> {
     }, 10000);
 
     try {
-      ws = new WebSocket(`ws://127.0.0.1:${port}/__openmagic__/ws`);
+      // Same-origin WebSocket — use page hostname and given port
+      const wsHost = window.location.hostname || "127.0.0.1";
+      ws = new WebSocket(`ws://${wsHost}:${port}/__openmagic__/ws`);
 
       ws.onopen = () => {
         // Send handshake directly (bypass send() which checks connected flag)

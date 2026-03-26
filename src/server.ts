@@ -19,37 +19,45 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
+const VERSION = "0.11.0";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface ClientState {
   authenticated: boolean;
 }
 
-export function createOpenMagicServer(
-  proxyPort: number,
+/**
+ * Attach OpenMagic endpoints to an existing HTTP server.
+ * Handles: toolbar bundle serving, health check, WebSocket.
+ * Returns a request handler and the WSS instance.
+ */
+export function attachOpenMagic(
+  httpServer: http.Server,
   roots: string[]
-): { httpServer: http.Server; wss: WebSocketServer } {
-  const httpServer = http.createServer((req, res) => {
-    // Serve toolbar bundle
+): { wss: WebSocketServer; handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean } {
+
+  // Request handler for /__openmagic__/ paths — returns true if handled
+  function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    if (!req.url?.startsWith("/__openmagic__/")) return false;
+
     if (req.url === "/__openmagic__/toolbar.js") {
       serveToolbarBundle(res);
-      return;
+      return true;
     }
 
-    // Health check
     if (req.url === "/__openmagic__/health") {
       res.writeHead(200, {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
       });
-      res.end(JSON.stringify({ status: "ok", version: "0.10.0" }));
-      return;
+      res.end(JSON.stringify({ status: "ok", version: VERSION }));
+      return true;
     }
 
-    res.writeHead(404);
-    res.end("Not found");
-  });
+    return false;
+  }
 
+  // WebSocket server on the same HTTP server
   const wss = new WebSocketServer({
     server: httpServer,
     path: "/__openmagic__/ws",
@@ -58,7 +66,6 @@ export function createOpenMagicServer(
   const clientStates = new WeakMap<WebSocket, ClientState>();
 
   wss.on("connection", (ws, req) => {
-    // Validate Origin — only allow localhost connections
     const origin = req.headers.origin || "";
     if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
       ws.close(4003, "Forbidden origin");
@@ -77,14 +84,13 @@ export function createOpenMagicServer(
 
       const state = clientStates.get(ws)!;
 
-      // Require handshake first
       if (!state.authenticated && msg.type !== "handshake") {
         sendError(ws, "auth_required", "Handshake required");
         return;
       }
 
       try {
-        await handleMessage(ws, msg, state, roots, proxyPort);
+        await handleMessage(ws, msg, state, roots);
       } catch (e: unknown) {
         sendError(ws, "internal_error", (e as Error).message, msg.id);
       }
@@ -95,15 +101,14 @@ export function createOpenMagicServer(
     });
   });
 
-  return { httpServer, wss };
+  return { wss, handleRequest };
 }
 
 async function handleMessage(
   ws: WebSocket,
   msg: WsMessage,
   state: ClientState,
-  roots: string[],
-  _proxyPort: number
+  roots: string[]
 ): Promise<void> {
   switch (msg.type) {
     case "handshake": {
@@ -124,12 +129,13 @@ async function handleMessage(
         id: msg.id,
         type: "handshake.ok",
         payload: {
-          version: "0.10.0",
+          version: VERSION,
           roots,
           config: {
             provider: config.provider,
             model: config.model,
             hasApiKey: !!config.apiKey,
+            apiKeys: config.apiKeys || {},
           },
         },
       });
@@ -157,12 +163,20 @@ async function handleMessage(
 
     case "fs.write": {
       const payload = msg.payload as FsWritePayload;
-      const result = writeFileSafe(payload.path, payload.content, roots);
-      send(ws, {
-        id: msg.id,
-        type: "fs.written",
-        payload: { path: payload.path, ok: result.ok, error: result.error },
-      });
+      if (!payload?.path || payload.content === undefined) {
+        sendError(ws, "invalid_payload", "Missing path or content", msg.id);
+        break;
+      }
+      const writeResult = writeFileSafe(payload.path, payload.content, roots);
+      if (!writeResult.ok) {
+        sendError(ws, "fs_error", writeResult.error || "Write failed", msg.id);
+      } else {
+        send(ws, {
+          id: msg.id,
+          type: "fs.written",
+          payload: { path: payload.path, ok: true },
+        });
+      }
       break;
     }
 
@@ -182,17 +196,21 @@ async function handleMessage(
       const payload = msg.payload as LlmChatPayload;
       const config = loadConfig();
 
-      const providerMeta = MODEL_REGISTRY?.[payload.provider || config.provider || ""];
-      if (!config.apiKey && !providerMeta?.local) {
+      // Resolve API key: per-provider keys first, then global fallback
+      const provider = payload.provider || config.provider || "openai";
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const providerMeta = MODEL_REGISTRY?.[provider];
+
+      if (!apiKey && !providerMeta?.local) {
         sendError(ws, "config_error", "API key not configured", msg.id);
         return;
       }
 
       await handleLlmChat(
         {
-          provider: payload.provider || config.provider || "openai",
+          provider,
           model: payload.model || config.model || "gpt-4o",
-          apiKey: config.apiKey,
+          apiKey,
           messages: payload.messages,
           context: payload.context,
         },
@@ -217,8 +235,11 @@ async function handleMessage(
         payload: {
           provider: config.provider,
           model: config.model,
-          hasApiKey: !!config.apiKey,
+          hasApiKey: !!(config.apiKeys?.[config.provider || ""] || config.apiKey),
           roots: config.roots || roots,
+          apiKeys: Object.fromEntries(
+            Object.entries(config.apiKeys || {}).map(([k]) => [k, true])
+          ),
         },
       });
       break;
@@ -229,8 +250,16 @@ async function handleMessage(
       const updates: Partial<OpenMagicConfig> = {};
       if (payload.provider !== undefined) updates.provider = payload.provider;
       if (payload.model !== undefined) updates.model = payload.model;
-      if (payload.apiKey !== undefined) updates.apiKey = payload.apiKey;
-      // roots are set by CLI only, not browser-configurable
+      // Per-provider key storage
+      if (payload.apiKey !== undefined && payload.provider) {
+        const existing = loadConfig();
+        const apiKeys = { ...(existing.apiKeys || {}) };
+        apiKeys[payload.provider] = payload.apiKey;
+        updates.apiKeys = apiKeys;
+        updates.apiKey = payload.apiKey; // backward compat
+      } else if (payload.apiKey !== undefined) {
+        updates.apiKey = payload.apiKey;
+      }
       saveConfig(updates);
       send(ws, {
         id: msg.id,
@@ -251,21 +280,11 @@ function send(ws: WebSocket, msg: WsMessage): void {
   }
 }
 
-function sendError(
-  ws: WebSocket,
-  code: string,
-  message: string,
-  id?: string
-): void {
-  send(ws, {
-    id: id || "error",
-    type: "error",
-    payload: { code, message },
-  });
+function sendError(ws: WebSocket, code: string, message: string, id?: string): void {
+  send(ws, { id: id || "error", type: "error", payload: { code, message } });
 }
 
 function serveToolbarBundle(res: http.ServerResponse): void {
-  // Try to serve the pre-built toolbar bundle
   const bundlePaths = [
     join(__dirname, "toolbar", "index.global.js"),
     join(__dirname, "..", "dist", "toolbar", "index.global.js"),
@@ -284,22 +303,13 @@ function serveToolbarBundle(res: http.ServerResponse): void {
         return;
       }
     } catch {
-      // Permission error or read failure — try next path
       continue;
     }
   }
 
-  // Fallback: serve a minimal placeholder that shows a "build required" message
   res.writeHead(200, {
     "Content-Type": "application/javascript",
     "Access-Control-Allow-Origin": "*",
   });
-  res.end(`
-    (function() {
-      var div = document.createElement("div");
-      div.style.cssText = "position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";
-      div.textContent = "OpenMagic: Toolbar bundle not found. Run 'npm run build:toolbar' first.";
-      document.body.appendChild(div);
-    })();
-  `);
+  res.end(`(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`);
 }

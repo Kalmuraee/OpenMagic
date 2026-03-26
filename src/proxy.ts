@@ -30,34 +30,50 @@ export function createProxyServer(
   proxy.on("proxyRes", (proxyRes, req, res) => {
     const contentType = proxyRes.headers["content-type"] || "";
     const isHtml = contentType.includes("text/html");
+    const status = proxyRes.statusCode || 200;
 
-    if (!isHtml) {
-      // Non-HTML: pass through unchanged
-      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+    if (!isHtml && status < 400) {
+      // Non-HTML success: pass through unchanged
+      res.writeHead(status, proxyRes.headers);
       proxyRes.pipe(res);
       return;
     }
 
-    // HTML: stream through and append toolbar script at the end
-    const headers = { ...proxyRes.headers };
-    delete headers["content-length"]; // Length will change
-    delete headers["content-encoding"]; // We stripped Accept-Encoding
-    delete headers["transfer-encoding"];
-    delete headers["content-security-policy"];
-    delete headers["content-security-policy-report-only"];
-    delete headers["x-content-security-policy"];
-    delete headers["etag"];
-    delete headers["last-modified"];
-    headers["cache-control"] = "no-store";
+    if (isHtml) {
+      // HTML response: stream through and append toolbar script
+      const headers = { ...proxyRes.headers };
+      delete headers["content-length"];
+      delete headers["content-encoding"];
+      delete headers["transfer-encoding"];
+      delete headers["content-security-policy"];
+      delete headers["content-security-policy-report-only"];
+      delete headers["x-content-security-policy"];
+      delete headers["etag"];
+      delete headers["last-modified"];
+      headers["cache-control"] = "no-store";
 
-    res.writeHead(proxyRes.statusCode || 200, headers);
+      res.writeHead(status, headers);
+      proxyRes.pipe(res, { end: false });
+      proxyRes.on("end", () => {
+        res.end(buildInjectionScript(token));
+      });
+      return;
+    }
 
-    // Stream the response body through
-    proxyRes.pipe(res, { end: false });
-
-    // When the upstream finishes, append the toolbar script
+    // Non-HTML error (4xx/5xx) — wrap in HTML with toolbar so user can still interact
+    const chunks: Buffer[] = [];
+    proxyRes.on("data", (c: Buffer) => chunks.push(c));
     proxyRes.on("end", () => {
-      res.end(buildInjectionScript(token));
+      const body = Buffer.concat(chunks).toString("utf-8").slice(0, 2000);
+      const toolbarScript = buildInjectionScript(token);
+      res.writeHead(status, { "Content-Type": "text/html", "Cache-Control": "no-store" });
+      res.end(`<html><head><meta charset="utf-8"><title>Error ${status}</title></head>
+<body style="font-family:system-ui;padding:40px;background:#0f0f1e;color:#e0e0e0;">
+<h2 style="color:#e94560;">Error ${status}</h2>
+<pre style="color:#888;white-space:pre-wrap;max-width:800px;overflow:auto;font-size:13px;">${body.replace(/</g,"&lt;")}</pre>
+<p style="color:#555;font-size:13px;">This error is from your dev server, not OpenMagic. The toolbar is available below.</p>
+${toolbarScript}
+</body></html>`);
     });
   });
 

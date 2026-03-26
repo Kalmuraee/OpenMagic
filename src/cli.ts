@@ -38,7 +38,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.14.0";
+const VERSION = "0.14.1";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -107,31 +107,21 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
   });
 }
 
-async function healthCheck(proxyPort: number, targetPort: number): Promise<void> {
+async function healthCheck(proxyPort: number, _targetPort: number): Promise<void> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
 
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/`, {
+    // Check OpenMagic's own health endpoint (not the app — app may require auth)
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/__openmagic__/health`, {
       signal: controller.signal,
-      headers: { Accept: "text/html" },
     });
     clearTimeout(timeout);
 
     if (res.ok) {
-      const text = await res.text();
-      if (text.includes("__OPENMAGIC_LOADED__")) {
-        console.log(chalk.green("  ✓  Toolbar injection verified."));
-      } else {
-        console.log(chalk.yellow("  ⚠  Page loaded but toolbar may not have injected (non-HTML response or CSP)."));
-      }
+      console.log(chalk.green("  ✓  Toolbar ready."));
     } else {
-      console.log(
-        chalk.yellow(`  ⚠  Dev server returned ${res.status}. Pages may have errors.`)
-      );
-      console.log(
-        chalk.dim("     The toolbar will still appear on pages that load successfully.")
-      );
+      console.log(chalk.yellow("  ⚠  Proxy started but toolbar health check failed."));
     }
   } catch {
     console.log(

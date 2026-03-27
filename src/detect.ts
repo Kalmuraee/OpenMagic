@@ -42,6 +42,7 @@ async function checkPort(port: number, host: string = "127.0.0.1"): Promise<bool
 export interface DetectedServer {
   port: number;
   host: string;
+  fromScripts?: boolean; // true if detected via package.json scripts
 }
 
 export async function detectDevServer(): Promise<DetectedServer | null> {
@@ -52,17 +53,14 @@ export async function detectDevServer(): Promise<DetectedServer | null> {
   if (scriptPorts.length > 0) {
     for (const port of scriptPorts) {
       if (await checkPort(port)) {
-        return { port, host: "localhost" };
+        return { port, host: "localhost", fromScripts: true };
       }
     }
-    // Project has dev scripts with known ports but none are running.
-    // Do NOT fall back to generic port scan — that would find unrelated
-    // services (like macOS AirPlay on 5000). Return null so the CLI
-    // offers to start the dev server instead.
+    // Scripts exist but none running — don't scan random ports
     return null;
   }
 
-  // No scripts found — fall back to scanning common ports
+  // No recognized scripts — scan common ports (but flag as unverified)
   const checks = COMMON_DEV_PORTS.map(async (port) => {
     const isOpen = await checkPort(port);
     return isOpen ? port : null;
@@ -72,7 +70,7 @@ export async function detectDevServer(): Promise<DetectedServer | null> {
   const foundPort = results.find((p) => p !== null);
 
   if (foundPort) {
-    return { port: foundPort, host: "127.0.0.1" };
+    return { port: foundPort, host: "localhost", fromScripts: false };
   }
 
   return null;
@@ -128,7 +126,7 @@ const FRAMEWORK_PATTERNS: Array<{
   { match: /\bphp\s+.*serve\b|artisan\s+serve/, framework: "PHP/Laravel", defaultPort: 8000 },
 ];
 
-const DEV_SCRIPT_NAMES = ["dev", "start", "serve", "develop", "dev:start", "start:dev"];
+const DEV_SCRIPT_NAMES = ["dev", "start", "serve", "develop", "dev:start", "start:dev", "server", "dev:server", "web", "frontend"];
 
 export function detectDevScripts(cwd: string = process.cwd()): DevScript[] {
   const pkgPath = join(cwd, "package.json");

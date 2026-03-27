@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.26.3";
+const VERSION = "0.27.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -267,7 +267,7 @@ program
     // Single server: proxy + toolbar + WebSocket all on one port
     const proxyServer = createProxyServer(targetHost, targetPort!, roots);
 
-    proxyServer.listen(proxyPort, "127.0.0.1", async () => {
+    proxyServer.listen(proxyPort, "localhost", async () => {
       const proxyUrl = `http://localhost:${proxyPort}`;
       console.log("");
       console.log(chalk.bold.green("  Ready!"));

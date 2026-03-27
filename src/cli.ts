@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.26.2";
+const VERSION = "0.26.3";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -576,14 +576,17 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   }
 
   if (!isUp) {
-    // Last resort: scan common ports to find what opened
-    const fallbackDetect = await detectDevServer();
-    if (fallbackDetect && fallbackDetect.port !== port) {
-      console.log(
-        chalk.green(`  ✓  Dev server found on port ${fallbackDetect.port}.`)
-      );
-      lastDetectedPort = fallbackDetect.port;
-      return true;
+    // Last resort: scan ALL common ports (bypass the script-based optimization)
+    // because the dev server might be on a custom port configured in the project
+    for (const scanPort of [3000, 3001, 5173, 5174, 4200, 8080, 8000, 4000, 1234, 4321, 3333, 8081]) {
+      if (scanPort === port) continue; // Already tried this one
+      if (await isPortOpen(scanPort)) {
+        console.log(
+          chalk.green(`  ✓  Dev server found on port ${scanPort}.`)
+        );
+        lastDetectedPort = scanPort;
+        return true;
+      }
     }
 
     console.log(

@@ -1,7 +1,8 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import open from "open";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 
@@ -39,7 +40,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.29.0";
+const VERSION = "0.29.1";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -583,11 +584,27 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   if (childExited && !isUp) {
     console.log(
-      chalk.red(`  ✗  Dev server exited before it was ready.`)
+      chalk.red(`  ✗  Dev server failed to start.`)
     );
-    console.log(
-      chalk.dim(`     Check the error output above and fix the issue.`)
-    );
+    console.log("");
+
+    // Check for Node.js version mismatch
+    try {
+      const pkgPath = join(process.cwd(), "package.json");
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+        if (pkg.engines?.node) {
+          console.log(chalk.yellow(`  This project requires Node.js ${pkg.engines.node}`));
+          console.log(chalk.dim(`  You are running Node.js ${process.version}`));
+          console.log("");
+        }
+      }
+    } catch {}
+
+    console.log(chalk.white("  Options:"));
+    console.log(chalk.dim("  1. Fix the error above and try again"));
+    console.log(chalk.dim("  2. Start the server manually, then run:"));
+    console.log(chalk.cyan("     npx openmagic --port <your-port>"));
     console.log("");
     return false;
   }

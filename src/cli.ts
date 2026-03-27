@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.26.1";
+const VERSION = "0.26.2";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -469,14 +469,30 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   // Watch stdout/stderr for the actual port the server starts on
   function parsePortFromOutput(line: string) {
-    // Strip ANSI escape codes first (dev servers colorize their output)
-    const clean = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\u001b\[[0-9;]*m/g, "");
-    // Match common patterns: "http://localhost:3000", "Local: http://localhost:3000/"
+    // Strip ALL escape sequences and control characters (ANSI SGR, OSC, hyperlinks, etc.)
+    const clean = line
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")  // OSC sequences (hyperlinks, titles)
+      .replace(/\x1b[^a-zA-Z]*[a-zA-Z]/g, "")               // CSI/SGR sequences
+      .replace(/[\x00-\x1f\x7f]/g, "");                      // remaining control chars
+
+    // Match: "http://localhost:3000", "https://127.0.0.1:8080", etc.
     const portMatch = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
     if (portMatch && !detectedPort) {
       const p = parseInt(portMatch[1], 10);
       if (p > 0 && p < 65536 && p !== port) {
         detectedPort = p;
+        return;
+      }
+    }
+
+    // Fallback: look for "port XXXX" or ":XXXX" patterns in clean text
+    if (!detectedPort) {
+      const fallback = clean.match(/(?:port|Port|PORT)\s+(\d{4,5})/);
+      if (fallback) {
+        const p = parseInt(fallback[1], 10);
+        if (p > 0 && p < 65536 && p !== port) {
+          detectedPort = p;
+        }
       }
     }
   }
@@ -560,6 +576,16 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   }
 
   if (!isUp) {
+    // Last resort: scan common ports to find what opened
+    const fallbackDetect = await detectDevServer();
+    if (fallbackDetect && fallbackDetect.port !== port) {
+      console.log(
+        chalk.green(`  ✓  Dev server found on port ${fallbackDetect.port}.`)
+      );
+      lastDetectedPort = fallbackDetect.port;
+      return true;
+    }
+
     console.log(
       chalk.yellow(`  ⚠  Port ${port} didn't open after 30s.`)
     );

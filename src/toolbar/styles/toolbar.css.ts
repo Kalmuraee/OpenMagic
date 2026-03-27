@@ -322,6 +322,14 @@ export const TOOLBAR_CSS = `
 .om-diff-applied { opacity: 0.5; }
 .om-diff-applied .om-diff-actions { display: none; }
 
+.om-diff-group-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; margin: 4px 0;
+  background: rgba(108, 92, 231, 0.06);
+  border: 1px solid rgba(108, 92, 231, 0.12);
+  border-radius: 8px; font-size: 12px; color: #a29bfe;
+}
+
 /* ── Undo Button ─────────────────────────────────────── */
 .om-undo-btn {
   background: none; border: 1px solid rgba(255,255,255,0.08);

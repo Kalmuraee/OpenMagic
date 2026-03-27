@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.29.1";
+const CURRENT_VERSION = "0.29.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -602,6 +602,28 @@ function handleAction(action: string, target: HTMLElement) {
     }
     case "apply-diff": applyDiff(target); break;
     case "reject-diff": rejectDiff(target); break;
+    case "apply-all": {
+      const gid = target.dataset.group;
+      if (gid) {
+        const buttons = shadow.querySelectorAll(`[data-action="apply-diff"]`);
+        for (const btn of Array.from(buttons)) {
+          // Check if this diff belongs to the same group by checking nearby diff card
+          const card = btn.closest(".om-diff-card") as HTMLElement;
+          if (card) applyDiff(btn as HTMLElement);
+        }
+      }
+      break;
+    }
+    case "reject-all": {
+      const gid = target.dataset.group;
+      if (gid) {
+        const buttons = shadow.querySelectorAll(`[data-action="reject-diff"]`);
+        for (const btn of Array.from(buttons)) {
+          rejectDiff(btn as HTMLElement);
+        }
+      }
+      break;
+    }
     case "undo-diff": undoDiff(target); break;
     case "clear-chat": {
       state.messages = [];
@@ -806,6 +828,19 @@ function renderChatHTML(): string {
   }
 
   const msgs = state.messages.map((m, i) => {
+    // Diff group header: Apply All / Reject All
+    if (m.content.startsWith("__DIFFGROUP__")) {
+      const parts = m.content.split("__");
+      const gid = parts[2];
+      const count = parts[3];
+      return `<div class="om-diff-group-header">
+        <span>${count} file changes</span>
+        <div class="om-diff-actions">
+          <button class="om-btn om-btn-sm" data-action="apply-all" data-group="${gid}">Apply All</button>
+          <button class="om-btn-secondary om-btn-sm" data-action="reject-all" data-group="${gid}">Reject All</button>
+        </div>
+      </div>`;
+    }
     if (m.content.startsWith("__DIFF__")) {
       try {
         const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
@@ -1244,17 +1279,31 @@ async function sendPrompt() {
       state.messages.push({ role: "assistant", content: displayContent });
 
       if (result?.modifications?.length) {
+        const groupId = Math.random().toString(36).slice(2);
+        const validMods = result.modifications.filter((m: any) =>
+          (m.type === "edit" && m.file && m.search && m.replace) ||
+          (m.type === "create" && m.file && m.content)
+        );
+
+        // Show Apply All / Reject All for multi-file changes
+        if (validMods.length > 1) {
+          state.messages.push({
+            role: "system",
+            content: `__DIFFGROUP__${groupId}__${validMods.length}`,
+          });
+        }
+
         for (const mod of result.modifications) {
           if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
             const diffId = Math.random().toString(36).slice(2);
-            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace });
+            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace, groupId });
             state.messages.push({
               role: "system",
               content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
             });
           } else if (mod.type === "create" && mod.file && (mod as any).content) {
             const diffId = Math.random().toString(36).slice(2);
-            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: "", replace: (mod as any).content, type: "create" });
+            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: "", replace: (mod as any).content, type: "create", groupId });
             state.messages.push({
               role: "system",
               content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,

@@ -38,7 +38,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.22.0";
+const VERSION = "0.23.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });

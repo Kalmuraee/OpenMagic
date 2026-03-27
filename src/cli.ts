@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.27.0";
+const VERSION = "0.27.1";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -177,7 +177,7 @@ program
     "Project root directories (defaults to cwd)"
   )
   .option("--no-open", "Don't auto-open browser")
-  .option("--host <host>", "Dev server host", "127.0.0.1")
+  .option("--host <host>", "Dev server host", "localhost")
   .action(async (opts) => {
     console.log("");
     console.log(

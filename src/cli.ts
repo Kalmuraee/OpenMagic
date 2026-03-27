@@ -38,7 +38,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.25.1";
+const VERSION = "0.25.2";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -178,16 +178,22 @@ program
   .option("--no-open", "Don't auto-open browser")
   .option("--host <host>", "Dev server host", "127.0.0.1")
   .action(async (opts) => {
-    // ASCII sparkle logo + branded banner
+    // ASCII ✨ sparkle logo + branded banner
+    const p = chalk.hex("#6c5ce7");  // primary purple
+    const s = chalk.hex("#a29bfe");  // soft purple
+    const d = chalk.hex("#c4b5fd");  // dim purple
+    const g = chalk.hex("#fdcb6e");  // gold sparkle
     console.log("");
-    console.log(chalk.hex("#a29bfe")("       .  *  ."));
-    console.log(chalk.hex("#a29bfe")("    *  .    .  *"));
-    console.log(chalk.hex("#c4b5fd")("   .  *  " + chalk.bold.hex("#6c5ce7")("✦") + "  *  ."));
-    console.log(chalk.hex("#a29bfe")("    *  .    .  *"));
-    console.log(chalk.hex("#a29bfe")("       .  *  ."));
+    console.log(s("         .          ") + d("."));
+    console.log(s("          \\   ") + g("*") + s("   /"));
+    console.log(s("           ") + d(". | ."));
+    console.log(s("      ") + g("* ") + d("--") + chalk.bold(g(" + ")) + d("--") + g(" *"));
+    console.log(s("           ") + d(". | ."));
+    console.log(s("          /   ") + g("*") + s("   \\"));
+    console.log(s("         .          ") + d("."));
     console.log("");
     console.log(
-      chalk.bold.hex("#6c5ce7")("   O P E N M A G I C") + chalk.dim(` v${VERSION}`)
+      p.bold("   O P E N M A G I C") + chalk.dim(` v${VERSION}`)
     );
     console.log(chalk.dim("   AI coding toolbar for any web app"));
     console.log("");

@@ -84,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.18.0";
+const CURRENT_VERSION = "0.19.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -845,22 +845,69 @@ async function sendPrompt() {
       return { ...f, score };
     }).sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 
-    // Read top scored files
+    // Read top scored files + their co-located stylesheets
     const files: Array<{ path: string; content: string }> = [];
+    const readPaths = new Set<string>();
     let totalChars = 0;
+
     for (const f of scored.slice(0, MAX_GROUNDED_FILES)) {
-      if (f.score <= 0) break; // Only read files with positive relevance
+      if (f.score <= 0) break;
       if (totalChars >= MAX_GROUNDED_CHARS) break;
       try {
         const root = state.roots[0] || "";
-        const result = await ws.request("fs.read", { path: root ? `${root}/${f.path}` : f.path });
+        const fullPath = root ? `${root}/${f.path}` : f.path;
+        const result = await ws.request("fs.read", { path: fullPath });
         const content = String(result?.payload?.content || "");
         if (!content) continue;
         const trimmed = content.slice(0, Math.min(8000, MAX_GROUNDED_CHARS - totalChars));
         files.push({ path: f.path, content: trimmed });
+        readPaths.add(f.path);
         totalChars += trimmed.length;
+
+        // Auto-read co-located stylesheet (Component.module.css, Component.scss, etc.)
+        const baseName = f.path.replace(/\.[^.]+$/, "");
+        const styleExts = [".module.css", ".module.scss", ".css", ".scss", ".styles.ts"];
+        for (const ext of styleExts) {
+          const stylePath = baseName + ext;
+          if (readPaths.has(stylePath) || totalChars >= MAX_GROUNDED_CHARS) continue;
+          const match = textFiles.find((tf: { path: string }) => tf.path === stylePath);
+          if (match) {
+            try {
+              const sr = await ws.request("fs.read", { path: root ? `${root}/${stylePath}` : stylePath });
+              const sc = String(sr?.payload?.content || "");
+              if (sc) {
+                const st = sc.slice(0, Math.min(4000, MAX_GROUNDED_CHARS - totalChars));
+                files.push({ path: stylePath, content: st });
+                readPaths.add(stylePath);
+                totalChars += st.length;
+              }
+            } catch {}
+            break; // Only read the first matching style file
+          }
+        }
       } catch { /* skip unreadable files */ }
     }
+
+    // Also read package.json for dependency/framework awareness
+    if (totalChars < MAX_GROUNDED_CHARS) {
+      try {
+        const root = state.roots[0] || "";
+        const pkgResult = await ws.request("fs.read", { path: root ? `${root}/package.json` : "package.json" });
+        const pkgContent = String(pkgResult?.payload?.content || "");
+        if (pkgContent) {
+          // Extract just dependencies section (not the full package.json)
+          try {
+            const pkg = JSON.parse(pkgContent);
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+            const depsStr = JSON.stringify(deps, null, 2);
+            files.push({ path: "package.json (dependencies)", content: depsStr.slice(0, 2000) });
+          } catch {
+            files.push({ path: "package.json", content: pkgContent.slice(0, 2000) });
+          }
+        }
+      } catch {}
+    }
+
     if (files.length) context.files = files;
   } catch { /* grounding is best-effort */ }
 

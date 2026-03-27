@@ -42,19 +42,48 @@ You MUST respond with valid JSON in this exact format:
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
 
-  // Send FULL element context — not just outerHTML
+  // Send FULL element context with all available signals
   if (context.selectedElement) {
-    const el = context.selectedElement;
-    parts.selectedElement = JSON.stringify({
+    const el = context.selectedElement as any;
+    const elementData: Record<string, unknown> = {
       cssSelector: el.cssSelector,
       tagName: el.tagName,
       id: el.id,
       className: el.className,
       outerHTML: el.outerHTML,
       computedStyles: el.computedStyles,
-      ancestry: (el as any).ancestry,
-      componentHint: (el as any).componentHint,
-    }, null, 2);
+      ancestry: el.ancestry,
+      componentHint: el.componentHint,
+    };
+    // Parent container styles (layout context)
+    if (el.parentStyles && Object.keys(el.parentStyles).length) {
+      elementData.parentContainerStyles = el.parentStyles;
+    }
+    // Sibling elements (what else is in the same container)
+    if (el.siblings?.length) {
+      elementData.siblings = el.siblings;
+    }
+    // Matched CSS rules from stylesheets
+    if (el.matchedCssRules?.length) {
+      elementData.matchedCssRules = el.matchedCssRules;
+    }
+    // Viewport dimensions
+    if (el.viewport) {
+      elementData.viewport = el.viewport;
+    }
+    // Accessibility attributes
+    if (el.ariaAttributes && Object.keys(el.ariaAttributes).length) {
+      elementData.ariaAttributes = el.ariaAttributes;
+    }
+    // Event handlers
+    if (el.eventHandlers?.length) {
+      elementData.eventHandlers = el.eventHandlers;
+    }
+    // React props
+    if (el.reactProps) {
+      elementData.reactProps = el.reactProps;
+    }
+    parts.selectedElement = JSON.stringify(elementData, null, 2);
   }
 
   if (context.files?.length) {

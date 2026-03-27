@@ -84,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.19.0";
+const CURRENT_VERSION = "0.20.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -911,40 +911,83 @@ async function sendPrompt() {
     if (files.length) context.files = files;
   } catch { /* grounding is best-effort */ }
 
+  // Auto-retry loop: if LLM says "NEED_FILE: path", read it and retry (up to 2 retries)
+  const MAX_RETRIES = 2;
+  let retryCount = 0;
+
   try {
-    const result = await ws.stream(
-      "llm.chat",
-      {
-        provider: state.provider,
-        model: state.model,
-        messages: state.messages.map(m => ({ role: m.role, content: m.content })),
-        context,
-      },
-      (chunk: string) => {
-        state.streamContent += chunk;
-        // Update the streaming message in-place
-        const msgEl = $panelBody.querySelector(".om-msg-assistant:last-child");
-        if (msgEl) {
-          msgEl.innerHTML = `<span class="om-spinner"></span>${escapeHtml(state.streamContent)}`;
-          scrollChatToBottom();
+    while (retryCount <= MAX_RETRIES) {
+      state.streamContent = "";
+
+      const result = await ws.stream(
+        "llm.chat",
+        {
+          provider: state.provider,
+          model: state.model,
+          messages: state.messages.map(m => ({ role: m.role, content: m.content })),
+          context,
+        },
+        (chunk: string) => {
+          state.streamContent += chunk;
+          const msgEl = $panelBody.querySelector(".om-msg-assistant:last-child");
+          if (msgEl) {
+            msgEl.innerHTML = `<span class="om-spinner"></span>${escapeHtml(state.streamContent)}`;
+            scrollChatToBottom();
+          }
+        }
+      );
+
+      const responseContent = state.streamContent || result?.content || "";
+
+      // Check if LLM is requesting a file (NEED_FILE pattern)
+      const needFileMatch = responseContent.match(/NEED_FILE:\s*([^\s"}\]]+)/);
+      if (needFileMatch && !result?.modifications?.length && retryCount < MAX_RETRIES) {
+        const neededFile = needFileMatch[1].trim();
+        retryCount++;
+
+        // Update status
+        state.messages.push({ role: "system", content: `Reading ${neededFile}...` });
+        refreshPanelContent();
+
+        // Read the requested file and add to context
+        try {
+          const root = state.roots[0] || "";
+          const filePath = root ? `${root}/${neededFile}` : neededFile;
+          const fileResult = await ws.request("fs.read", { path: filePath });
+          const content = String(fileResult?.payload?.content || "");
+          if (content) {
+            if (!context.files) context.files = [];
+            context.files.push({ path: neededFile, content: content.slice(0, 8000) });
+            // Add as assistant message so context carries forward
+            state.messages.push({ role: "assistant", content: responseContent });
+            state.messages.push({ role: "user", content: `Here is ${neededFile}. Now please make the edit.` });
+          } else {
+            state.messages.push({ role: "system", content: `Could not read ${neededFile}` });
+            break;
+          }
+        } catch {
+          state.messages.push({ role: "system", content: `File not found: ${neededFile}` });
+          break;
+        }
+        continue; // Retry with the new file context
+      }
+
+      // Got a real response — process it
+      state.messages.push({ role: "assistant", content: responseContent });
+
+      if (result?.modifications?.length) {
+        for (const mod of result.modifications) {
+          if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
+            const diffId = Math.random().toString(36).slice(2);
+            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace });
+            state.messages.push({
+              role: "system",
+              content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
+            });
+          }
         }
       }
-    );
-
-    state.messages.push({ role: "assistant", content: state.streamContent || result?.content || "" });
-
-    // Show diff previews for approval instead of auto-applying
-    if (result?.modifications?.length) {
-      for (const mod of result.modifications) {
-        if (mod.type === "edit" && mod.file && mod.search && mod.replace) {
-          const diffId = Math.random().toString(36).slice(2);
-          const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace });
-          state.messages.push({
-            role: "system",
-            content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
-          });
-        }
-      }
+      break; // Done — no more retries needed
     }
   } catch (e: any) {
     state.messages.push({ role: "system", content: `Error: ${e.message}` });

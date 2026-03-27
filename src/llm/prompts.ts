@@ -32,12 +32,13 @@ You MUST respond with valid JSON in this exact format:
 ## Rules
 1. The \`search\` field must contain the EXACT text from the source file — copy it precisely, including whitespace and indentation
 2. Keep modifications minimal — change only what's needed
-3. If you need to read a file first, say so in the explanation and the developer can provide it
-4. For style changes, prefer modifying existing CSS/Tailwind classes over adding inline styles
+3. If the grounded files don't contain the element you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: path/to/file.tsx"} — the system will automatically read it and retry
+4. For style changes, prefer modifying existing CSS/Tailwind classes over adding inline styles. Check the dependencies to know if the project uses Tailwind, MUI, etc.
 5. Always preserve the existing code style and conventions
 6. If the change involves multiple files, include all modifications in the array
 7. ALWAYS respond with the JSON format above, even for explanations (put them in the "explanation" field)
-8. If you cannot make the requested change, set modifications to an empty array and explain why`;
+8. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the layout context before making changes
+9. Use the page URL and componentHint to identify the correct source file`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};

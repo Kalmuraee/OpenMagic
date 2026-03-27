@@ -320,4 +320,20 @@ export const TOOLBAR_CSS = `
 .om-btn-secondary:hover { background: rgba(255,255,255,0.08); color: #ccc; }
 .om-diff-applied { opacity: 0.5; }
 .om-diff-applied .om-diff-actions { display: none; }
+
+/* ── Undo Button ─────────────────────────────────────── */
+.om-undo-btn {
+  background: none; border: 1px solid rgba(255,255,255,0.08);
+  color: #888; cursor: pointer; padding: 2px 6px; margin-left: 6px;
+  border-radius: 4px; font-size: 10px; font-family: inherit;
+}
+.om-undo-btn:hover { color: #e94560; border-color: rgba(233,69,96,0.2); }
+
+/* ── Clear Chat Button ───────────────────────────────── */
+.om-panel-clear {
+  background: none; border: none; color: #444; cursor: pointer;
+  padding: 2px 4px; border-radius: 4px; line-height: 1;
+  display: flex; align-items: center; margin-right: 4px;
+}
+.om-panel-clear:hover { color: #e94560; background: rgba(233,69,96,0.08); }
 `;

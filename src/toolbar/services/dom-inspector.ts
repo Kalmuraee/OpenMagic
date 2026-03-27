@@ -68,18 +68,25 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     }
   }
 
-  // Sibling elements (layout context — what else is in the same container)
+  // Sibling elements (layout context — ±3 siblings around the selected element)
   const siblings: string[] = [];
   if (el.parentElement) {
     const children = Array.from(el.parentElement.children);
-    for (const sib of children.slice(0, 8)) {
+    const selectedIdx = children.indexOf(el);
+    const start = Math.max(0, selectedIdx - 3);
+    const end = Math.min(children.length, selectedIdx + 4);
+    if (start > 0) siblings.push(`... ${start} elements before ...`);
+    for (let i = start; i < end; i++) {
+      const sib = children[i];
+      const tag = sib.tagName.toLowerCase();
+      const cls = (sib.className || "").toString().slice(0, 60);
       if (sib === el) {
-        siblings.push(`[SELECTED] <${sib.tagName.toLowerCase()} class="${(sib.className || "").toString().slice(0, 60)}">`);
+        siblings.push(`[SELECTED] <${tag} class="${cls}">`);
       } else {
-        siblings.push(`<${sib.tagName.toLowerCase()} class="${(sib.className || "").toString().slice(0, 60)}">`);
+        siblings.push(`<${tag} class="${cls}">`);
       }
     }
-    if (children.length > 8) siblings.push(`... +${children.length - 8} more`);
+    if (end < children.length) siblings.push(`... ${children.length - end} elements after ...`);
   }
 
   // Matched CSS rules from stylesheets

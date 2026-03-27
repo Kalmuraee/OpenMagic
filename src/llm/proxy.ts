@@ -27,6 +27,40 @@ interface LlmChatParams {
   context: LlmContext;
 }
 
+function extractJsonFromResponse(content: string): string | null {
+  // Try markdown-wrapped JSON first (most common)
+  const mdMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (mdMatch?.[1]) {
+    const candidate = mdMatch[1].trim();
+    try { JSON.parse(candidate); return candidate; } catch {}
+  }
+
+  // Brace-counting extraction (handles raw JSON in response)
+  const start = content.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < content.length; i++) {
+    const ch = content[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const candidate = content.substring(start, i + 1);
+        try { JSON.parse(candidate); return candidate; } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
 export async function handleLlmChat(
   params: LlmChatParams,
   onChunk: (chunk: string) => void,
@@ -36,22 +70,16 @@ export async function handleLlmChat(
   const { provider, model, apiKey, messages, context } = params;
 
   const wrappedOnDone = (result: { content: string }) => {
-    // Try to parse modifications from the response
     let modifications: LlmResponse["modifications"] | undefined;
     try {
-      // Extract JSON from the response (it might be wrapped in markdown code blocks)
-      const jsonMatch = result.content.match(/```json\s*([\s\S]*?)```/) ||
-        result.content.match(/\{[\s\S]*"modifications"[\s\S]*\}/);
-
-      if (jsonMatch) {
-        const jsonStr = jsonMatch[1] || jsonMatch[0];
-        const parsed = JSON.parse(jsonStr) as LlmResponse;
+      const json = extractJsonFromResponse(result.content);
+      if (json) {
+        const parsed = JSON.parse(json) as LlmResponse;
         modifications = parsed.modifications;
       }
     } catch {
-      // If parsing fails, just return the raw content
+      // JSON parse failed — return raw content
     }
-
     onDone({ content: result.content, modifications });
   };
 

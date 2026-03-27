@@ -30,15 +30,16 @@ You MUST respond with valid JSON in this exact format:
 - \`delete\`: Delete a file. No search/replace/content needed.
 
 ## Rules
-1. The \`search\` field must contain the EXACT text from the source file — copy it precisely, including whitespace and indentation
-2. Keep modifications minimal — change only what's needed
-3. If the grounded files don't contain the element you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: path/to/file.tsx"} — the system will automatically read it and retry
-4. For style changes, prefer modifying existing CSS/Tailwind classes over adding inline styles. Check the dependencies to know if the project uses Tailwind, MUI, etc.
-5. Always preserve the existing code style and conventions
-6. If the change involves multiple files, include all modifications in the array
-7. ALWAYS respond with the JSON format above, even for explanations (put them in the "explanation" field)
-8. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the layout context before making changes
-9. Use the page URL and componentHint to identify the correct source file`;
+1. Copy the search string EXACTLY from the grounded source files — do not retype, reformat, or change whitespace/indentation
+2. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
+3. Keep modifications minimal — change only what's needed
+4. If the grounded files don't contain the code you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: exact/relative/path/to/file.ext"}
+5. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
+6. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
+7. Use the page URL route and componentHint to identify the correct source file to modify
+8. Always preserve existing code style, conventions, and indentation
+9. If the change involves multiple files, include all modifications in the array
+10. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};

@@ -84,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.20.0";
+const CURRENT_VERSION = "0.21.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -355,6 +355,52 @@ function resolveFilePath(rel: string): string {
   return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
 }
 
+function fuzzyLineMatch(content: string, search: string): { start: number; end: number } | null {
+  // Normalize both to trimmed lines for comparison
+  const searchLines = search.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (searchLines.length === 0) return null;
+
+  const contentLines = content.split('\n');
+  const firstSearchLine = searchLines[0];
+  const lastSearchLine = searchLines[searchLines.length - 1];
+
+  // Find candidate positions where first search line matches (trimmed)
+  for (let i = 0; i < contentLines.length; i++) {
+    if (contentLines[i].trim() !== firstSearchLine) continue;
+
+    // Check if remaining search lines match contiguously
+    if (i + searchLines.length > contentLines.length) continue;
+
+    let allMatch = true;
+    for (let j = 0; j < searchLines.length; j++) {
+      if (contentLines[i + j].trim() !== searchLines[j]) {
+        allMatch = false;
+        break;
+      }
+    }
+
+    if (allMatch) {
+      // Calculate byte offsets for the matched range
+      let startOffset = 0;
+      for (let k = 0; k < i; k++) {
+        startOffset += contentLines[k].length + 1; // +1 for \n
+      }
+      let endOffset = startOffset;
+      for (let k = i; k < i + searchLines.length; k++) {
+        endOffset += contentLines[k].length + 1;
+      }
+      // Remove trailing \n from end offset if it's the last line
+      if (endOffset > 0 && endOffset <= content.length && content[endOffset - 1] === '\n') {
+        endOffset--;
+      }
+      return { start: startOffset, end: endOffset };
+    }
+  }
+
+  // No fuzzy match found
+  return null;
+}
+
 async function applyDiff(target: HTMLElement) {
   const file = target.dataset.file;
   const searchB64 = target.dataset.search;
@@ -387,12 +433,11 @@ async function applyDiff(target: HTMLElement) {
     if (!content) {
       state.messages.push({ role: "system", content: `Could not read ${file} — file may not exist at ${filePath}` });
     } else {
-      const occurrences = content.split(search).length - 1;
-      if (occurrences === 0) {
-        state.messages.push({ role: "system", content: `No matching code found in ${file}. The file may have changed since the suggestion was made.` });
-      } else if (occurrences > 1) {
-        state.messages.push({ role: "system", content: `Found ${occurrences} matches in ${file} — expected exactly 1. Edit not applied for safety.` });
-      } else {
+      // Try exact match first
+      const exactCount = content.split(search).length - 1;
+
+      if (exactCount === 1) {
+        // Exact match — apply directly
         const writeResult = await ws.request("fs.write", { path: filePath, content: content.replace(search, replace) });
         if (writeResult?.payload?.ok === false) {
           state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
@@ -403,6 +448,27 @@ async function applyDiff(target: HTMLElement) {
           } else {
             state.messages.push({ role: "system", content: `Applied change to ${file}` });
           }
+        }
+      } else if (exactCount > 1) {
+        state.messages.push({ role: "system", content: `Found ${exactCount} exact matches in ${file} — expected 1. Edit not applied.` });
+      } else {
+        // No exact match — try fuzzy line-based matching
+        const fuzzyResult = fuzzyLineMatch(content, search);
+        if (fuzzyResult) {
+          const newContent = content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
+          const writeResult = await ws.request("fs.write", { path: filePath, content: newContent });
+          if (writeResult?.payload?.ok === false) {
+            state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
+          } else {
+            const idx = card?.dataset.diffIdx;
+            if (idx !== undefined) {
+              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match — whitespace adjusted)` };
+            } else {
+              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match)` });
+            }
+          }
+        } else {
+          state.messages.push({ role: "system", content: `No matching code found in ${file}. The file may have changed since the suggestion.` });
         }
       }
     }
@@ -859,7 +925,11 @@ async function sendPrompt() {
         const result = await ws.request("fs.read", { path: fullPath });
         const content = String(result?.payload?.content || "");
         if (!content) continue;
-        const trimmed = content.slice(0, Math.min(8000, MAX_GROUNDED_CHARS - totalChars));
+        const maxChars = Math.min(8000, MAX_GROUNDED_CHARS - totalChars);
+        let trimmed = content.slice(0, maxChars);
+        if (content.length > maxChars) {
+          trimmed += `\n// [FILE TRUNCATED — showing ${maxChars} of ${content.length} chars]`;
+        }
         files.push({ path: f.path, content: trimmed });
         readPaths.add(f.path);
         totalChars += trimmed.length;
@@ -876,7 +946,11 @@ async function sendPrompt() {
               const sr = await ws.request("fs.read", { path: root ? `${root}/${stylePath}` : stylePath });
               const sc = String(sr?.payload?.content || "");
               if (sc) {
-                const st = sc.slice(0, Math.min(4000, MAX_GROUNDED_CHARS - totalChars));
+                const stMax = Math.min(4000, MAX_GROUNDED_CHARS - totalChars);
+                let st = sc.slice(0, stMax);
+                if (sc.length > stMax) {
+                  st += `\n// [FILE TRUNCATED — showing ${stMax} of ${sc.length} chars]`;
+                }
                 files.push({ path: stylePath, content: st });
                 readPaths.add(stylePath);
                 totalChars += st.length;
@@ -940,7 +1014,10 @@ async function sendPrompt() {
       const responseContent = state.streamContent || result?.content || "";
 
       // Check if LLM is requesting a file (NEED_FILE pattern)
-      const needFileMatch = responseContent.match(/NEED_FILE:\s*([^\s"}\]]+)/);
+      // Try multiple patterns to detect file requests from LLM
+      const needFileMatch = responseContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
+        || responseContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
+        || responseContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i);
       if (needFileMatch && !result?.modifications?.length && retryCount < MAX_RETRIES) {
         const neededFile = needFileMatch[1].trim();
         retryCount++;

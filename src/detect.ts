@@ -20,22 +20,23 @@ const COMMON_DEV_PORTS = [
   5000, // Flask (last — macOS AirPlay also uses 5000)
 ];
 
-function checkPort(port: number, host: string = "127.0.0.1"): Promise<boolean> {
+function checkPortSingle(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection({ port, host, timeout: 500 });
-    socket.on("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.on("error", () => {
-      socket.destroy();
-      resolve(false);
-    });
-    socket.on("timeout", () => {
-      socket.destroy();
-      resolve(false);
-    });
+    socket.on("connect", () => { socket.destroy(); resolve(true); });
+    socket.on("error", () => { socket.destroy(); resolve(false); });
+    socket.on("timeout", () => { socket.destroy(); resolve(false); });
   });
+}
+
+// Check both IPv4 and IPv6 — many dev servers (Vite, Node) listen on ::1 only
+async function checkPort(port: number, host: string = "127.0.0.1"): Promise<boolean> {
+  const results = await Promise.all([
+    checkPortSingle(port, host),
+    checkPortSingle(port, "::1"),
+    checkPortSingle(port, "localhost"),
+  ]);
+  return results.some(Boolean);
 }
 
 export interface DetectedServer {
@@ -51,7 +52,7 @@ export async function detectDevServer(): Promise<DetectedServer | null> {
   if (scriptPorts.length > 0) {
     for (const port of scriptPorts) {
       if (await checkPort(port)) {
-        return { port, host: "127.0.0.1" };
+        return { port, host: "localhost" };
       }
     }
     // Project has dev scripts with known ports but none are running.

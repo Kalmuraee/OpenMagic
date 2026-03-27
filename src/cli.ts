@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.26.0";
+const VERSION = "0.26.1";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -469,8 +469,10 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   // Watch stdout/stderr for the actual port the server starts on
   function parsePortFromOutput(line: string) {
+    // Strip ANSI escape codes first (dev servers colorize their output)
+    const clean = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\u001b\[[0-9;]*m/g, "");
     // Match common patterns: "http://localhost:3000", "Local: http://localhost:3000/"
-    const portMatch = line.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
+    const portMatch = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
     if (portMatch && !detectedPort) {
       const p = parseInt(portMatch[1], 10);
       if (p > 0 && p < 65536 && p !== port) {

@@ -38,7 +38,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.25.3";
+const VERSION = "0.25.4";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -178,35 +178,11 @@ program
   .option("--no-open", "Don't auto-open browser")
   .option("--host <host>", "Dev server host", "127.0.0.1")
   .action(async (opts) => {
-    // ASCII ✨ sparkle logo (Apple style: 2 small stars left + 1 large star right)
-    const g = chalk.hex("#fdcb6e");  // gold
-    const p = chalk.hex("#a29bfe");  // purple
-    const b = chalk.bold.hex("#6c5ce7"); // bold purple
     console.log("");
-    console.log(p("                                    ."));
-    console.log(p("                                    |"));
-    console.log(p("         .                         ") + g("/") + p("|") + g("\\"));
-    console.log(g("        /|\\                      /") + p(" | ") + g("\\"));
-    console.log(p("         |                     ") + g("/") + p("  |  ") + g("\\"));
-    console.log(p("         .                ") + p(".") + g("--") + p("'   |   '") + g("--") + p("."));
-    console.log(p("                           ") + g("--") + p("     ") + b("|||") + p("     ") + g("--"));
-    console.log(p("              .        .") + g("--") + p("'       ") + b("|||") + p("       '") + g("--") + p("."));
-    console.log(g("             /|\\") + p("      ") + g("--") + p("          ") + b("|||") + p("          ") + g("--"));
-    console.log(p("              |   ") + g("--") + p("             ") + b("|||") + p("             ") + g("--"));
-    console.log(p("  . . .") + g("--------") + p("               ") + b("|||||") + p("               ") + g("--------") + p(". . ."));
-    console.log(p("              |   ") + g("--") + p("             ") + b("|||") + p("             ") + g("--"));
-    console.log(g("             \\|/") + p("      ") + g("--") + p("          ") + b("|||") + p("          ") + g("--"));
-    console.log(p("              .        .") + g("--") + p(".       ") + b("|||") + p("       .") + g("--") + p("."));
-    console.log(p("                           ") + g("--") + p("     ") + b("|||") + p("     ") + g("--"));
-    console.log(p("         .                .") + g("--") + p(".   |   .") + g("--") + p("."));
-    console.log(g("        \\|/") + p("                     ") + g("\\") + p("  |  ") + g("/"));
-    console.log(p("         |                      ") + g("\\") + p(" | ") + g("/"));
-    console.log(p("         .                       ") + g("\\") + p("|") + g("/"));
-    console.log(p("                                    |"));
-    console.log(p("                                    ."));
-    console.log("");
-    console.log(b("          O P E N M A G I C") + chalk.dim(` v${VERSION}`));
-    console.log(chalk.dim("          AI coding toolbar for any web app"));
+    console.log(
+      "  🪄 " + chalk.bold.hex("#6c5ce7")("OpenMagic") + chalk.dim(` v${VERSION}`) + " ✨"
+    );
+    console.log(chalk.dim("  AI coding toolbar for any web app"));
     console.log("");
 
     let targetPort: number;

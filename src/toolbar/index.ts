@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.4";
+const CURRENT_VERSION = "0.28.5";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1309,9 +1309,25 @@ function captureNetworkProfile() {
   const fcp = paintEntries.find(e => e.name === "first-contentful-paint");
   if (fcp) lines.push(`FCP: ${Math.round(fcp.startTime)}ms`);
 
+  // ALL network requests from Performance API (includes page-load requests)
+  if (resources.length) {
+    const apiRequests = resources.filter(r =>
+      r.initiatorType === "fetch" || r.initiatorType === "xmlhttprequest"
+    );
+    const allRequests = apiRequests.length > 0 ? apiRequests : resources;
+
+    lines.push(`\nAll network requests (${allRequests.length}):`);
+    for (const r of allRequests.slice(-30)) {
+      const url = r.name.length > 80 ? "..." + r.name.slice(-77) : r.name;
+      const status = (r as any).responseStatus || "";
+      lines.push(`  ${Math.round(r.duration)}ms ${status ? `[${status}]` : ""} ${url}`);
+    }
+  }
+
+  // Also include captured fetch/XHR logs (may have status codes)
   if (networkLogs.length) {
-    lines.push(`\nRecent requests (${networkLogs.length}):`);
-    for (const log of networkLogs.slice(-15)) {
+    lines.push(`\nFetch/XHR requests (${networkLogs.length}):`);
+    for (const log of networkLogs.slice(-20)) {
       lines.push(`  ${log.method} ${log.url.slice(0, 80)} → ${log.status || "pending"} (${log.duration || "?"}ms)`);
     }
   }
@@ -1323,11 +1339,12 @@ function captureNetworkProfile() {
     if (warns.length) lines.push(`Console warnings: ${warns.length}`);
   }
 
-  if (resources.length) {
+  // Slowest resources
+  if (resources.length > 5) {
     const slowest = [...resources].sort((a, b) => b.duration - a.duration).slice(0, 5);
     lines.push(`\nSlowest resources:`);
     for (const r of slowest) {
-      lines.push(`  ${Math.round(r.duration)}ms — ${r.name.split("/").pop()?.slice(0, 50)}`);
+      lines.push(`  ${Math.round(r.duration)}ms — ${r.name.split("/").pop()?.slice(0, 60)}`);
     }
   }
 
@@ -1512,7 +1529,9 @@ function escapeHtml(text: string): string {
 }
 
 function renderMarkdown(text: string): string {
-  let html = escapeHtml(text);
+  // First: convert literal \n strings to actual newlines (from JSON escaping)
+  let clean = text.replace(/\\n/g, "\n");
+  let html = escapeHtml(clean);
   // Code blocks (``` ... ```)
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="om-code-block"><code>$2</code></pre>');
   // Inline code (`...`)
@@ -1521,6 +1540,8 @@ function renderMarkdown(text: string): string {
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   // Italic (*...*)
   html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Bullet lists (- item)
+  html = html.replace(/^- (.+)$/gm, '&#8226; $1');
   // Line breaks
   html = html.replace(/\n/g, '<br>');
   return html;

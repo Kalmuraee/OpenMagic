@@ -41,9 +41,28 @@ You MUST respond with valid JSON in this exact format:
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
-  if (context.selectedElement) parts.selectedElement = context.selectedElement.outerHTML;
-  if (context.files?.length) { parts.filePath = context.files[0].path; parts.fileContent = context.files[0].content; }
+
+  // Send FULL element context — not just outerHTML
+  if (context.selectedElement) {
+    const el = context.selectedElement;
+    parts.selectedElement = JSON.stringify({
+      cssSelector: el.cssSelector,
+      tagName: el.tagName,
+      id: el.id,
+      className: el.className,
+      outerHTML: el.outerHTML,
+      computedStyles: el.computedStyles,
+      ancestry: (el as any).ancestry,
+      componentHint: (el as any).componentHint,
+    }, null, 2);
+  }
+
+  if (context.files?.length) {
+    parts.files = context.files;
+  }
   if (context.projectTree) parts.projectTree = context.projectTree;
+  if ((context as any).pageUrl) parts.pageUrl = (context as any).pageUrl;
+  if ((context as any).pageTitle) parts.pageTitle = (context as any).pageTitle;
   if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
   if (context.consoleLogs) parts.consoleLogs = context.consoleLogs.map(l => `[${l.level}] ${l.args.join(" ")}`).join("\n");
   return parts;
@@ -54,27 +73,37 @@ export function buildUserMessage(
   context: {
     selectedElement?: string;
     screenshot?: string;
+    files?: Array<{ path: string; content: string }>;
     fileContent?: string;
     filePath?: string;
     networkLogs?: string;
     consoleLogs?: string;
     projectTree?: string;
+    pageUrl?: string;
+    pageTitle?: string;
   }
 ): string {
   const parts: string[] = [];
+
+  // Page context — helps LLM find the right route/page component
+  if (context.pageUrl || context.pageTitle) {
+    parts.push(`## Page Context\nURL: ${context.pageUrl || "unknown"}\nTitle: ${context.pageTitle || "unknown"}`);
+  }
 
   if (context.projectTree) {
     parts.push(`## Project Structure\n\`\`\`\n${context.projectTree}\n\`\`\``);
   }
 
-  if (context.filePath && context.fileContent) {
-    parts.push(
-      `## Source File: ${context.filePath}\n\`\`\`\n${context.fileContent}\n\`\`\``
-    );
+  // Grounded source files
+  if (context.files?.length) {
+    parts.push(`## Grounded Source Files\n${context.files.map(f => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n")}`);
+  } else if (context.filePath && context.fileContent) {
+    parts.push(`## Source File: ${context.filePath}\n\`\`\`\n${context.fileContent}\n\`\`\``);
   }
 
+  // Selected element — full context including selector, styles, ancestry
   if (context.selectedElement) {
-    parts.push(`## Selected Element (DOM)\n\`\`\`html\n${context.selectedElement}\n\`\`\``);
+    parts.push(`## Selected Element\n\`\`\`json\n${context.selectedElement}\n\`\`\``);
   }
 
   if (context.networkLogs) {

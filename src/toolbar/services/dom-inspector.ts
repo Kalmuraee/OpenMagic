@@ -7,6 +7,8 @@ export interface SelectedElement {
   cssSelector: string;
   xpath: string;
   computedStyles: Record<string, string>;
+  ancestry: string[];
+  componentHint: string;
   rect: { x: number; y: number; width: number; height: number };
 }
 
@@ -58,6 +60,8 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     cssSelector: getCssSelector(el),
     xpath: getXPath(el),
     computedStyles: styles,
+    ancestry: getAncestry(el),
+    componentHint: getComponentHint(el),
     rect: {
       x: rect.x,
       y: rect.y,
@@ -65,6 +69,47 @@ export function inspectElement(el: HTMLElement): SelectedElement {
       height: rect.height,
     },
   };
+}
+
+function getAncestry(el: HTMLElement, depth: number = 5): string[] {
+  const result: string[] = [];
+  let current = el.parentElement;
+  while (current && current !== document.body && result.length < depth) {
+    const tag = current.tagName.toLowerCase();
+    const cls = (typeof current.className === "string" ? current.className : "")
+      .split(/\s+/).filter(c => c.length > 1 && !c.startsWith("_")).slice(0, 3).join(".");
+    result.push(cls ? `${tag}.${cls}` : tag);
+    current = current.parentElement;
+  }
+  return result;
+}
+
+function getComponentHint(el: HTMLElement): string {
+  // Try to find component name from data attributes or React fiber
+  let current: HTMLElement | null = el;
+  while (current && current !== document.body) {
+    // Check common framework data attributes
+    const dataComponent = current.getAttribute("data-component")
+      || current.getAttribute("data-testid")
+      || current.getAttribute("data-cy");
+    if (dataComponent) return dataComponent;
+
+    // React: check __reactFiber or __reactInternalInstance
+    const keys = Object.keys(current);
+    for (const key of keys) {
+      if (key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance")) {
+        try {
+          const fiber = (current as any)[key];
+          const name = fiber?.type?.name || fiber?.type?.displayName
+            || fiber?.return?.type?.name || fiber?.return?.type?.displayName;
+          if (name && name !== "div" && name !== "span" && name.length > 1) return name;
+        } catch {}
+      }
+    }
+
+    current = current.parentElement;
+  }
+  return "";
 }
 
 function getCleanOuterHTML(el: HTMLElement): string {

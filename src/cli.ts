@@ -26,6 +26,7 @@ process.on("uncaughtException", (err) => {
 
 // Track child processes for cleanup
 const childProcesses: ChildProcess[] = [];
+let lastDetectedPort: number | null = null; // Port detected from dev server output
 import { createProxyServer } from "./proxy.js";
 import { generateSessionToken } from "./security.js";
 import {
@@ -38,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.25.4";
+const VERSION = "0.26.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -198,9 +199,13 @@ program
         if (!started) {
           process.exit(1);
         }
-        // Re-detect in case server started on a different port
-        const recheck = await detectDevServer();
-        if (recheck) { targetPort = recheck.port; targetHost = recheck.host; }
+        // Use port detected from dev server output, or re-detect
+        if (lastDetectedPort) {
+          targetPort = lastDetectedPort;
+        } else {
+          const recheck = await detectDevServer();
+          if (recheck) { targetPort = recheck.port; targetHost = recheck.host; }
+        }
       }
     } else {
       // Auto-detect running dev server
@@ -216,16 +221,20 @@ program
         if (!started) {
           process.exit(1);
         }
-        // Re-detect after starting
-        const redetected = await detectDevServer();
-        if (!redetected) {
-          console.log(chalk.red("  ✗  Could not detect the dev server after starting."));
-          console.log(chalk.dim("     Try specifying the port: npx openmagic --port 3000"));
-          console.log("");
-          process.exit(1);
+        // Use port from dev server output, or re-detect
+        if (lastDetectedPort) {
+          targetPort = lastDetectedPort;
+        } else {
+          const redetected = await detectDevServer();
+          if (!redetected) {
+            console.log(chalk.red("  ✗  Could not detect the dev server after starting."));
+            console.log(chalk.dim("     Try specifying the port: npx openmagic --port 3000"));
+            console.log("");
+            process.exit(1);
+          }
+          targetPort = redetected.port;
+          targetHost = redetected.host;
         }
-        targetPort = redetected.port;
-        targetHost = redetected.host;
       }
     }
 
@@ -259,18 +268,17 @@ program
     const proxyServer = createProxyServer(targetHost, targetPort!, roots);
 
     proxyServer.listen(proxyPort, "127.0.0.1", async () => {
+      const proxyUrl = `http://localhost:${proxyPort}`;
+      console.log("");
+      console.log(chalk.bold.green("  Ready!"));
       console.log("");
       console.log(
-        chalk.bold.green(`  Proxy running at → `) +
-          chalk.bold.underline.cyan(`http://localhost:${proxyPort}`)
+        chalk.bold("  → ") + chalk.bold.underline.cyan(proxyUrl)
       );
       console.log("");
 
       await healthCheck(proxyPort, targetPort!);
 
-      console.log(
-        chalk.dim("  Open the URL above in your browser to start.")
-      );
       console.log(chalk.dim("  Press Ctrl+C to stop."));
       console.log(
         chalk.dim("  Errors below are from your dev server, not OpenMagic.")
@@ -457,9 +465,23 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   childProcesses.push(child);
   let childExited = false;
+  let detectedPort: number | null = null; // Port detected from dev server output
+
+  // Watch stdout/stderr for the actual port the server starts on
+  function parsePortFromOutput(line: string) {
+    // Match common patterns: "http://localhost:3000", "Local: http://localhost:3000/"
+    const portMatch = line.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
+    if (portMatch && !detectedPort) {
+      const p = parseInt(portMatch[1], 10);
+      if (p > 0 && p < 65536 && p !== port) {
+        detectedPort = p;
+      }
+    }
+  }
 
   child.stdout?.on("data", (data: Buffer) => {
     for (const line of data.toString().trim().split("\n")) {
+      parsePortFromOutput(line);
       const formatted = formatDevServerLine(line);
       if (formatted) process.stdout.write(formatted + "\n");
     }
@@ -467,6 +489,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   child.stderr?.on("data", (data: Buffer) => {
     for (const line of data.toString().trim().split("\n")) {
+      parsePortFromOutput(line);
       const formatted = formatDevServerLine(line);
       if (formatted) process.stdout.write(formatted + "\n");
     }
@@ -499,12 +522,29 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  // Wait for the port to open (abort early if child exits)
+  // Wait for the port to open — also watch for the actual port from dev server output
   console.log(
-    chalk.dim(`  Waiting for port ${port}...`)
+    chalk.dim(`  Waiting for dev server...`)
   );
 
-  const isUp = await waitForPort(port, 30000, () => childExited);
+  const isUp = await waitForPort(port, 30000, () => {
+    if (childExited) return true;
+    // If we detected a different port from the output, check that instead
+    if (detectedPort) return true;
+    return false;
+  });
+
+  // If the expected port didn't open but we detected a different one from output
+  if (!isUp && detectedPort) {
+    const altUp = await isPortOpen(detectedPort);
+    if (altUp) {
+      console.log(
+        chalk.green(`  ✓  Dev server is on port ${detectedPort} (configured in project, not default ${port})`)
+      );
+      lastDetectedPort = detectedPort;
+      return true;
+    }
+  }
 
   if (childExited && !isUp) {
     console.log(

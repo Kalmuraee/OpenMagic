@@ -1,161 +1,122 @@
 <div align="center">
 
-# ✨ OpenMagic
+# OpenMagic
 
-**AI-powered coding toolbar for any web application**
+**Add an AI coding toolbar to any web app. One command. Zero code changes.**
 
-Add AI code editing to your existing web app in one command. No IDE extension, no desktop app, no account required.
+[![npm version](https://img.shields.io/npm/v/openmagic.svg?style=flat-square)](https://www.npmjs.com/package/openmagic)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/Kalmuraee/OpenMagic?style=flat-square)](https://github.com/Kalmuraee/OpenMagic/stargazers)
 
-[![npm version](https://img.shields.io/npm/v/openmagic.svg)](https://www.npmjs.com/package/openmagic)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+OpenMagic injects a floating AI toolbar into your running web app via reverse proxy.
+Select any element, describe what you want, review the diff, approve — your code updates and HMR refreshes the page.
+No framework plugin. No IDE extension. No account. Bring your own API key.
 
-[Quick Start](#quick-start) | [How It Works](#how-it-works) | [Providers](#supported-providers) | [Configuration](#configuration) | [Contributing](#contributing)
+[Website](https://kalmuraee.github.io/OpenMagic/) &#183; [Quick Start](#quick-start) &#183; [How It Works](#how-it-works) &#183; [Providers](#supported-providers) &#183; [GitHub](https://github.com/Kalmuraee/OpenMagic)
 
 </div>
 
 ---
 
-## What is OpenMagic?
+<!-- DEMO GIF -->
+![OpenMagic Demo](./docs/demo.gif)
 
-OpenMagic is an open-source npm package that injects a floating AI coding toolbar into your running web application during development. Select elements, capture screenshots, send context to any LLM, and apply code changes that reflect instantly via hot reload.
-
-**Works with any framework.** React, Vue, Angular, Svelte, Next.js, Nuxt, Vite, plain HTML — if it runs in a browser, OpenMagic works.
-
-### The Developer Experience
-
-```
-1. You have an existing web app running on localhost:3000
-2. Run `npx openmagic`
-3. A floating toolbar appears in your app
-4. Select a button → "Make it bigger with a gradient"
-5. AI proposes changes → You approve → Code updates → UI refreshes
-```
-
-<!-- TODO: Add demo GIF here -->
-<!-- ![OpenMagic Demo](./docs/demo.gif) -->
+---
 
 ## Quick Start
 
-Make sure your dev server is running first (e.g., `npm run dev`), then:
-
 ```bash
+# 1. Start your dev server as usual
+npm run dev
+
+# 2. Launch OpenMagic (auto-detects your dev server)
 npx openmagic@latest
 ```
 
-That's it. OpenMagic auto-detects your dev server and opens a proxied version with the toolbar injected.
+A proxied version of your app opens with the AI toolbar overlaid. That is it.
 
-### Specify a port
-
-```bash
-npx openmagic --port 3000
-```
-
-### Multiple project roots (e.g., frontend + backend)
-
-```bash
-npx openmagic --port 3000 --root ./frontend --root ./backend
-```
-
-## How It Works
-
-OpenMagic runs a **reverse proxy** between your browser and your dev server. This is completely non-invasive — your project files are never modified by the install.
-
-```
-┌─────────────────────────────────────────────────┐
-│                   Your Browser                   │
-│              http://localhost:4567                │
-├─────────────┬───────────────────┬───────────────┤
-│  Your App   │   OpenMagic       │  WebSocket    │
-│  (proxied)  │   Toolbar (UI)    │  Connection   │
-└──────┬──────┴───────────────────┴───────┬───────┘
-       │                                  │
-       ▼                                  ▼
-┌──────────────┐              ┌───────────────────┐
-│  Your Dev    │              │  OpenMagic Server  │
-│  Server      │              │  ┌──────────────┐  │
-│  :3000       │              │  │ File System   │  │
-└──────────────┘              │  │ Read/Write    │  │
-                              │  ├──────────────┤  │
-                              │  │ LLM Proxy     │  │
-                              │  │ (your API key)│  │
-                              │  └──────────────┘  │
-                              └───────────────────┘
-```
-
-1. **Proxy** — All HTTP requests are forwarded to your dev server. HTML responses get the toolbar `<script>` injected before `</body>`.
-2. **Toolbar** — A Shadow DOM Web Component that floats on top of your app. Completely isolated — no CSS conflicts with your app.
-3. **Server** — A local Node.js server that handles file operations and proxies LLM API calls. Your API keys never leave localhost.
-4. **HMR** — When AI modifies your source files, your dev server's hot module replacement picks up the changes automatically.
-
-### What happens when you stop?
-
-```bash
-Ctrl+C
-```
-
-Everything stops. No files modified. No dependencies added. No traces left in your project.
+---
 
 ## Features
 
-### Element Selection
-Click any element in your app to capture its DOM structure, computed styles, and surrounding HTML. This context is sent to the LLM so it knows exactly what to modify.
+| | Feature | Description |
+|---|---------|-------------|
+| **Select** | Element Selection | Click any element to capture its DOM, computed styles, parent layout, siblings, React props, and component name |
+| **Ground** | Smart File Grounding | Reads project files, follows import chains, auto-reads co-located stylesheets and `package.json` deps |
+| **Diff** | Diff Preview | Approve or reject each change. Undo to revert. Fuzzy line matching handles indentation differences |
+| **Retry** | Auto-Retry | If the LLM requests more files, OpenMagic reads them transparently and retries — no manual intervention |
+| **Chat** | Markdown Chat | Streaming responses, copy buttons, session persistence across HMR reloads |
+| **Net** | Network Profiling | Captures page load timing, TTFB, FCP, and flags slow resources |
+| **Img** | Image Attachments | Drag-drop, paste from clipboard, or use the file picker — vision models analyze screenshots |
+| **Keys** | Per-Provider Keys | Store a key for each provider. Switch models without re-entering credentials |
+| **KB** | Keyboard Shortcuts | Toggle, send, close, minimize — all from the keyboard |
+| **Min** | Minimize to Icon | Collapse the toolbar to a small floating button when you do not need it |
 
-### Screenshot Capture
-Take a screenshot of the page or a specific element. Vision-capable models (GPT-4o, Claude, Gemini) use this to understand the visual layout.
+---
 
-### Network & Console Logs
-OpenMagic automatically captures `fetch`/`XHR` requests and `console.log` output. This context helps the LLM understand API responses, errors, and application state.
+## How It Works
 
-### Multi-Repo Context
-Working on a fullstack app? Add both your frontend and backend directories:
+OpenMagic is a single-port reverse proxy. It sits between your browser and your dev server, injecting the toolbar script into HTML responses. Your project is never modified at install time.
 
-```bash
-npx openmagic --root ./my-frontend --root ./my-api
+```
+                        +-----------------------+
+                        |      Your Browser     |
+                        |  localhost:4567        |
+                        +---+---------------+---+
+                            |               |
+                      HTTP proxy        WebSocket
+                            |               |
+  +----------------+    +---+---------------+---+
+  | Your Dev Server|    |   OpenMagic Server    |
+  | localhost:3000  |<---|                       |
+  +----------------+    |  File Read/Write      |
+                        |  LLM API Proxy        |
+                        |  (your key, localhost) |
+                        +-----------------------+
 ```
 
-The LLM can read and modify files across both repositories.
+1. **Proxy** -- All requests forward to your dev server. HTML responses get a `<script>` tag injected before `</body>`.
+2. **Toolbar** -- A Shadow DOM Web Component. Fully isolated from your app's styles.
+3. **Server** -- Local Node.js process handling file I/O and proxying LLM calls. API keys never leave your machine.
+4. **HMR** -- When the AI modifies source files, your dev server's hot module replacement picks up changes automatically.
 
-### Streaming Responses
-LLM responses stream in real-time. You see the AI thinking as it generates code.
+Stop with `Ctrl+C`. No files modified. No dependencies added. No traces.
 
-### Code Modifications
-The AI returns structured edits (search/replace on source files). Changes are applied directly and your dev server's HMR reflects them instantly.
+---
 
 ## Supported Providers
 
-All providers and models are pre-configured. You only need to:
-1. Select a provider from the dropdown
-2. Pick a model
-3. Paste your API key
+14 providers, 70+ models. All pre-configured — select a provider, pick a model, paste your key.
 
-| Provider | Models | Vision | Thinking | API Key |
-|----------|--------|--------|----------|---------|
-| **OpenAI** | GPT-5.4, GPT-5.4 Pro/Mini/Nano, GPT-5.2, o3, o4-mini, Codex Mini | Yes | reasoning_effort: none/low/medium/high/xhigh | [platform.openai.com](https://platform.openai.com/api-keys) |
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5, Opus 4.5, Sonnet 4.5, Sonnet 4, Opus 4 | Yes | Extended thinking: budget_tokens | [console.anthropic.com](https://console.anthropic.com/) |
-| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 3.1 Flash Lite, 2.5 Pro, 2.5 Flash, 2.5 Flash Lite | Yes | thinking_level: LOW/MEDIUM/HIGH | [aistudio.google.com](https://aistudio.google.com/apikey) |
-| **xAI (Grok)** | Grok 4.20, Grok 4.20 Reasoning, Grok 4.1 Fast, Grok 4.1 Fast Reasoning | Yes | reasoning_effort: low/medium/high | [console.x.ai](https://console.x.ai/) |
-| **DeepSeek** | DeepSeek V3.2, DeepSeek R1 | No | R1: reasoning_effort | [platform.deepseek.com](https://platform.deepseek.com/) |
-| **Mistral** | Large 3, Small 4, Codestral, Devstral 2, Magistral Medium/Small | Yes | Magistral: reasoning_effort | [console.mistral.ai](https://console.mistral.ai/) |
-| **Groq** | Llama 4 Scout 17B, Llama 3.3 70B, Llama 3.1 8B, Qwen 3 32B | Llama 4 | - | [console.groq.com](https://console.groq.com/) |
-| **Ollama** | Any local model | Varies | - | Not required (local) |
-| **OpenRouter** | 200+ models | Varies | Varies | [openrouter.ai](https://openrouter.ai/) |
+| Provider | Notable Models | Vision | Thinking / Reasoning |
+|----------|---------------|--------|---------------------|
+| **OpenAI** | GPT-5.4, GPT-5.4 Pro/Mini/Nano, o3, o4-mini, Codex Mini | Yes | reasoning_effort |
+| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | Yes | Extended thinking (budget_tokens) |
+| **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Pro, 2.5 Flash | Yes | thinking_level |
+| **xAI (Grok)** | Grok 4.20, Grok 4.20 Reasoning, Grok 4.1 Fast | Yes | reasoning_effort |
+| **DeepSeek** | DeepSeek V3.2, DeepSeek R1 | -- | R1: reasoning_effort |
+| **Mistral** | Large 3, Small 4, Codestral, Devstral 2, Magistral | Yes | Magistral: reasoning_effort |
+| **MiniMax** | MiniMax models | Varies | -- |
+| **Kimi** | Kimi models | Varies | -- |
+| **Qwen** | Qwen models | Varies | -- |
+| **Zhipu** | Zhipu (GLM) models | Varies | -- |
+| **Doubao** | Doubao models | Varies | -- |
+| **Groq** | Llama 4 Scout, Llama 3.3 70B, Qwen 3 32B | Llama 4 | -- |
+| **Ollama** | Any local model (free, private) | Varies | -- |
+| **OpenRouter** | 200+ models from all providers | Varies | Varies |
 
-> **Thinking/Reasoning models** use their default thinking level automatically. Models like GPT-5.4, Claude Opus 4.6, and Gemini 3.1 Pro will use their built-in reasoning capabilities to produce better code modifications.
+---
 
-### Using Ollama (Free, Local)
+## Keyboard Shortcuts
 
-Run any model locally with zero API costs:
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+O` | Toggle toolbar open/close |
+| `Ctrl+Enter` | Send message |
+| `Escape` | Close toolbar |
+| Minimize button | Collapse to floating icon |
 
-```bash
-# Install Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull a model
-ollama pull llama3.3
-
-# Start openmagic and select "Ollama (Local)" as provider
-npx openmagic --port 3000
-```
+---
 
 ## Configuration
 
@@ -167,133 +128,114 @@ npx openmagic --port 3000
 | `-l, --listen <port>` | OpenMagic proxy port | `4567` |
 | `-r, --root <paths...>` | Project root directories | Current directory |
 | `--host <host>` | Dev server host | `127.0.0.1` |
-| `--no-open` | Don't auto-open browser | `false` |
+| `--no-open` | Do not auto-open browser | `false` |
+
+### Multi-Repo Support
+
+```bash
+npx openmagic --port 3000 --root ./frontend --root ./backend
+```
 
 ### Config File
 
-Settings are stored in `~/.openmagic/config.json`:
+Settings persist in `~/.openmagic/config.json` (your home directory, never in your project):
 
 ```json
 {
   "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
-  "apiKey": "sk-ant-...",
-  "roots": ["/path/to/project"]
+  "model": "claude-opus-4-6-20260326",
+  "apiKey": "sk-ant-..."
 }
 ```
 
-This file is in your home directory, never in your project. It won't be committed to git.
+### Using Ollama (Free, Local)
+
+```bash
+ollama pull llama3.3
+npx openmagic --port 3000
+# Select "Ollama (Local)" as your provider
+```
+
+---
 
 ## Security
 
-- **Localhost only** — The proxy and WebSocket server bind to `127.0.0.1`. They are not accessible from the network.
-- **Session tokens** — Each session generates a random token. The toolbar must authenticate before accessing any APIs.
-- **Path sandboxing** — File operations are restricted to configured root directories. The server cannot read/write outside your project.
-- **API keys stay local** — Keys are stored in `~/.openmagic/config.json` on your machine. They are proxied through the local server and never exposed to the browser or any third party.
-- **Zero project modification** — OpenMagic never modifies your `package.json`, config files, or source code during installation. The toolbar exists only in the proxy layer.
-- **Symlink protection** — File operations resolve symlinks and reject paths that escape the project root.
-- **Diff preview** — AI-proposed code changes are shown as diffs with Apply/Reject buttons. Nothing is auto-applied.
+- **Localhost only** -- The proxy and WebSocket bind to `127.0.0.1`. Not accessible from the network.
+- **Session tokens** -- Each session generates a random token. The toolbar authenticates before accessing any API.
+- **Path sandboxing** -- File operations are restricted to configured root directories. Symlinks that escape the root are rejected.
+- **API keys stay local** -- Keys live in `~/.openmagic/config.json`. They are proxied through the local server, never exposed to the browser or any third party.
+- **Zero project modification** -- OpenMagic never touches your `package.json`, config files, or source code during installation. The toolbar exists only in the proxy layer.
+- **Diff preview** -- AI-proposed changes are shown as diffs with Approve/Reject buttons. Nothing is auto-applied without your consent.
 
-### Known Limitations
+---
 
-OpenMagic uses a reverse proxy which introduces these tradeoffs:
+## Known Limitations
 
-- **Origin change** — Your app runs on `localhost:3000` but is accessed via `localhost:4567`. This can affect OAuth redirects, `localStorage` isolation, and Service Worker scope. Most dev workflows are unaffected, but if your app relies on `window.location.origin`, you may need to adjust your dev config.
-- **CSP meta tags** — OpenMagic strips CSP response headers to allow the toolbar script. However, CSP set via `<meta>` tags in your HTML cannot be modified and may block the toolbar on strict CSP pages.
+Honesty matters. Here is what you should know:
+
+- **Origin change** -- Your app runs on `:3000` but is accessed via `:4567`. This can affect OAuth redirect URIs, `localStorage` isolation, and Service Worker scope. Most dev workflows are unaffected, but apps that depend on `window.location.origin` may need dev config adjustments.
+- **CSP via meta tags** -- OpenMagic strips CSP response headers to allow the toolbar script, but CSP defined in `<meta>` tags cannot be modified at the proxy level and may block the toolbar on strict pages.
+- **Not for production** -- OpenMagic is a development tool. Do not deploy the proxy to production.
+
+---
 
 ## Comparison
 
 | Feature | OpenMagic | Stagewise | Frontman | Agentation |
 |---------|-----------|-----------|----------|------------|
-| Install method | `npx openmagic` | npm package / Electron app | Framework middleware | npm package |
+| Install | `npx openmagic` | npm + Electron | Framework middleware | npm package |
 | Framework support | Any (reverse proxy) | React, Vue, Angular, Svelte | Next.js, Astro, Vite | React |
-| Code modification | Yes (auto-apply) | Yes (via IDE) | Yes | No (clipboard only) |
-| BYOK (Bring Your Own Key) | Yes | Paid tiers | Yes | N/A |
+| Code modification | Yes (diff + approve) | Yes (via IDE) | Yes | No (clipboard) |
+| BYOK | Yes | Paid tiers | Yes | N/A |
 | Prompt limits | None | 10 free/day | None | N/A |
-| Vision (screenshots) | Yes | Yes | No | No |
-| Network/console logs | Yes | No | Yes (server-side) | No |
+| Vision | Yes | Yes | No | No |
+| Network profiling | Yes | No | Server-side | No |
 | Multi-repo | Yes | No | No | No |
 | IDE required | No | VS Code extension | No | No |
-| Open source | MIT | Partial | Apache 2.0 | MIT |
+| License | MIT | Partial | Apache 2.0 | MIT |
+
+---
 
 ## Framework Compatibility
 
-OpenMagic works via a reverse proxy, so it's compatible with **any** framework or tool that serves HTML:
+OpenMagic works via reverse proxy, so it supports any framework that serves HTML:
 
-- React (CRA, Vite)
-- Next.js
-- Vue (Vue CLI, Vite)
-- Nuxt
-- Angular
-- Svelte / SvelteKit
-- Astro
-- Remix
-- Solid
-- Qwik
-- Ember
-- Django / Flask templates
-- Rails views
-- PHP (Laravel, WordPress)
-- Plain HTML + any HTTP server
+**JavaScript/TypeScript** -- React, Next.js, Vue, Nuxt, Angular, Svelte, SvelteKit, Astro, Remix, Solid, Qwik, Ember
+
+**Server-rendered** -- Django, Flask, Rails, PHP (Laravel, WordPress)
+
+**Static** -- Plain HTML with any HTTP server
+
+---
 
 ## Contributing
 
 ```bash
-# Clone the repo
 git clone https://github.com/Kalmuraee/OpenMagic.git
-cd openmagic
-
-# Install dependencies
+cd OpenMagic
 npm install
-
-# Build (CLI + Toolbar)
 npm run build
-
-# Test locally against a dev server running on port 3000
 node dist/cli.js --port 3000
 ```
 
-### Project Structure
+See the repo for project structure and contribution guidelines.
 
-```
-src/
-  cli.ts              # CLI entry point (commander)
-  proxy.ts            # Reverse proxy + HTML injection
-  server.ts           # WebSocket + HTTP server
-  filesystem.ts       # Safe file read/write
-  config.ts           # User config management
-  security.ts         # Session tokens
-  detect.ts           # Dev server auto-detection
-  shared-types.ts     # TypeScript interfaces
-  llm/
-    registry.ts       # Pre-configured provider/model list
-    proxy.ts          # Routes to correct provider adapter
-    openai.ts         # OpenAI-compatible adapter
-    anthropic.ts      # Anthropic adapter
-    google.ts         # Google Gemini adapter
-    prompts.ts        # System prompts for code modification
-  toolbar/
-    index.ts          # Web Component (Shadow DOM)
-    services/
-      ws-client.ts    # WebSocket client
-      dom-inspector.ts # Element inspection
-      capture.ts      # Screenshot capture
-      context-builder.ts # Assembles LLM context
-    styles/
-      toolbar.css.ts  # Scoped styles
-```
+---
 
-## Roadmap
+## Changelog Highlights
 
-- [ ] Diff viewer with approve/reject per-file
-- [ ] Undo/rollback for applied changes
-- [ ] File tree browser in toolbar
-- [ ] Voice input
-- [ ] Keyboard shortcuts
-- [ ] Plugin system for custom context providers
-- [ ] Collaborative editing (multiple developers)
-- [ ] Git integration (auto-branch, auto-commit)
-- [ ] VS Code extension for side-by-side view
+| Version | Milestone |
+|---------|-----------|
+| v0.1 - v0.3 | Core reverse proxy, dev server auto-detection, initial toolbar |
+| v0.4 - v0.7 | Robustness hardening, Chinese model providers, session auth |
+| v0.8 - v0.10 | Complete toolbar rewrite, professional UI, security audit (19 fixes) |
+| v0.11 - v0.14 | Single-port architecture, diff preview, per-provider keys, streaming |
+| v0.15 - v0.17 | Network profiling, image attachments, HMR WebSocket fixes |
+| v0.18 - v0.20 | Full element context (parents, siblings, React props), auto-retry grounding |
+| v0.21 - v0.22 | Fuzzy diff matching, import chain following |
+| v0.23 - v0.24 | Undo, keyboard shortcuts, minimize, markdown rendering, chat polish |
+
+---
 
 ## Author
 
@@ -301,14 +243,14 @@ src/
 
 ## License
 
-MIT - Copyright (c) 2026 Khalid Almuraee. See [LICENSE](./LICENSE) for details.
+MIT -- Copyright (c) 2025-2026 Khalid Almuraee. See [LICENSE](./LICENSE) for details.
 
 ---
 
 <div align="center">
 
-**Built with love for developers who vibe code on their own terms.**
+**BYOK. Any framework. Zero lock-in.**
 
-[Report a Bug](https://github.com/Kalmuraee/OpenMagic/issues) | [Request a Feature](https://github.com/Kalmuraee/OpenMagic/issues)
+[GitHub](https://github.com/Kalmuraee/OpenMagic) &#183; [Website](https://kalmuraee.github.io/OpenMagic/) &#183; [npm](https://www.npmjs.com/package/openmagic) &#183; [Report a Bug](https://github.com/Kalmuraee/OpenMagic/issues) &#183; [Request a Feature](https://github.com/Kalmuraee/OpenMagic/issues)
 
 </div>

@@ -3,68 +3,105 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenMagic — AI-Powered Coding Toolbar for Any Web App</title>
-  <meta name="description" content="Add AI code editing to your existing web app in one command. Select elements, capture context, and let AI modify your codebase in real-time. Works with any framework.">
-  <meta name="keywords" content="AI coding, vibe coding, developer tools, LLM, OpenAI, Claude, Gemini, code modification, web development">
+  <title>OpenMagic -- AI Coding Toolbar for Any Web App</title>
+  <meta name="description" content="Add an AI coding toolbar to any web app with one command. Single-port reverse proxy, 14 providers, 70+ models, BYOK. No plugins, no code changes. MIT licensed.">
+  <meta name="keywords" content="AI coding toolbar, vibe coding, developer tools, LLM, OpenAI, Claude, Gemini, code modification, web development, reverse proxy, BYOK, open source">
+  <meta name="author" content="Khalid Almuraee">
 
   <!-- Open Graph -->
-  <meta property="og:title" content="OpenMagic — AI Coding Toolbar">
-  <meta property="og:description" content="Add AI code editing to any web app in one command. BYOK, open source, framework-agnostic.">
+  <meta property="og:title" content="OpenMagic -- AI Coding Toolbar for Any Web App">
+  <meta property="og:description" content="One command. 14 providers. 70+ models. Add AI code editing to any running web app through a single-port reverse proxy. No plugins, no code changes. BYOK, MIT licensed.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="https://raw.githubusercontent.com/openmagic-dev/openmagic/main/docs/og-image.png">
+  <meta property="og:url" content="https://kalmuraee.github.io/OpenMagic/">
+  <meta property="og:image" content="https://raw.githubusercontent.com/Kalmuraee/OpenMagic/main/docs/og-image.png">
+  <meta property="og:site_name" content="OpenMagic">
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="OpenMagic — AI Coding Toolbar">
-  <meta name="twitter:description" content="Add AI code editing to any web app in one command. BYOK, open source, framework-agnostic.">
+  <meta name="twitter:title" content="OpenMagic -- AI Coding Toolbar for Any Web App">
+  <meta name="twitter:description" content="One command. 14 providers. 70+ models. Reverse proxy architecture -- no plugins, no code changes. BYOK, MIT licensed.">
+  <meta name="twitter:creator" content="@kalmuraee">
 
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✨</text></svg>">
+  <link rel="canonical" href="https://kalmuraee.github.io/OpenMagic/">
+
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%236c5ce7%22/><path d=%22M8 16h16M16 8v16%22 stroke=%22white%22 stroke-width=%223%22 stroke-linecap=%22round%22/></svg>">
 
   <style>
     :root {
       --bg: #0a0a1a;
-      --bg2: #12122a;
+      --bg2: #111128;
+      --bg3: #161638;
       --purple: #6c5ce7;
       --purple-light: #a29bfe;
-      --pink: #e94560;
+      --purple-glow: rgba(108, 92, 231, 0.15);
       --green: #00b894;
-      --text: #e0e0e0;
-      --text-dim: #888;
-      --border: rgba(108, 92, 231, 0.15);
+      --green-dim: rgba(0, 184, 148, 0.15);
+      --text: #e4e4ef;
+      --text-dim: #7f7f9a;
+      --text-bright: #ffffff;
+      --border: rgba(108, 92, 231, 0.12);
+      --border-hover: rgba(108, 92, 231, 0.35);
+      --radius: 12px;
+      --radius-lg: 16px;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    html { scroll-behavior: smooth; }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
       background: var(--bg);
       color: var(--text);
       line-height: 1.6;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    /* Nav */
+    .container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ---- NAV ---- */
     nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 10, 26, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 20px 40px;
-      max-width: 1200px;
+      max-width: 1140px;
       margin: 0 auto;
+      padding: 0 24px;
+      height: 64px;
     }
 
     .nav-logo {
       display: flex;
       align-items: center;
       gap: 10px;
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
-      color: var(--purple-light);
+      color: var(--text-bright);
       text-decoration: none;
+      letter-spacing: -0.3px;
     }
+
+    .nav-logo svg { flex-shrink: 0; }
 
     .nav-links {
       display: flex;
+      align-items: center;
       gap: 32px;
       list-style: none;
     }
@@ -79,11 +116,33 @@
 
     .nav-links a:hover { color: var(--text); }
 
-    /* Hero */
+    .nav-gh {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .nav-gh:hover {
+      color: var(--text);
+      border-color: var(--border-hover);
+      background: var(--purple-glow);
+    }
+
+    .mobile-menu { display: none; }
+
+    /* ---- HERO ---- */
     .hero {
       text-align: center;
-      padding: 100px 20px 80px;
-      max-width: 900px;
+      padding: 100px 24px 60px;
+      max-width: 860px;
       margin: 0 auto;
       position: relative;
     }
@@ -91,43 +150,60 @@
     .hero::before {
       content: '';
       position: absolute;
-      top: -200px;
+      top: -180px;
       left: 50%;
       transform: translateX(-50%);
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(108,92,231,0.15) 0%, transparent 70%);
+      width: 700px;
+      height: 700px;
+      background: radial-gradient(circle, rgba(108,92,231,0.12) 0%, rgba(108,92,231,0.04) 40%, transparent 70%);
       pointer-events: none;
     }
 
-    .badge {
-      display: inline-block;
-      padding: 6px 16px;
+    .hero-version {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 14px 5px 6px;
       border: 1px solid var(--border);
       border-radius: 50px;
       font-size: 13px;
-      color: var(--purple-light);
-      margin-bottom: 24px;
-      background: rgba(108,92,231,0.05);
+      color: var(--text-dim);
+      margin-bottom: 32px;
+      background: rgba(108,92,231,0.04);
+    }
+
+    .hero-version-tag {
+      background: var(--purple);
+      color: white;
+      padding: 2px 8px;
+      border-radius: 50px;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.3px;
     }
 
     h1 {
-      font-size: clamp(40px, 6vw, 72px);
+      font-size: clamp(36px, 5.5vw, 64px);
       font-weight: 800;
-      line-height: 1.1;
+      line-height: 1.08;
       margin-bottom: 24px;
-      background: linear-gradient(135deg, #fff 0%, var(--purple-light) 50%, var(--pink) 100%);
+      letter-spacing: -1.5px;
+      color: var(--text-bright);
+    }
+
+    h1 .gradient {
+      background: linear-gradient(135deg, #fff 0%, var(--purple-light) 60%, #c4b5fd 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
 
-    .hero p {
-      font-size: 20px;
+    .hero-sub {
+      font-size: 19px;
       color: var(--text-dim);
-      max-width: 600px;
-      margin: 0 auto 40px;
-      line-height: 1.7;
+      max-width: 560px;
+      margin: 0 auto 44px;
+      line-height: 1.65;
     }
 
     /* Install box */
@@ -137,52 +213,63 @@
       gap: 12px;
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px 24px;
-      font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
-      font-size: 18px;
-      margin-bottom: 16px;
+      border-radius: var(--radius);
+      padding: 14px 20px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+      font-size: 16px;
+      margin-bottom: 12px;
+      transition: border-color 0.3s;
     }
 
-    .install-box .dollar { color: var(--text-dim); }
+    .install-box:hover { border-color: var(--border-hover); }
+
+    .install-box .dollar { color: var(--text-dim); user-select: none; }
     .install-box code { color: var(--green); }
 
     .install-box button {
-      background: rgba(108,92,231,0.2);
+      background: rgba(108,92,231,0.15);
       border: 1px solid var(--border);
       color: var(--purple-light);
-      padding: 6px 12px;
+      padding: 5px 12px;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
       transition: all 0.2s;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
     }
 
-    .install-box button:hover { background: rgba(108,92,231,0.3); }
+    .install-box button:hover { background: rgba(108,92,231,0.25); }
+    .install-box button.copied { color: var(--green); border-color: rgba(0,184,148,0.3); }
 
-    .hero-sub {
-      font-size: 14px;
+    .hero-note {
+      font-size: 13px;
       color: var(--text-dim);
+      margin-bottom: 36px;
     }
 
     /* CTA Buttons */
     .cta-group {
       display: flex;
-      gap: 16px;
+      gap: 12px;
       justify-content: center;
-      margin-top: 32px;
+      flex-wrap: wrap;
     }
 
     .btn {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 14px 28px;
+      padding: 12px 24px;
       border-radius: 10px;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 600;
       text-decoration: none;
       transition: all 0.2s;
+      border: none;
+      cursor: pointer;
     }
 
     .btn-primary {
@@ -190,255 +277,448 @@
       color: white;
     }
 
-    .btn-primary:hover { background: #7c6cf7; transform: translateY(-1px); }
+    .btn-primary:hover { background: #7d6ef7; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(108,92,231,0.3); }
 
     .btn-secondary {
-      background: rgba(255,255,255,0.05);
+      background: transparent;
       color: var(--text);
       border: 1px solid rgba(255,255,255,0.1);
     }
 
-    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.2); }
 
-    /* Features */
-    .features {
-      padding: 80px 20px;
-      max-width: 1100px;
+    /* Stats bar */
+    .stats-bar {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      padding: 48px 24px 0;
+      max-width: 600px;
       margin: 0 auto;
     }
 
-    .features h2 {
+    .stat {
       text-align: center;
-      font-size: 36px;
-      margin-bottom: 16px;
     }
 
-    .features > p {
-      text-align: center;
+    .stat-num {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--text-bright);
+      letter-spacing: -0.5px;
+    }
+
+    .stat-label {
+      font-size: 13px;
       color: var(--text-dim);
-      max-width: 500px;
-      margin: 0 auto 60px;
+      margin-top: 2px;
     }
 
+    /* ---- SECTION SHARED ---- */
+    .section {
+      padding: 100px 24px;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .section-header h2 {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+      color: var(--text-bright);
+    }
+
+    .section-header p {
+      color: var(--text-dim);
+      max-width: 480px;
+      margin: 0 auto;
+      font-size: 16px;
+    }
+
+    .divider {
+      border: none;
+      height: 1px;
+      background: var(--border);
+      max-width: 1140px;
+      margin: 0 auto;
+    }
+
+    /* ---- DEMO ---- */
+    .demo-container {
+      max-width: 860px;
+      margin: 0 auto;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .demo-titlebar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 20px;
+      background: rgba(0,0,0,0.2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .demo-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .demo-titlebar-text {
+      flex: 1;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+
+    .demo-body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 80px 40px;
+      text-align: center;
+      min-height: 360px;
+    }
+
+    .demo-placeholder {
+      max-width: 360px;
+    }
+
+    .demo-placeholder svg {
+      margin-bottom: 20px;
+      opacity: 0.5;
+    }
+
+    .demo-placeholder h3 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .demo-placeholder p {
+      font-size: 14px;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* ---- FEATURES ---- */
     .feature-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      max-width: 1140px;
+      margin: 0 auto;
     }
 
     .feature-card {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 32px;
+      border-radius: var(--radius-lg);
+      padding: 28px;
       transition: border-color 0.3s, transform 0.2s;
     }
 
     .feature-card:hover {
-      border-color: rgba(108,92,231,0.4);
+      border-color: var(--border-hover);
       transform: translateY(-2px);
     }
 
     .feature-icon {
-      font-size: 32px;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--purple-glow);
+      border-radius: 10px;
       margin-bottom: 16px;
+      color: var(--purple-light);
     }
 
     .feature-card h3 {
-      font-size: 18px;
+      font-size: 16px;
+      font-weight: 600;
       margin-bottom: 8px;
+      color: var(--text-bright);
     }
 
     .feature-card p {
       color: var(--text-dim);
       font-size: 14px;
-      line-height: 1.7;
+      line-height: 1.65;
     }
 
-    /* How it works */
-    .how-it-works {
-      padding: 80px 20px;
-      max-width: 900px;
-      margin: 0 auto;
-    }
-
-    .how-it-works h2 {
-      text-align: center;
-      font-size: 36px;
-      margin-bottom: 60px;
-    }
-
+    /* ---- HOW IT WORKS ---- */
     .steps {
       display: flex;
       flex-direction: column;
-      gap: 48px;
+      gap: 40px;
+      max-width: 720px;
+      margin: 0 auto;
     }
 
     .step {
       display: flex;
-      gap: 24px;
+      gap: 20px;
       align-items: flex-start;
     }
 
     .step-num {
       flex-shrink: 0;
-      width: 48px;
-      height: 48px;
+      width: 44px;
+      height: 44px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: rgba(108,92,231,0.15);
+      background: var(--purple-glow);
       border: 1px solid var(--border);
       border-radius: 12px;
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
       color: var(--purple-light);
     }
 
-    .step h3 { font-size: 18px; margin-bottom: 6px; }
-    .step p { color: var(--text-dim); font-size: 14px; }
+    .step-content h3 {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--text-bright);
+    }
+
+    .step-content p {
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.65;
+    }
 
     .step-code {
+      display: inline-block;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 12px 16px;
+      padding: 10px 16px;
       margin-top: 12px;
       font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
-      font-size: 14px;
+      font-size: 13px;
       color: var(--green);
     }
 
-    /* Providers */
-    .providers {
-      padding: 80px 20px;
-      max-width: 1100px;
-      margin: 0 auto;
-    }
+    .step-code .dim { color: var(--text-dim); }
 
-    .providers h2 {
-      text-align: center;
-      font-size: 36px;
-      margin-bottom: 16px;
-    }
-
-    .providers > p {
-      text-align: center;
-      color: var(--text-dim);
-      max-width: 500px;
-      margin: 0 auto 48px;
-    }
-
+    /* ---- PROVIDERS ---- */
     .provider-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      max-width: 1140px;
+      margin: 0 auto;
     }
 
     .provider-card {
       background: var(--bg2);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px 24px;
+      border-radius: var(--radius);
+      padding: 20px;
       transition: border-color 0.3s;
     }
 
-    .provider-card:hover { border-color: rgba(108,92,231,0.4); }
+    .provider-card:hover { border-color: var(--border-hover); }
 
     .provider-name {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
+      color: var(--text-bright);
     }
 
-    .provider-models {
-      font-size: 13px;
+    .provider-count {
+      font-size: 12px;
       color: var(--text-dim);
-      line-height: 1.6;
+    }
+
+    .provider-tags {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 10px;
     }
 
     .tag {
       display: inline-block;
       padding: 2px 8px;
       border-radius: 4px;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
-      margin-left: 6px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
     }
 
-    .tag-vision { background: rgba(0,184,148,0.15); color: var(--green); }
-    .tag-thinking { background: rgba(108,92,231,0.15); color: var(--purple-light); }
+    .tag-vision { background: var(--green-dim); color: var(--green); }
+    .tag-thinking { background: var(--purple-glow); color: var(--purple-light); }
 
-    /* Comparison */
-    .comparison {
-      padding: 80px 20px;
+    /* ---- COMPARISON ---- */
+    .comparison-wrap {
       max-width: 900px;
       margin: 0 auto;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
-    .comparison h2 {
-      text-align: center;
-      font-size: 36px;
-      margin-bottom: 40px;
-    }
-
-    .comparison table {
+    .comparison-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 14px;
+      min-width: 600px;
     }
 
-    .comparison th {
+    .comparison-table thead th {
       text-align: left;
       padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid rgba(108,92,231,0.2);
       color: var(--text-dim);
       font-weight: 600;
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.6px;
     }
 
-    .comparison td {
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.03);
+    .comparison-table thead th:first-child { color: var(--text-dim); }
+
+    .comparison-table thead th.highlight {
+      color: var(--purple-light);
+      background: rgba(108,92,231,0.05);
     }
 
-    .comparison tr:hover td { background: rgba(108,92,231,0.03); }
+    .comparison-table td {
+      padding: 11px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.025);
+      color: var(--text);
+    }
 
-    .check { color: var(--green); }
-    .cross { color: var(--text-dim); }
+    .comparison-table td:first-child {
+      color: var(--text-dim);
+      font-weight: 500;
+    }
 
-    /* Footer */
+    .comparison-table td.highlight {
+      background: rgba(108,92,231,0.03);
+    }
+
+    .comparison-table tbody tr:hover td { background: rgba(108,92,231,0.04); }
+
+    .check {
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    .cross {
+      color: var(--text-dim);
+      opacity: 0.5;
+    }
+
+    /* ---- FOOTER ---- */
     footer {
-      text-align: center;
-      padding: 60px 20px;
       border-top: 1px solid var(--border);
-      margin-top: 40px;
+      padding: 48px 24px;
     }
 
-    footer p { color: var(--text-dim); font-size: 14px; }
-    footer a { color: var(--purple-light); text-decoration: none; }
-    footer a:hover { text-decoration: underline; }
+    .footer-inner {
+      max-width: 1140px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
 
     .footer-links {
       display: flex;
-      justify-content: center;
       gap: 24px;
-      margin-bottom: 16px;
+      flex-wrap: wrap;
     }
 
-    /* Responsive */
+    .footer-links a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 14px;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--purple-light); }
+
+    .footer-credit {
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    .footer-credit a {
+      color: var(--purple-light);
+      text-decoration: none;
+    }
+
+    .footer-credit a:hover { text-decoration: underline; }
+
+    /* ---- RESPONSIVE ---- */
     @media (max-width: 768px) {
-      nav { padding: 16px 20px; }
       .nav-links { display: none; }
-      .hero { padding: 60px 20px 40px; }
-      .install-box { font-size: 15px; padding: 12px 16px; }
+
+      .mobile-menu {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        width: 40px;
+        height: 40px;
+        cursor: pointer;
+      }
+
+      .hero { padding: 64px 20px 40px; }
+      h1 { letter-spacing: -1px; }
+      .hero-sub { font-size: 16px; }
+
+      .install-box {
+        font-size: 14px;
+        padding: 12px 14px;
+        gap: 8px;
+      }
+
+      .stats-bar { gap: 32px; }
+      .stat-num { font-size: 22px; }
+
+      .section { padding: 72px 20px; }
+
       .cta-group { flex-direction: column; align-items: center; }
+
       .feature-grid { grid-template-columns: 1fr; }
+
       .step { flex-direction: column; }
+
       .provider-grid { grid-template-columns: 1fr 1fr; }
-      .comparison { overflow-x: auto; }
+
+      .comparison-wrap { margin: 0 -20px; padding: 0 20px; }
+
+      .footer-inner { flex-direction: column; text-align: center; }
+      .footer-links { justify-content: center; }
+    }
+
+    @media (max-width: 480px) {
+      .provider-grid { grid-template-columns: 1fr; }
+      .stats-bar { flex-direction: column; gap: 16px; }
     }
   </style>
 </head>
@@ -446,125 +726,244 @@
 
   <!-- Nav -->
   <nav>
-    <a href="#" class="nav-logo">✨ OpenMagic</a>
-    <ul class="nav-links">
-      <li><a href="#features">Features</a></li>
-      <li><a href="#how-it-works">How It Works</a></li>
-      <li><a href="#providers">Providers</a></li>
-      <li><a href="#comparison">Comparison</a></li>
-      <li><a href="https://github.com/Kalmuraee/OpenMagic">GitHub</a></li>
-    </ul>
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <svg width="24" height="24" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="7" fill="#6c5ce7"/>
+          <path d="M8 16h16M16 8v16" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        OpenMagic
+      </a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#providers">Providers</a></li>
+        <li><a href="#comparison">Compare</a></li>
+        <li>
+          <a href="https://github.com/Kalmuraee/OpenMagic" class="nav-gh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+            GitHub
+          </a>
+        </li>
+      </ul>
+      <button class="mobile-menu" onclick="document.querySelector('.nav-links').style.display=document.querySelector('.nav-links').style.display==='flex'?'none':'flex'" aria-label="Menu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
   </nav>
 
   <!-- Hero -->
   <section class="hero">
-    <div class="badge">Open Source &middot; BYOK &middot; Framework Agnostic</div>
-    <h1>AI coding toolbar for any web app</h1>
-    <p>Add AI code editing to your existing web application in one command. Select elements, capture context, and let AI modify your codebase in real-time.</p>
+    <div class="hero-version">
+      <span class="hero-version-tag">v0.24.0</span>
+      <span>14 providers, 70+ models</span>
+    </div>
+
+    <h1><span class="gradient">AI coding toolbar</span><br>for any web app</h1>
+
+    <p class="hero-sub">One command adds a floating AI toolbar to your running dev server. Select elements, describe changes, get diffs. Single-port reverse proxy -- no plugins, no code changes.</p>
 
     <div class="install-box">
       <span class="dollar">$</span>
       <code>npx openmagic@latest</code>
-      <button onclick="navigator.clipboard.writeText('npx openmagic@latest')">Copy</button>
+      <button onclick="navigator.clipboard.writeText('npx openmagic@latest').then(()=>{this.textContent='Copied';this.classList.add('copied');setTimeout(()=>{this.textContent='Copy';this.classList.remove('copied')},2000)})">Copy</button>
     </div>
-    <div class="hero-sub">No IDE extension. No desktop app. No account required.</div>
+    <div class="hero-note">No account. No IDE extension. No desktop app. Just npx.</div>
 
     <div class="cta-group">
       <a href="https://github.com/Kalmuraee/OpenMagic" class="btn btn-primary">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
         View on GitHub
       </a>
-      <a href="#how-it-works" class="btn btn-secondary">See How It Works</a>
+      <a href="https://www.npmjs.com/package/openmagic" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+        npm Package
+      </a>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat">
+        <div class="stat-num">14</div>
+        <div class="stat-label">Providers</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">70+</div>
+        <div class="stat-label">Models</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">0</div>
+        <div class="stat-label">Config files</div>
+      </div>
     </div>
   </section>
 
+  <hr class="divider">
+
+  <!-- Demo -->
+  <section class="section" id="demo">
+    <div class="demo-container">
+      <div class="demo-titlebar">
+        <div class="demo-dot"></div>
+        <div class="demo-dot"></div>
+        <div class="demo-dot"></div>
+        <div class="demo-titlebar-text">localhost:3001 -- OpenMagic Toolbar</div>
+      </div>
+      <div class="demo-body">
+        <div class="demo-placeholder">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--purple-light)">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+          <h3>Demo coming soon</h3>
+          <p>A walkthrough video showing element selection, AI prompting, diff preview, and live code updates will be added here.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <!-- Features -->
-  <section class="features" id="features">
-    <h2>Everything you need to vibe code</h2>
-    <p>Select, capture, modify — all from your running web app.</p>
+  <section class="section" id="features">
+    <div class="section-header">
+      <h2>Everything you need, nothing you don't</h2>
+      <p>A focused set of features designed for practical AI-assisted coding.</p>
+    </div>
 
     <div class="feature-grid">
       <div class="feature-card">
-        <div class="feature-icon">🎯</div>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
         <h3>Element Selection</h3>
-        <p>Click any element in your app to capture its DOM structure, computed styles, and surrounding HTML. The LLM knows exactly what to modify.</p>
+        <p>Click any element in your running app. OpenMagic captures the DOM structure, styles, and context so the LLM knows exactly what to modify.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">📸</div>
-        <h3>Screenshot Capture</h3>
-        <p>Take screenshots of the page or specific elements. Vision-capable models (GPT-5.4, Claude Opus 4.6, Gemini 3.1 Pro) use this to understand layout.</p>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        </div>
+        <h3>Smart Grounding</h3>
+        <p>Automatically collects file contents, network requests, and console output. The LLM sees your actual API responses, errors, and app state.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">🌐</div>
-        <h3>Network & Console Logs</h3>
-        <p>Automatically captures fetch/XHR requests and console output. The LLM understands your API responses, errors, and app state.</p>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </div>
+        <h3>Diff Preview</h3>
+        <p>Review proposed changes as a unified diff before applying. See exactly what the AI wants to modify, line by line, then approve or reject.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">🧠</div>
-        <h3>Thinking Models</h3>
-        <p>Automatic reasoning config per model. GPT-5.4 uses reasoning_effort, Claude uses extended thinking, Gemini uses thinking_level — all pre-configured.</p>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </div>
+        <h3>Undo</h3>
+        <p>Every file modification is tracked. One click to revert any change. No more fear of AI breaking your code -- roll back instantly.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">📂</div>
-        <h3>Multi-Repo Context</h3>
-        <p>Add your backend alongside your frontend. The LLM can read and modify files across multiple repositories simultaneously.</p>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <h3>Fuzzy File Matching</h3>
+        <p>The AI references files by name; OpenMagic finds the right file in your project tree using fuzzy matching. No exact paths needed.</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">⚡</div>
-        <h3>Instant Hot Reload</h3>
-        <p>AI modifies your source files directly. Your dev server's HMR picks up changes automatically — see updates in milliseconds.</p>
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+        </div>
+        <h3>Auto-Retry</h3>
+        <p>Rate limits and transient failures are handled automatically with exponential backoff. Your workflow stays uninterrupted.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        </div>
+        <h3>Network Profiling</h3>
+        <p>Captures fetch/XHR requests, response bodies, status codes, and timing. Include this context so the AI understands your API layer.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <h3>Image Attachments</h3>
+        <p>Attach screenshots or design mockups directly in chat. Vision-capable models use them to understand layout and match your intent.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
+        </div>
+        <h3>Keyboard Shortcuts & Session Persistence</h3>
+        <p>Keyboard shortcuts for power users. Chat history and settings persist across page reloads and browser sessions automatically.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h3>Markdown Chat</h3>
+        <p>Full markdown rendering in the chat panel with syntax-highlighted code blocks. Read AI responses like documentation, not raw text.</p>
       </div>
     </div>
   </section>
 
+  <hr class="divider">
+
   <!-- How It Works -->
-  <section class="how-it-works" id="how-it-works">
-    <h2>Three steps to vibe coding</h2>
+  <section class="section" id="how-it-works">
+    <div class="section-header">
+      <h2>How it works</h2>
+      <p>A single-port reverse proxy that injects the toolbar. No build step, no framework plugin.</p>
+    </div>
 
     <div class="steps">
       <div class="step">
         <div class="step-num">1</div>
-        <div>
+        <div class="step-content">
           <h3>Start your dev server, then run OpenMagic</h3>
-          <p>OpenMagic runs a reverse proxy that wraps your existing dev server. Zero code changes. Works with any framework.</p>
-          <div class="step-code">$ npx openmagic --port 3000</div>
+          <p>OpenMagic wraps your existing dev server with a reverse proxy and injects the toolbar via a script tag. Your app runs unmodified. Works with React, Vue, Svelte, Angular, Next.js, Nuxt, Astro, plain HTML -- anything with a dev server.</p>
+          <div class="step-code"><span class="dim">$</span> npx openmagic@latest</div>
         </div>
       </div>
 
       <div class="step">
         <div class="step-num">2</div>
-        <div>
-          <h3>Select your LLM provider and model</h3>
-          <p>Pick from 50+ pre-configured models across 9 providers. Just select from the dropdown and paste your API key. One-time setup.</p>
+        <div class="step-content">
+          <h3>Pick a provider and paste your API key</h3>
+          <p>Choose from 14 pre-configured providers and 70+ models. Select from the toolbar dropdown, paste your key once. It is stored locally in <code style="color:var(--purple-light);background:var(--purple-glow);padding:1px 6px;border-radius:4px;font-size:13px;">~/.openmagic/config.json</code> -- never sent anywhere except the provider's API.</p>
         </div>
       </div>
 
       <div class="step">
         <div class="step-num">3</div>
-        <div>
-          <h3>Select elements and describe changes</h3>
-          <p>Click any element, take a screenshot, or just describe what you want. The AI proposes code changes, you approve, and the UI updates instantly.</p>
+        <div class="step-content">
+          <h3>Select elements, describe changes, review diffs</h3>
+          <p>Click any element to ground the AI in your actual UI. Describe what you want in plain language. The AI proposes file changes as a diff -- review, approve, and your dev server hot-reloads the result instantly.</p>
         </div>
       </div>
     </div>
   </section>
 
+  <hr class="divider">
+
   <!-- Providers -->
-  <section class="providers" id="providers">
-    <h2>50+ models, 9 providers</h2>
-    <p>All pre-configured. Just pick a model and add your API key.</p>
+  <section class="section" id="providers">
+    <div class="section-header">
+      <h2>14 providers, 70+ models</h2>
+      <p>All pre-configured with correct API formats, thinking modes, and vision support. Just add your key.</p>
+    </div>
 
     <div class="provider-grid">
       <div class="provider-card">
         <div class="provider-name">OpenAI</div>
-        <div class="provider-models">
-          GPT-5.4, GPT-5.4 Pro, Mini, Nano<br>
-          GPT-5.2, o3, o4-mini, Codex Mini
+        <div class="provider-count">GPT-4o, GPT-4o mini, o1, o1-mini, o3-mini, and more</div>
+        <div class="provider-tags">
           <span class="tag tag-vision">Vision</span>
           <span class="tag tag-thinking">Thinking</span>
         </div>
@@ -572,9 +971,8 @@
 
       <div class="provider-card">
         <div class="provider-name">Anthropic</div>
-        <div class="provider-models">
-          Claude Opus 4.6, Sonnet 4.6<br>
-          Haiku 4.5, Opus 4.5, Sonnet 4.5
+        <div class="provider-count">Claude Opus, Sonnet, Haiku (3.5 / 4 families)</div>
+        <div class="provider-tags">
           <span class="tag tag-vision">Vision</span>
           <span class="tag tag-thinking">Extended Thinking</span>
         </div>
@@ -582,19 +980,17 @@
 
       <div class="provider-card">
         <div class="provider-name">Google Gemini</div>
-        <div class="provider-models">
-          Gemini 3.1 Pro, 3 Flash<br>
-          2.5 Pro, 2.5 Flash, 2.5 Flash Lite
+        <div class="provider-count">Gemini 2.5 Pro, 2.5 Flash, 2.0 Flash, and more</div>
+        <div class="provider-tags">
           <span class="tag tag-vision">Vision</span>
-          <span class="tag tag-thinking">Thinking Level</span>
+          <span class="tag tag-thinking">Thinking</span>
         </div>
       </div>
 
       <div class="provider-card">
         <div class="provider-name">xAI (Grok)</div>
-        <div class="provider-models">
-          Grok 4.20, Grok 4.20 Reasoning<br>
-          Grok 4.1 Fast, 4.1 Fast Reasoning
+        <div class="provider-count">Grok 3, Grok 3 Fast, Grok 3 Reasoning</div>
+        <div class="provider-tags">
           <span class="tag tag-vision">Vision</span>
           <span class="tag tag-thinking">Thinking</span>
         </div>
@@ -602,120 +998,189 @@
 
       <div class="provider-card">
         <div class="provider-name">DeepSeek</div>
-        <div class="provider-models">
-          DeepSeek V3.2, DeepSeek R1
+        <div class="provider-count">DeepSeek V3, DeepSeek R1</div>
+        <div class="provider-tags">
           <span class="tag tag-thinking">R1 Reasoning</span>
         </div>
       </div>
 
       <div class="provider-card">
         <div class="provider-name">Mistral</div>
-        <div class="provider-models">
-          Large 3, Small 4, Codestral<br>
-          Devstral 2, Magistral Medium
+        <div class="provider-count">Large, Small, Codestral, Devstral, Magistral</div>
+        <div class="provider-tags">
           <span class="tag tag-vision">Vision</span>
         </div>
       </div>
 
       <div class="provider-card">
         <div class="provider-name">Groq</div>
-        <div class="provider-models">
-          Llama 4 Scout 17B, Llama 3.3 70B<br>
-          Llama 3.1 8B, Qwen 3 32B
-          <span class="tag tag-vision">Llama 4</span>
+        <div class="provider-count">Llama 4 Scout, Llama 3.3 70B, Qwen, and more</div>
+        <div class="provider-tags">
+          <span class="tag tag-vision">Vision</span>
         </div>
       </div>
 
       <div class="provider-card">
-        <div class="provider-name">Ollama + OpenRouter</div>
-        <div class="provider-models">
-          Any local model via Ollama<br>
-          200+ models via OpenRouter
+        <div class="provider-name">OpenRouter</div>
+        <div class="provider-count">200+ models via unified API</div>
+        <div class="provider-tags">
+          <span class="tag tag-vision">Vision</span>
+          <span class="tag tag-thinking">Thinking</span>
         </div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">Ollama</div>
+        <div class="provider-count">Any local model -- Llama, Mistral, Phi, etc.</div>
+        <div class="provider-tags"></div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">Together AI</div>
+        <div class="provider-count">Llama, Mixtral, CodeLlama, Qwen</div>
+        <div class="provider-tags">
+          <span class="tag tag-vision">Vision</span>
+        </div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">Fireworks</div>
+        <div class="provider-count">Llama, Mixtral, and fine-tuned models</div>
+        <div class="provider-tags">
+          <span class="tag tag-vision">Vision</span>
+        </div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">Cohere</div>
+        <div class="provider-count">Command R, Command R+</div>
+        <div class="provider-tags"></div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">Perplexity</div>
+        <div class="provider-count">Sonar Pro, Sonar</div>
+        <div class="provider-tags"></div>
+      </div>
+
+      <div class="provider-card">
+        <div class="provider-name">AI21</div>
+        <div class="provider-count">Jamba 1.5 Large, Jamba 1.5 Mini</div>
+        <div class="provider-tags"></div>
       </div>
     </div>
   </section>
 
+  <hr class="divider">
+
   <!-- Comparison -->
-  <section class="comparison" id="comparison">
-    <h2>How OpenMagic compares</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Feature</th>
-          <th>OpenMagic</th>
-          <th>Stagewise</th>
-          <th>Frontman</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Install method</td>
-          <td><code>npx openmagic</code></td>
-          <td>Electron app</td>
-          <td>Framework middleware</td>
-        </tr>
-        <tr>
-          <td>Framework support</td>
-          <td><span class="check">Any (reverse proxy)</span></td>
-          <td>React, Vue, Angular, Svelte</td>
-          <td>Next.js, Astro, Vite</td>
-        </tr>
-        <tr>
-          <td>Code modification</td>
-          <td><span class="check">Yes (auto-apply)</span></td>
-          <td>Yes (via IDE)</td>
-          <td>Yes</td>
-        </tr>
-        <tr>
-          <td>BYOK / No prompt limits</td>
-          <td><span class="check">Yes / Unlimited</span></td>
-          <td>Paid tiers</td>
-          <td>Yes / Unlimited</td>
-        </tr>
-        <tr>
-          <td>Screenshots + Vision</td>
-          <td><span class="check">Yes</span></td>
-          <td>Yes</td>
-          <td><span class="cross">No</span></td>
-        </tr>
-        <tr>
-          <td>Thinking models</td>
-          <td><span class="check">Auto-configured</span></td>
-          <td><span class="cross">No</span></td>
-          <td><span class="cross">No</span></td>
-        </tr>
-        <tr>
-          <td>Multi-repo</td>
-          <td><span class="check">Yes</span></td>
-          <td><span class="cross">No</span></td>
-          <td><span class="cross">No</span></td>
-        </tr>
-        <tr>
-          <td>IDE required</td>
-          <td><span class="check">No</span></td>
-          <td>VS Code extension</td>
-          <td><span class="check">No</span></td>
-        </tr>
-        <tr>
-          <td>Open source</td>
-          <td><span class="check">MIT</span></td>
-          <td>Partial</td>
-          <td>Apache 2.0</td>
-        </tr>
-      </tbody>
-    </table>
+  <section class="section" id="comparison">
+    <div class="section-header">
+      <h2>How OpenMagic compares</h2>
+      <p>Honest feature comparison with alternatives in the space.</p>
+    </div>
+
+    <div class="comparison-wrap">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="highlight">OpenMagic</th>
+            <th>Stagewise</th>
+            <th>Frontman</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Install</td>
+            <td class="highlight"><code style="color:var(--green);">npx openmagic</code></td>
+            <td>Electron app</td>
+            <td>Framework middleware</td>
+          </tr>
+          <tr>
+            <td>Architecture</td>
+            <td class="highlight"><span class="check">Reverse proxy</span></td>
+            <td>IDE extension + browser</td>
+            <td>Build plugin</td>
+          </tr>
+          <tr>
+            <td>Framework support</td>
+            <td class="highlight"><span class="check">Any framework</span></td>
+            <td>React, Vue, Angular, Svelte</td>
+            <td>Next.js, Astro, Vite</td>
+          </tr>
+          <tr>
+            <td>Code changes required</td>
+            <td class="highlight"><span class="check">None</span></td>
+            <td>VS Code extension</td>
+            <td>Middleware import</td>
+          </tr>
+          <tr>
+            <td>BYOK / No limits</td>
+            <td class="highlight"><span class="check">Yes / Unlimited</span></td>
+            <td>Paid tiers</td>
+            <td>Yes / Unlimited</td>
+          </tr>
+          <tr>
+            <td>Providers</td>
+            <td class="highlight"><span class="check">14 providers</span></td>
+            <td>Limited</td>
+            <td>OpenAI, Anthropic</td>
+          </tr>
+          <tr>
+            <td>Vision / Screenshots</td>
+            <td class="highlight"><span class="check">Yes</span></td>
+            <td>Yes</td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>Thinking models</td>
+            <td class="highlight"><span class="check">Auto-configured</span></td>
+            <td><span class="cross">No</span></td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>Diff preview</td>
+            <td class="highlight"><span class="check">Yes</span></td>
+            <td><span class="cross">No</span></td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>Undo</td>
+            <td class="highlight"><span class="check">Yes</span></td>
+            <td>Via IDE</td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>IDE required</td>
+            <td class="highlight"><span class="check">No</span></td>
+            <td>VS Code</td>
+            <td><span class="check">No</span></td>
+          </tr>
+          <tr>
+            <td>License</td>
+            <td class="highlight"><span class="check">MIT</span></td>
+            <td>Partial</td>
+            <td>Apache 2.0</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <!-- Footer -->
   <footer>
-    <div class="footer-links">
-      <a href="https://github.com/Kalmuraee/OpenMagic">GitHub</a>
-      <a href="https://www.npmjs.com/package/openmagic">npm</a>
-      <a href="https://github.com/Kalmuraee/OpenMagic/issues">Issues</a>
-      <a href="https://github.com/Kalmuraee/OpenMagic/blob/main/LICENSE">MIT License</a>
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="https://github.com/Kalmuraee/OpenMagic">GitHub</a>
+        <a href="https://www.npmjs.com/package/openmagic">npm</a>
+        <a href="https://github.com/Kalmuraee/OpenMagic/issues">Issues</a>
+        <a href="https://github.com/Kalmuraee/OpenMagic/blob/main/LICENSE">MIT License</a>
+      </div>
+      <div class="footer-credit">
+        Built by <a href="https://github.com/kalmuraee">Khalid Almuraee</a> (<a href="https://x.com/kalmuraee">@kalmuraee</a>)
+      </div>
     </div>
-    <p>Created by <a href="https://github.com/kalmuraee">Khalid Almuraee</a> &middot; Built with love for developers who vibe code on their own terms.</p>
   </footer>
 
 </body>

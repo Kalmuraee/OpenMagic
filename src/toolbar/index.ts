@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.29.2";
+const CURRENT_VERSION = "0.29.3";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -451,6 +451,21 @@ async function applyDiff(target: HTMLElement) {
   const replaceB64 = target.dataset.replace;
   if (!file || !searchB64 || !replaceB64) return;
 
+  // Instant visual feedback — disable button and show spinner BEFORE any async work
+  target.disabled = true;
+  target.innerHTML = '<span class="om-spinner"></span>';
+  target.style.opacity = "0.5";
+  target.style.pointerEvents = "none";
+
+  const card = target.closest(".om-diff-card") as HTMLElement | null;
+  if (card) {
+    const actions = card.querySelector(".om-diff-actions");
+    if (actions) actions.innerHTML = '<span class="om-spinner"></span> Applying...';
+  }
+
+  // Force browser repaint before starting async work
+  await new Promise(r => requestAnimationFrame(r));
+
   let search: string, replace: string;
   try {
     search = decodeBase64Utf8(searchB64);
@@ -461,14 +476,7 @@ async function applyDiff(target: HTMLElement) {
     return;
   }
 
-  const card = target.closest(".om-diff-card") as HTMLElement | null;
   const filePath = resolveFilePath(file);
-
-  // Show applying state
-  if (card) {
-    const actions = card.querySelector(".om-diff-actions");
-    if (actions) actions.innerHTML = '<span class="om-spinner"></span> Applying...';
-  }
 
   try {
     // Handle create (empty search = write entire file)
@@ -540,12 +548,19 @@ async function applyDiff(target: HTMLElement) {
 }
 
 function rejectDiff(target: HTMLElement) {
+  // Instant feedback
+  target.disabled = true;
+  target.style.opacity = "0.5";
+
   const idx = target.dataset.idx;
   if (idx !== undefined) {
     const i = parseInt(idx);
-    const parts = state.messages[i]?.content.split("__");
-    const file = parts?.[3] || "file";
-    state.messages[i] = { role: "system", content: `Rejected change to ${file}` };
+    try {
+      const diff = JSON.parse(decodeBase64Utf8(state.messages[i]?.content.slice(8) || ""));
+      state.messages[i] = { role: "system", content: `Rejected change to ${diff.file || "file"}` };
+    } catch {
+      state.messages[i] = { role: "system", content: "Change rejected" };
+    }
   }
   refreshPanelContent();
   scrollChatToBottom();

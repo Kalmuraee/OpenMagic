@@ -39,7 +39,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.28.6";
+const VERSION = "0.29.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -212,9 +212,26 @@ program
       console.log(chalk.dim("  Scanning for dev server..."));
       const detected = await detectDevServer();
 
-      if (detected) {
+      if (detected && detected.fromScripts) {
+        // Trusted detection via package.json scripts
         targetPort = detected.port;
         targetHost = detected.host;
+      } else if (detected && !detected.fromScripts) {
+        // Found a port via generic scan — confirm with user
+        const answer = await ask(
+          chalk.yellow(`  Found a server on port ${detected.port}. Is this your project's dev server? `) +
+          chalk.dim("(y/n) ")
+        );
+        if (answer.toLowerCase() === "y" || answer.toLowerCase() === "yes" || answer === "") {
+          targetPort = detected.port;
+          targetHost = detected.host;
+        } else {
+          console.log("");
+          console.log(chalk.dim("  Start your dev server, then run:"));
+          console.log(chalk.cyan("    npx openmagic --port <your-port>"));
+          console.log("");
+          process.exit(0);
+        }
       } else {
         // No server running — try to detect and start from package.json
         const started = await offerToStartDevServer();

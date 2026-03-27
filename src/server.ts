@@ -19,7 +19,7 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.17.1";
+const VERSION = "0.18.0";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface ClientState {

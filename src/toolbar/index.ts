@@ -84,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.17.1";
+const CURRENT_VERSION = "0.18.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -778,8 +778,8 @@ async function sendPrompt() {
   }
 
   // Grounding: read project tree + score and read relevant source files
-  const MAX_GROUNDED_FILES = 4;
-  const MAX_GROUNDED_CHARS = 24000;
+  const MAX_GROUNDED_FILES = 5;
+  const MAX_GROUNDED_CHARS = 32000;
   const TEXT_RE = /\.(?:[cm]?[jt]sx?|svelte|vue|astro|html?|css|scss|less|php|py)$/i;
 
   try {
@@ -788,19 +788,60 @@ async function sendPrompt() {
       context.projectTree = treeResult.payload.projectTree;
     }
 
-    // Score files by relevance to the prompt + selected element
     const allFiles = (treeResult?.payload?.files || []) as Array<{ path: string; type: string }>;
     const textFiles = allFiles.filter((f: { path: string; type: string }) => f.type === "file" && TEXT_RE.test(f.path));
 
-    // Extract search tokens from prompt and selected element
-    const searchTokens = [text, state.selectedElement?.tagName, state.selectedElement?.id, state.selectedElement?.className, state.selectedElement?.textContent]
-      .filter(Boolean).join(" ").toLowerCase().split(/[^a-z0-9_-]+/).filter((t: string) => t.length >= 2);
+    // Build search tokens from multiple sources
+    const tokenSources: string[] = [text];
+
+    // Add element metadata
+    if (state.selectedElement) {
+      if (state.selectedElement.id) tokenSources.push(state.selectedElement.id);
+      if (state.selectedElement.className) tokenSources.push(state.selectedElement.className);
+      if (state.selectedElement.textContent) tokenSources.push(state.selectedElement.textContent.slice(0, 100));
+      if ((state.selectedElement as any).componentHint) tokenSources.push((state.selectedElement as any).componentHint);
+      // Add ancestry class/component names
+      if ((state.selectedElement as any).ancestry) {
+        for (const a of (state.selectedElement as any).ancestry) {
+          tokenSources.push(a);
+        }
+      }
+    }
+
+    const searchTokens = tokenSources
+      .filter(Boolean).join(" ").toLowerCase()
+      .split(/[^a-z0-9_-]+/)
+      .filter((t: string) => t.length >= 2 && !["the", "to", "in", "of", "and", "div", "span", "class", "style"].includes(t));
+
+    // Extract URL route segments (highest signal for finding the right page component)
+    const pathname = window.location.pathname;
+    const routeTokens = pathname.split("/").filter((s: string) => s.length > 1 && !/^\d+$/.test(s));
 
     const scored = textFiles.map((f: { path: string; type: string }) => {
       let score = 0;
       const lower = f.path.toLowerCase();
-      for (const token of searchTokens) { if (lower.includes(token)) score += 5; }
-      if (/(component|page|route|app|src|view|template)/.test(lower)) score += 2;
+
+      // Route match: files matching URL path get highest priority (+15)
+      for (const rt of routeTokens) {
+        if (lower.includes(rt.toLowerCase())) score += 15;
+      }
+
+      // Component hint match (+12)
+      if ((state.selectedElement as any)?.componentHint) {
+        const hint = (state.selectedElement as any).componentHint.toLowerCase();
+        if (lower.includes(hint)) score += 12;
+      }
+
+      // Token match from prompt/element (+5)
+      for (const token of searchTokens) {
+        if (lower.includes(token)) score += 5;
+      }
+
+      // Framework patterns (+3)
+      if (/(component|page|route|layout|template|view)/.test(lower)) score += 3;
+      // Page/route files for current route get extra (+5)
+      if (/page\.[jt]sx?$|layout\.[jt]sx?$|\+page\.svelte$/.test(lower)) score += 5;
+
       return { ...f, score };
     }).sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 
@@ -808,6 +849,7 @@ async function sendPrompt() {
     const files: Array<{ path: string; content: string }> = [];
     let totalChars = 0;
     for (const f of scored.slice(0, MAX_GROUNDED_FILES)) {
+      if (f.score <= 0) break; // Only read files with positive relevance
       if (totalChars >= MAX_GROUNDED_CHARS) break;
       try {
         const root = state.roots[0] || "";

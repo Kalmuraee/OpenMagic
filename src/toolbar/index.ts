@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.1";
+const CURRENT_VERSION = "0.28.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1231,8 +1231,21 @@ async function sendPrompt() {
         continue; // Retry with the new file context
       }
 
-      // Got a real response — process it
-      state.messages.push({ role: "assistant", content: responseContent });
+      // Got a real response — extract clean text from JSON wrapper
+      let displayContent = responseContent;
+      try {
+        const parsed = JSON.parse(responseContent);
+        if (parsed.explanation) displayContent = parsed.explanation;
+      } catch {
+        const mdMatch = responseContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (mdMatch) {
+          try {
+            const p = JSON.parse(mdMatch[1]);
+            if (p.explanation) displayContent = p.explanation;
+          } catch {}
+        }
+      }
+      state.messages.push({ role: "assistant", content: displayContent });
 
       if (result?.modifications?.length) {
         for (const mod of result.modifications) {

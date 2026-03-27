@@ -1,7 +1,7 @@
 import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
-import { captureScreenshot } from "./services/capture.js";
+import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 
 // ── SVG Icons (Lucide-style) ─────────────────────────────────────
@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.0";
+const CURRENT_VERSION = "0.28.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1426,17 +1426,21 @@ function exitSelectMode() {
 }
 
 async function takeScreenshot() {
-  // If element is selected, try element screenshot first
   let target: HTMLElement | undefined;
   try {
     const sel = state.selectedElement?.cssSelector?.trim();
     if (sel) target = (document.querySelector(sel) as HTMLElement) || undefined;
   } catch { /* stale or invalid selector */ }
-  const ss = await captureScreenshot(target || undefined);
-  if (ss) {
-    state.screenshot = ss;
+
+  const result = await captureScreenshotWithFeedback(target || undefined);
+  if (result.data) {
+    state.screenshot = result.data;
     updatePromptContext();
     $promptInput.focus();
+  } else if (result.error) {
+    state.messages.push({ role: "system", content: result.error });
+    openPanel("chat");
+    refreshPanelContent();
   }
 }
 

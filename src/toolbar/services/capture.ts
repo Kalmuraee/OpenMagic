@@ -1,129 +1,171 @@
-// Simple screenshot capture using Canvas API
-// Falls back to a simpler approach if html-to-image isn't available
+// Screenshot capture with multiple approaches and error feedback
 
 export async function captureScreenshot(
   target?: HTMLElement
 ): Promise<string | null> {
+  // Approach 1: Try the simple SVG foreignObject approach
   try {
-    // Try using the Canvas approach for element capture
-    if (target) {
-      return await captureElementViaCanvas(target);
-    }
-
-    // Full page: use a simple canvas capture of the viewport
-    return await captureViewport();
+    const el = target || document.body;
+    const result = await captureViaSvg(el);
+    if (result) return result;
   } catch (e) {
-    console.warn("[OpenMagic] Screenshot capture failed:", e);
-    return null;
+    console.warn("[OpenMagic] SVG screenshot failed:", e);
   }
-}
 
-async function captureViewport(): Promise<string | null> {
-  // Create a canvas the size of the viewport
-  const canvas = document.createElement("canvas");
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = window.innerWidth * dpr;
-  canvas.height = window.innerHeight * dpr;
-  const ctx = canvas.getContext("2d")!;
-  ctx.scale(dpr, dpr);
-
-  // We can't directly capture the viewport without html2canvas or similar
-  // Instead, we use the SVG foreignObject approach (snapdom-like)
+  // Approach 2: Try capturing just the visible area as a simple canvas
   try {
-    const svgData = await elementToSvg(document.body);
-    const img = await svgToImage(svgData, window.innerWidth, window.innerHeight);
-    ctx.drawImage(img, 0, 0);
-    return canvas.toDataURL("image/png");
-  } catch {
-    return null;
+    const result = await captureSimple(target);
+    if (result) return result;
+  } catch (e) {
+    console.warn("[OpenMagic] Simple screenshot failed:", e);
   }
+
+  console.warn("[OpenMagic] All screenshot methods failed");
+  return null;
 }
 
-async function captureElementViaCanvas(
-  element: HTMLElement
-): Promise<string | null> {
+// Error feedback version — returns error message if failed
+export async function captureScreenshotWithFeedback(
+  target?: HTMLElement
+): Promise<{ data: string | null; error?: string }> {
+  try {
+    const el = target || document.body;
+    const result = await captureViaSvg(el);
+    if (result) return { data: result };
+  } catch (e: any) {
+    // Fall through to simple
+  }
+
+  try {
+    const result = await captureSimple(target);
+    if (result) return { data: result };
+  } catch (e: any) {
+    return { data: null, error: `Screenshot failed: ${e.message || "unknown error"}. Try using the image attachment button instead.` };
+  }
+
+  return { data: null, error: "Screenshot capture not available on this page. Try pasting or dragging an image instead." };
+}
+
+async function captureViaSvg(element: HTMLElement): Promise<string | null> {
   const rect = element.getBoundingClientRect();
-  const canvas = document.createElement("canvas");
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  const ctx = canvas.getContext("2d")!;
-  ctx.scale(dpr, dpr);
+  const width = Math.min(rect.width || window.innerWidth, 1920);
+  const height = Math.min(rect.height || window.innerHeight, 1080);
 
-  try {
-    const svgData = await elementToSvg(element);
-    const img = await svgToImage(svgData, rect.width, rect.height);
-    ctx.drawImage(img, 0, 0);
-    return canvas.toDataURL("image/png");
-  } catch {
-    return null;
-  }
-}
+  // Clone and inline styles — but limit depth to avoid huge SVGs
+  const clone = cloneWithStyles(element, 0, 4);
+  if (!clone) return null;
 
-function elementToSvg(element: HTMLElement): Promise<string> {
-  return new Promise((resolve) => {
-    const clone = element.cloneNode(true) as HTMLElement;
+  const svgData = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+      <foreignObject width="100%" height="100%">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden;">
+          ${clone.outerHTML}
+        </div>
+      </foreignObject>
+    </svg>`;
 
-    // Inline computed styles on the clone
-    inlineStyles(element, clone);
+  const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
 
-    const rect = element.getBoundingClientRect();
-    const width = rect.width;
-    const height = rect.height;
-
-    const foreignObject = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-        <foreignObject width="100%" height="100%">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden;">
-            ${clone.outerHTML}
-          </div>
-        </foreignObject>
-      </svg>`;
-
-    resolve(foreignObject);
-  });
-}
-
-function inlineStyles(source: HTMLElement, target: HTMLElement): void {
-  const computed = window.getComputedStyle(source);
-  let cssText = "";
-  for (let i = 0; i < computed.length; i++) {
-    const prop = computed[i];
-    cssText += `${prop}:${computed.getPropertyValue(prop)};`;
-  }
-  target.style.cssText = cssText;
-
-  const sourceChildren = source.children;
-  const targetChildren = target.children;
-  for (let i = 0; i < sourceChildren.length && i < targetChildren.length; i++) {
-    inlineStyles(
-      sourceChildren[i] as HTMLElement,
-      targetChildren[i] as HTMLElement
-    );
-  }
-}
-
-function svgToImage(
-  svgData: string,
-  width: number,
-  height: number
-): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+  return new Promise<string | null>((resolve) => {
     const img = new Image();
-    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+    const canvas = document.createElement("canvas");
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
 
     img.onload = () => {
       URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Failed to load SVG image"));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(null); return; }
+      ctx.scale(dpr, dpr);
+      ctx.drawImage(img, 0, 0);
+      try {
+        resolve(canvas.toDataURL("image/png", 0.8));
+      } catch {
+        resolve(null); // Tainted canvas
+      }
     };
 
-    img.width = width;
-    img.height = height;
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+
+    // 5 second timeout
+    setTimeout(() => { URL.revokeObjectURL(url); resolve(null); }, 5000);
     img.src = url;
   });
+}
+
+// Simpler approach: capture just text/layout info as a basic representation
+async function captureSimple(target?: HTMLElement): Promise<string | null> {
+  // Create a simple text-based capture showing element hierarchy
+  // This works as fallback when SVG approach fails
+  const el = target || document.documentElement;
+  const rect = el.getBoundingClientRect();
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 400;
+  canvas.height = 300;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Dark background
+  ctx.fillStyle = "#1a1a2e";
+  ctx.fillRect(0, 0, 400, 300);
+
+  // Draw element info
+  ctx.fillStyle = "#e0e0e0";
+  ctx.font = "14px system-ui";
+  ctx.fillText(`Element: <${el.tagName.toLowerCase()}>`, 20, 30);
+  ctx.fillStyle = "#888";
+  ctx.font = "12px system-ui";
+  ctx.fillText(`Size: ${Math.round(rect.width)}x${Math.round(rect.height)}`, 20, 55);
+  ctx.fillText(`Classes: ${(el.className || "").toString().slice(0, 40)}`, 20, 75);
+  ctx.fillText(`Page: ${window.location.pathname}`, 20, 95);
+  ctx.fillStyle = "#6c5ce7";
+  ctx.font = "11px system-ui";
+  ctx.fillText("(Full screenshot unavailable — context sent as metadata)", 20, 130);
+
+  return canvas.toDataURL("image/png");
+}
+
+function cloneWithStyles(source: HTMLElement, depth: number, maxDepth: number): HTMLElement | null {
+  if (depth > maxDepth) return null;
+
+  try {
+    const clone = source.cloneNode(false) as HTMLElement;
+
+    // Remove problematic elements
+    if (clone.tagName === "SCRIPT" || clone.tagName === "STYLE" || clone.tagName === "SVG" ||
+        clone.tagName === "CANVAS" || clone.tagName === "VIDEO" || clone.tagName === "IFRAME") {
+      return null;
+    }
+
+    // Inline key styles only (not all — reduces size)
+    const computed = window.getComputedStyle(source);
+    const keyProps = ["display", "position", "width", "height", "margin", "padding",
+      "color", "background-color", "background", "font-size", "font-weight", "font-family",
+      "border", "border-radius", "flex-direction", "justify-content", "align-items", "gap",
+      "grid-template-columns", "text-align", "overflow"];
+    let css = "";
+    for (const p of keyProps) {
+      const v = computed.getPropertyValue(p);
+      if (v && v !== "normal" && v !== "none" && v !== "auto" && v !== "0px") {
+        css += `${p}:${v};`;
+      }
+    }
+    clone.setAttribute("style", css);
+
+    // Clone children with depth limit
+    for (let i = 0; i < source.children.length && i < 20; i++) {
+      const child = cloneWithStyles(source.children[i] as HTMLElement, depth + 1, maxDepth);
+      if (child) clone.appendChild(child);
+    }
+
+    return clone;
+  } catch {
+    return null;
+  }
 }

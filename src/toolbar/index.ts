@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.5";
+const CURRENT_VERSION = "0.28.6";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -841,7 +841,7 @@ function renderChatHTML(): string {
   }).join("");
 
   const streamHtml = state.streaming
-    ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span>${escapeHtml(state.streamContent)}</div>` : "";
+    ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span> Generating response...</div>` : "";
 
   const empty = !state.messages.length && !state.streaming
     ? `<div class="om-chat-empty">Select an element or type below to start</div>` : "";
@@ -1184,11 +1184,8 @@ async function sendPrompt() {
         },
         (chunk: string) => {
           state.streamContent += chunk;
-          const msgEl = $panelBody.querySelector(".om-msg-assistant:last-child");
-          if (msgEl) {
-            msgEl.innerHTML = `<span class="om-spinner"></span>${escapeHtml(state.streamContent)}`;
-            scrollChatToBottom();
-          }
+          // Don't show raw JSON chunks — just keep the spinner
+          // The clean formatted response will appear after streaming completes
         }
       );
 

@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.27.1";
+const CURRENT_VERSION = "0.28.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -472,6 +472,21 @@ async function applyDiff(target: HTMLElement) {
   }
 
   try {
+    // Handle create (empty search = write entire file)
+    if (!search && replace) {
+      const writeResult = await ws.request("fs.write", { path: filePath, content: replace });
+      if (writeResult?.payload?.ok === false) {
+        state.messages.push({ role: "system", content: `Write failed: ${file}` });
+      } else {
+        const idx = card?.dataset.diffIdx;
+        if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: `Created ${file}` };
+        else state.messages.push({ role: "system", content: `Created ${file}` });
+      }
+      refreshPanelContent();
+      scrollChatToBottom();
+      return;
+    }
+
     const fileResult = await ws.request("fs.read", { path: filePath });
     const content = fileResult?.payload?.content;
 
@@ -795,12 +810,14 @@ function renderChatHTML(): string {
     if (m.content.startsWith("__DIFF__")) {
       try {
         const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
-        const searchB64 = encodeBase64Utf8(diff.search);
-        const replaceB64 = encodeBase64Utf8(diff.replace);
+        const isCreate = diff.type === "create" || (!diff.search && diff.replace);
+        const searchB64 = encodeBase64Utf8(diff.search || "");
+        const replaceB64 = encodeBase64Utf8(diff.replace || "");
+        const label = isCreate ? "Create new file" : "Edit";
         return `<div class="om-diff-card" data-diff-idx="${i}">
-          <div class="om-diff-file">${escapeHtml(diff.file)}</div>
-          <div class="om-diff-removed">${escapeHtml(diff.search.slice(0, 200))}</div>
-          <div class="om-diff-added">${escapeHtml(diff.replace.slice(0, 200))}</div>
+          <div class="om-diff-file">${escapeHtml(label)}: ${escapeHtml(diff.file)}</div>
+          ${diff.search ? `<div class="om-diff-removed">${escapeHtml(diff.search.slice(0, 200))}</div>` : ""}
+          <div class="om-diff-added">${escapeHtml((diff.replace || "").slice(0, 300))}</div>
           <div class="om-diff-actions">
             <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
             <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
@@ -1225,6 +1242,18 @@ async function sendPrompt() {
             state.messages.push({
               role: "system",
               content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
+            });
+          } else if (mod.type === "create" && mod.file && (mod as any).content) {
+            const diffId = Math.random().toString(36).slice(2);
+            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: "", replace: (mod as any).content, type: "create" });
+            state.messages.push({
+              role: "system",
+              content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
+            });
+          } else if (mod.type === "delete" && mod.file) {
+            state.messages.push({
+              role: "system",
+              content: `LLM proposed deleting ${mod.file} — skipped (use edit with search/replace instead)`,
             });
           }
         }

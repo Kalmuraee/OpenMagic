@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.3";
+const CURRENT_VERSION = "0.28.4";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -236,8 +236,7 @@ function buildStaticDOM(): string {
       <div class="om-toolbar-header">
         <span class="om-grab">${ICON.grip}</span>
         <span class="om-pill-brand">
-          <span class="om-pill-icon">${ICON.sparkle}</span>
-          <span class="om-pill-text">OpenMagic</span>
+          <span class="om-pill-text">✨OpenMagic🪄</span>
         </span>
         <span class="om-pill-divider"></span>
         <button class="om-pill-btn" data-action="select" title="Select element">${ICON.crosshair}</button>

@@ -10,6 +10,14 @@ export interface SelectedElement {
   ancestry: string[];
   componentHint: string;
   rect: { x: number; y: number; width: number; height: number };
+  // Enhanced context
+  parentStyles: Record<string, string>;
+  siblings: string[];
+  matchedCssRules: string[];
+  viewport: { width: number; height: number };
+  ariaAttributes: Record<string, string>;
+  eventHandlers: string[];
+  reactProps: Record<string, unknown> | null;
 }
 
 const IMPORTANT_STYLES = [
@@ -51,6 +59,49 @@ export function inspectElement(el: HTMLElement): SelectedElement {
 
   const rect = el.getBoundingClientRect();
 
+  // Parent container styles (critical for layout context)
+  const parentStyles: Record<string, string> = {};
+  if (el.parentElement && el.parentElement !== document.body) {
+    const parentComputed = window.getComputedStyle(el.parentElement);
+    for (const prop of IMPORTANT_STYLES) {
+      parentStyles[prop] = parentComputed.getPropertyValue(prop);
+    }
+  }
+
+  // Sibling elements (layout context — what else is in the same container)
+  const siblings: string[] = [];
+  if (el.parentElement) {
+    const children = Array.from(el.parentElement.children);
+    for (const sib of children.slice(0, 8)) {
+      if (sib === el) {
+        siblings.push(`[SELECTED] <${sib.tagName.toLowerCase()} class="${(sib.className || "").toString().slice(0, 60)}">`);
+      } else {
+        siblings.push(`<${sib.tagName.toLowerCase()} class="${(sib.className || "").toString().slice(0, 60)}">`);
+      }
+    }
+    if (children.length > 8) siblings.push(`... +${children.length - 8} more`);
+  }
+
+  // Matched CSS rules from stylesheets
+  const matchedCssRules = getMatchedCssRules(el);
+
+  // ARIA / accessibility attributes
+  const ariaAttributes: Record<string, string> = {};
+  for (const attr of Array.from(el.attributes)) {
+    if (attr.name.startsWith("aria-") || attr.name === "role" || attr.name === "tabindex") {
+      ariaAttributes[attr.name] = attr.value;
+    }
+  }
+
+  // Event handlers (from element attributes and React props)
+  const eventHandlers: string[] = [];
+  for (const attr of Array.from(el.attributes)) {
+    if (attr.name.startsWith("on")) eventHandlers.push(attr.name);
+  }
+
+  // React props extraction
+  const reactProps = getReactProps(el);
+
   return {
     tagName: el.tagName.toLowerCase(),
     id: el.id || "",
@@ -68,6 +119,13 @@ export function inspectElement(el: HTMLElement): SelectedElement {
       width: rect.width,
       height: rect.height,
     },
+    parentStyles,
+    siblings,
+    matchedCssRules,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    ariaAttributes,
+    eventHandlers,
+    reactProps,
   };
 }
 
@@ -201,6 +259,69 @@ function getXPath(el: HTMLElement): string {
   }
 
   return "/" + parts.join("/");
+}
+
+// --- Matched CSS Rules ---
+
+function getMatchedCssRules(el: HTMLElement): string[] {
+  const rules: string[] = [];
+  try {
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const cssRules = sheet.cssRules || sheet.rules;
+        if (!cssRules) continue;
+        for (const rule of Array.from(cssRules)) {
+          if (rule instanceof CSSStyleRule) {
+            try {
+              if (el.matches(rule.selectorText)) {
+                // Only include rules with meaningful styles (skip resets/normalizers)
+                const text = rule.cssText;
+                if (text.length > 10 && text.length < 500) {
+                  rules.push(text);
+                }
+              }
+            } catch { /* invalid selector */ }
+          }
+        }
+      } catch { /* cross-origin stylesheet */ }
+    }
+  } catch { /* stylesheet access error */ }
+  return rules.slice(0, 15); // Cap at 15 rules
+}
+
+// --- React Props Extraction ---
+
+function getReactProps(el: HTMLElement): Record<string, unknown> | null {
+  try {
+    const keys = Object.keys(el);
+    for (const key of keys) {
+      if (key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance")) {
+        const fiber = (el as any)[key];
+        if (!fiber?.memoizedProps) continue;
+        const props = fiber.memoizedProps;
+        // Extract safe, serializable props (skip functions, React elements, large objects)
+        const safe: Record<string, unknown> = {};
+        let count = 0;
+        for (const [k, v] of Object.entries(props)) {
+          if (count >= 10) break;
+          if (k === "children") continue; // Skip children (too large)
+          const t = typeof v;
+          if (t === "string" || t === "number" || t === "boolean" || v === null) {
+            safe[k] = v;
+            count++;
+          } else if (t === "function") {
+            safe[k] = "[function]";
+            count++;
+          } else if (Array.isArray(v)) {
+            safe[k] = `[Array(${v.length})]`;
+            count++;
+          }
+        }
+        return Object.keys(safe).length > 0 ? safe : null;
+      }
+    }
+  } catch { /* not React or access error */ }
+  return null;
 }
 
 // --- Highlight Overlay ---

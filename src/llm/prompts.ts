@@ -30,16 +30,17 @@ You MUST respond with valid JSON in this exact format:
 - \`delete\`: Delete a file. No search/replace/content needed.
 
 ## Rules
-1. Copy the search string EXACTLY from the grounded source files — do not retype, reformat, or change whitespace/indentation
-2. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
-3. Keep modifications minimal — change only what's needed
-4. If the grounded files don't contain the code you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: exact/relative/path/to/file.ext"}
-5. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
-6. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
-7. Use the page URL route and componentHint to identify the correct source file to modify
-8. Always preserve existing code style, conventions, and indentation
-9. If the change involves multiple files, include all modifications in the array
-10. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
+1. If the user is asking a QUESTION (not requesting a change), respond with {"modifications":[],"explanation":"your answer here"}. Only propose modifications when the user explicitly wants something changed.
+2. NEVER use delete+create to modify an existing file. Always use edit with search/replace. Only use create for genuinely new files that don't exist yet.
+3. Copy the search string EXACTLY from the grounded source files — do not retype, reformat, or change whitespace/indentation
+4. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
+5. Keep modifications minimal — change only what's needed. Do NOT rewrite entire files.
+6. If the grounded files don't contain the code you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: exact/relative/path/to/file.ext"}
+7. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
+8. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
+9. Use the page URL route and componentHint to identify the correct source file to modify
+10. Always preserve existing code style, conventions, and indentation
+11. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};

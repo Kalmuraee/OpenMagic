@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.28.2";
+const CURRENT_VERSION = "0.28.3";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1445,13 +1445,22 @@ async function takeScreenshot() {
     if (sel) target = (document.querySelector(sel) as HTMLElement) || undefined;
   } catch { /* stale or invalid selector */ }
 
+  // Try programmatic capture first
   const result = await captureScreenshotWithFeedback(target || undefined);
-  if (result.data) {
+
+  // Check if we got a real screenshot (not just the fallback info card)
+  const isRealScreenshot = result.data && result.data.length > 5000; // Real screenshots are >5KB
+
+  if (isRealScreenshot) {
     state.screenshot = result.data;
     updatePromptContext();
     $promptInput.focus();
-  } else if (result.error) {
-    state.messages.push({ role: "system", content: result.error });
+  } else {
+    // Programmatic capture failed or only got metadata — guide user to paste
+    state.messages.push({
+      role: "system",
+      content: "Take a screenshot manually (Cmd+Shift+4 on Mac, Win+Shift+S on Windows), then paste it here (Ctrl+V) or drag it onto the prompt bar."
+    });
     openPanel("chat");
     refreshPanelContent();
   }

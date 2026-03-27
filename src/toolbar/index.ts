@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.29.3";
+const CURRENT_VERSION = "0.29.4";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -452,7 +452,7 @@ async function applyDiff(target: HTMLElement) {
   if (!file || !searchB64 || !replaceB64) return;
 
   // Instant visual feedback — disable button and show spinner BEFORE any async work
-  target.disabled = true;
+  (target as HTMLButtonElement).disabled = true;
   target.innerHTML = '<span class="om-spinner"></span>';
   target.style.opacity = "0.5";
   target.style.pointerEvents = "none";
@@ -549,7 +549,7 @@ async function applyDiff(target: HTMLElement) {
 
 function rejectDiff(target: HTMLElement) {
   // Instant feedback
-  target.disabled = true;
+  (target as HTMLButtonElement).disabled = true;
   target.style.opacity = "0.5";
 
   const idx = target.dataset.idx;

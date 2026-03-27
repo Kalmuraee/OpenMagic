@@ -84,7 +84,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.21.0";
+const CURRENT_VERSION = "0.22.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -959,6 +959,42 @@ async function sendPrompt() {
             break; // Only read the first matching style file
           }
         }
+        // Follow imports: extract local imports from the file and auto-read referenced components
+        const importMatches = content.matchAll(/(?:import|from)\s+['"]\.?\.\/([\w/.-]+)['"]/g);
+        for (const im of importMatches) {
+          if (totalChars >= MAX_GROUNDED_CHARS) break;
+          const importPath = im[1];
+          // Find matching file in the project (try with common extensions)
+          const dir = f.path.replace(/\/[^/]+$/, "");
+          const candidates = [
+            `${dir}/${importPath}`,
+            `${dir}/${importPath}.tsx`,
+            `${dir}/${importPath}.ts`,
+            `${dir}/${importPath}.jsx`,
+            `${dir}/${importPath}.js`,
+            `${dir}/${importPath}/index.tsx`,
+            `${dir}/${importPath}/index.ts`,
+          ];
+          for (const candidate of candidates) {
+            if (readPaths.has(candidate)) break;
+            const found = textFiles.find((tf: { path: string }) => tf.path === candidate);
+            if (found) {
+              try {
+                const ir = await ws.request("fs.read", { path: root ? `${root}/${candidate}` : candidate });
+                const ic = String(ir?.payload?.content || "");
+                if (ic) {
+                  const imMax = Math.min(8000, MAX_GROUNDED_CHARS - totalChars);
+                  let it = ic.slice(0, imMax);
+                  if (ic.length > imMax) it += `\n// [FILE TRUNCATED — showing ${imMax} of ${ic.length} chars]`;
+                  files.push({ path: candidate, content: it });
+                  readPaths.add(candidate);
+                  totalChars += it.length;
+                }
+              } catch {}
+              break;
+            }
+          }
+        }
       } catch { /* skip unreadable files */ }
     }
 
@@ -985,8 +1021,8 @@ async function sendPrompt() {
     if (files.length) context.files = files;
   } catch { /* grounding is best-effort */ }
 
-  // Auto-retry loop: if LLM says "NEED_FILE: path", read it and retry (up to 2 retries)
-  const MAX_RETRIES = 2;
+  // Auto-retry loop: if LLM says "NEED_FILE: path", read it and retry
+  const MAX_RETRIES = 4;
   let retryCount = 0;
 
   try {

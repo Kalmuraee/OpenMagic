@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.23.0";
+const CURRENT_VERSION = "0.24.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -357,25 +357,32 @@ function attachGlobalEvents(root: HTMLElement) {
     }
   });
 
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts (scoped to avoid stealing host app shortcuts)
   document.addEventListener("keydown", (e) => {
-    // Ctrl/Cmd + Shift + O: toggle toolbar visibility
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "O") {
+    // Ctrl/Cmd + Shift + O: toggle toolbar — always works (unique combo)
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) {
       e.preventDefault();
-      if ($toolbar.style.display === "none") {
-        $toolbar.style.display = "";
+      if (state.minimized) {
+        state.minimized = false;
+        // Restore toolbar elements
+        const headerBtns = $toolbar.querySelectorAll(".om-pill-btn:not([data-action='minimize']), .om-pill-divider, .om-status-dot");
+        headerBtns.forEach(el => (el as HTMLElement).style.display = "");
+        const promptRow = shadow.querySelector(".om-prompt-row") as HTMLElement;
+        if (promptRow) promptRow.classList.remove("om-hidden");
       } else if (state.panelOpen) {
         closePanel();
       } else {
         openPanel("chat");
       }
+      return;
     }
-    // Escape: close panel (if not in select mode)
+    // Escape: only handle if the active element is inside the toolbar shadow DOM
+    // or if we're in select mode. Don't steal from host app inputs.
     if (e.key === "Escape") {
-      if (state.selecting) {
-        // Already handled by select mode's own ESC handler
-      } else if (state.panelOpen) {
+      if (state.selecting) return; // select mode has its own ESC handler
+      if (state.panelOpen) {
         closePanel();
+        e.preventDefault();
       }
     }
   });
@@ -588,6 +595,17 @@ function handleAction(action: string, target: HTMLElement) {
       refreshPanelContent();
       break;
     }
+    case "copy-msg": {
+      const idx = parseInt(target.dataset.idx || "0", 10);
+      const msg = state.messages[idx];
+      if (msg) {
+        try { navigator.clipboard.writeText(msg.content); } catch {}
+        // Brief feedback
+        target.innerHTML = ICON.check;
+        setTimeout(() => { target.innerHTML = ICON.copy; }, 1500);
+      }
+      break;
+    }
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
     case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
     case "minimize": {
@@ -796,7 +814,14 @@ function renderChatHTML(): string {
       const file = m.content.replace("Applied change to ", "").replace(" (fuzzy match — whitespace adjusted)", "").replace(" (fuzzy match)", "");
       return `<div class="om-msg om-msg-system">${escapeHtml(m.content)} <button class="om-undo-btn" data-action="undo-diff" data-file="${escapeHtml(file)}">Undo</button></div>`;
     }
-    return `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}</div>`;
+    // Regular messages with copy button
+    const copyBtn = (m.role === "user" || m.role === "assistant")
+      ? `<button class="om-copy-btn" data-action="copy-msg" data-idx="${i}" title="Copy">${ICON.copy}</button>`
+      : "";
+    if (m.role === "assistant") {
+      return `<div class="om-msg om-msg-assistant">${renderMarkdown(m.content)}${copyBtn}</div>`;
+    }
+    return `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}${copyBtn}</div>`;
   }).join("");
 
   const streamHtml = state.streaming

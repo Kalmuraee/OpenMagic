@@ -78,6 +78,7 @@ export const TOOLBAR_CSS = `
   display: flex; align-items: center; justify-content: center;
 }
 .om-pill-btn:hover { background: rgba(108, 92, 231, 0.15); color: #a29bfe; }
+.om-pill-btn:focus-visible { outline: 2px solid #6c5ce7; outline-offset: 2px; }
 .om-pill-btn.active { background: rgba(108, 92, 231, 0.25); color: #c4b5fd; }
 
 .om-status-dot {
@@ -126,7 +127,7 @@ export const TOOLBAR_CSS = `
 }
 
 .om-prompt-context {
-  display: flex; gap: 3px; flex-shrink: 0;
+  display: flex; gap: 3px; flex-wrap: wrap; max-width: 200px; overflow: hidden;
 }
 .om-prompt-chip {
   display: flex; align-items: center; gap: 3px;
@@ -336,4 +337,27 @@ export const TOOLBAR_CSS = `
   display: flex; align-items: center; margin-right: 4px;
 }
 .om-panel-clear:hover { color: #e94560; background: rgba(233,69,96,0.08); }
+
+/* ── Code Blocks (Markdown) ─────────────────────────── */
+.om-code-block {
+  background: rgba(0,0,0,0.2); border-radius: 6px; padding: 8px 10px;
+  margin: 6px 0; overflow-x: auto; font-family: 'SF Mono', Consolas, monospace;
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap;
+}
+.om-inline-code {
+  background: rgba(108,92,231,0.1); padding: 1px 4px; border-radius: 3px;
+  font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+}
+
+/* ── Copy Button ─────────────────────────────────────── */
+.om-copy-btn {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.3); border: none; color: #888;
+  cursor: pointer; padding: 3px; border-radius: 4px;
+  opacity: 0; transition: opacity 0.15s;
+  display: flex; align-items: center;
+}
+.om-msg:hover .om-copy-btn { opacity: 1; }
+.om-copy-btn:hover { color: #ccc; background: rgba(0,0,0,0.5); }
+.om-msg { position: relative; }
 `;

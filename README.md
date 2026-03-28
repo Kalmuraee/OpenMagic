@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./docs/logo.png" alt="OpenMagic" width="120" />
+
 # OpenMagic
 
 **Add an AI coding toolbar to any web app. One command. Zero code changes.**

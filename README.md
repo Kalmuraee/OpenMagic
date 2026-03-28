@@ -220,15 +220,17 @@ OpenMagic works via reverse proxy, so it supports any framework that serves HTML
 
 ## Contributing
 
+PRs are welcome! Bug fixes, new providers, UI improvements, docs — all appreciated.
+
 ```bash
 git clone https://github.com/Kalmuraee/OpenMagic.git
 cd OpenMagic
 npm install
 npm run build
-node dist/cli.js --port 3000
+node dist/cli.js --port 3000   # Test with your dev server
 ```
 
-See the repo for project structure and contribution guidelines.
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the full guide — architecture overview, how to add LLM providers, toolbar development, code style, and PR process.
 
 ---
 

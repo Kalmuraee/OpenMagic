@@ -1,6 +1,14 @@
 ## Summary
 
-<!-- Brief description of what this PR does -->
+<!-- Brief description of what this PR does and why -->
+
+## Type of Change
+
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Refactor / cleanup
+- [ ] Documentation
+- [ ] New LLM provider
 
 ## Changes
 
@@ -10,7 +18,12 @@
 
 - [ ] `npm run build` passes
 - [ ] `npm test` passes
-- [ ] Tested manually with a dev server
+- [ ] `npx tsc --noEmit` passes
+- [ ] Tested manually with a dev server (if applicable)
+
+## Notes
+
+<!-- Anything reviewers should know — trade-offs, follow-up work, etc. -->
 
 ## Related Issues
 

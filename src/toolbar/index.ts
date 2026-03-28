@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.6";
+const CURRENT_VERSION = "0.31.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1273,42 +1273,32 @@ async function sendPrompt() {
         const neededFile = needFileMatch[1].trim();
         retryCount++;
 
-        // Update status
-        state.messages.push({ role: "system", content: `Reading ${neededFile}...` });
-        refreshPanelContent();
+        // Show transient status (update the spinner, don't add permanent messages)
+        const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
+        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> Reading ${neededFile}...`;
 
         // Read the requested file — try primary path, then fallbacks
         try {
           const root = state.roots[0] || "";
           const primaryPath = root ? `${root}/${neededFile}` : neededFile;
-          let content: string | undefined;
-          let usedPath = primaryPath;
+          let fileContent: string | undefined;
 
-          // Try primary path
-          const r1 = await ws.request("fs.read", { path: primaryPath }).catch(() => null);
-          content = r1?.payload?.content ? String(r1.payload.content) : undefined;
+          // Try multiple paths
+          const pathsToTry = [primaryPath];
+          if (neededFile !== primaryPath) pathsToTry.push(neededFile);
+          const basename = neededFile.split("/").pop() || neededFile;
+          const baseInRoot = root ? `${root}/${basename}` : basename;
+          if (baseInRoot !== primaryPath && baseInRoot !== neededFile) pathsToTry.push(baseInRoot);
 
-          // Fallback: try as-is (without root prefix)
-          if (!content && neededFile !== primaryPath) {
-            const r2 = await ws.request("fs.read", { path: neededFile }).catch(() => null);
-            if (r2?.payload?.content) { content = String(r2.payload.content); usedPath = neededFile; }
+          for (const p of pathsToTry) {
+            const r = await ws.request("fs.read", { path: p }).catch(() => null);
+            if (r?.payload?.content) { fileContent = String(r.payload.content); break; }
           }
 
-          // Fallback: try just the basename in root
-          if (!content) {
-            const basename = neededFile.split("/").pop() || neededFile;
-            const fallbackPath = root ? `${root}/${basename}` : basename;
-            if (fallbackPath !== primaryPath) {
-              const r3 = await ws.request("fs.read", { path: fallbackPath }).catch(() => null);
-              if (r3?.payload?.content) { content = String(r3.payload.content); usedPath = fallbackPath; }
-            }
-          }
-
-          if (content) {
+          if (fileContent) {
             if (!context.files) context.files = [];
-            context.files.push({ path: neededFile, content: content.slice(0, 8000) });
-            state.messages.push({ role: "assistant", content: responseContent });
-            state.messages.push({ role: "user", content: `Here is ${neededFile}. Now please make the edit.` });
+            context.files.push({ path: neededFile, content: fileContent.slice(0, 8000) });
+            // Don't push visible messages — just add to LLM context silently
           } else {
             state.messages.push({ role: "system", content: `Could not read ${neededFile}` });
             break;

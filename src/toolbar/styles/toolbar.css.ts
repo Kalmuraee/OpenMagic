@@ -322,13 +322,16 @@ export const TOOLBAR_CSS = `
 .om-diff-applied { opacity: 0.5; }
 .om-diff-applied .om-diff-actions { display: none; }
 
-.om-diff-group-header {
+/* Sticky Apply All bar — between panel and prompt */
+.om-apply-bar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 10px; margin: 4px 0;
+  padding: 6px 10px;
   background: rgba(108, 92, 231, 0.06);
-  border: 1px solid rgba(108, 92, 231, 0.12);
-  border-radius: 8px; font-size: 12px; color: #a29bfe;
+  border-top: 1px solid rgba(108, 92, 231, 0.12);
+  border-bottom: 1px solid rgba(108, 92, 231, 0.12);
+  flex-shrink: 0;
 }
+.om-apply-bar-text { font-size: 12px; color: #a29bfe; font-weight: 600; }
 
 /* ── Undo Button ─────────────────────────────────────── */
 .om-undo-btn {

@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.31.0";
+const CURRENT_VERSION = "0.31.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -256,6 +256,13 @@ function buildStaticDOM(): string {
           <button class="om-panel-close" data-action="close-panel">${ICON.x}</button>
         </div>
         <div class="om-panel-body"></div>
+      </div>
+      <div class="om-apply-bar om-hidden">
+        <span class="om-apply-bar-text"></span>
+        <div class="om-diff-actions">
+          <button class="om-btn om-btn-sm" data-action="apply-all">Apply All</button>
+          <button class="om-btn-secondary om-btn-sm" data-action="reject-all">Reject All</button>
+        </div>
       </div>
       <div class="om-prompt-attachments"></div>
       <div class="om-prompt-row">
@@ -589,6 +596,23 @@ function rejectDiff(target: HTMLElement) {
   scrollChatToBottom();
 }
 
+function updateApplyBar(count: number) {
+  const bar = shadow.querySelector(".om-apply-bar") as HTMLElement;
+  if (!bar) return;
+  if (count > 0) {
+    bar.classList.remove("om-hidden");
+    const text = bar.querySelector(".om-apply-bar-text");
+    if (text) text.textContent = `${count} change${count > 1 ? "s" : ""} ready`;
+  } else {
+    bar.classList.add("om-hidden");
+  }
+}
+
+function hideApplyBar() {
+  const bar = shadow.querySelector(".om-apply-bar") as HTMLElement;
+  if (bar) bar.classList.add("om-hidden");
+}
+
 async function undoDiff(target: HTMLElement) {
   const file = target.dataset.file;
   if (!file) return;
@@ -641,25 +665,19 @@ function handleAction(action: string, target: HTMLElement) {
     case "apply-diff": applyDiff(target); break;
     case "reject-diff": rejectDiff(target); break;
     case "apply-all": {
-      const gid = target.dataset.group;
-      if (gid) {
-        const buttons = shadow.querySelectorAll(`[data-action="apply-diff"]`);
-        for (const btn of Array.from(buttons)) {
-          // Check if this diff belongs to the same group by checking nearby diff card
-          const card = btn.closest(".om-diff-card") as HTMLElement;
-          if (card) applyDiff(btn as HTMLElement);
-        }
+      const buttons = shadow.querySelectorAll(`[data-action="apply-diff"]`);
+      for (const btn of Array.from(buttons)) {
+        applyDiff(btn as HTMLElement);
       }
+      hideApplyBar();
       break;
     }
     case "reject-all": {
-      const gid = target.dataset.group;
-      if (gid) {
-        const buttons = shadow.querySelectorAll(`[data-action="reject-diff"]`);
-        for (const btn of Array.from(buttons)) {
-          rejectDiff(btn as HTMLElement);
-        }
+      const buttons = shadow.querySelectorAll(`[data-action="reject-diff"]`);
+      for (const btn of Array.from(buttons)) {
+        rejectDiff(btn as HTMLElement);
       }
+      hideApplyBar();
       break;
     }
     case "undo-diff": undoDiff(target); break;
@@ -866,19 +884,8 @@ function renderChatHTML(): string {
   }
 
   const msgs = state.messages.map((m, i) => {
-    // Diff group header: Apply All / Reject All
-    if (m.content.startsWith("__DIFFGROUP__")) {
-      const parts = m.content.split("__");
-      const gid = parts[2];
-      const count = parts[3];
-      return `<div class="om-diff-group-header">
-        <span>${count} file changes</span>
-        <div class="om-diff-actions">
-          <button class="om-btn om-btn-sm" data-action="apply-all" data-group="${gid}">Apply All</button>
-          <button class="om-btn-secondary om-btn-sm" data-action="reject-all" data-group="${gid}">Reject All</button>
-        </div>
-      </div>`;
-    }
+    // Skip legacy diff group messages
+    if (m.content.startsWith("__DIFFGROUP__")) return "";
     if (m.content.startsWith("__DIFF__")) {
       try {
         const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
@@ -1333,13 +1340,8 @@ async function sendPrompt() {
           (m.type === "create" && m.file && m.content)
         );
 
-        // Show Apply All / Reject All for multi-file changes
-        if (validMods.length > 1) {
-          state.messages.push({
-            role: "system",
-            content: `__DIFFGROUP__${groupId}__${validMods.length}`,
-          });
-        }
+        // Show sticky Apply All bar (for any number of diffs)
+        updateApplyBar(validMods.length);
 
         for (const mod of result.modifications) {
           if (mod.type === "edit" && mod.file && mod.search && mod.replace) {

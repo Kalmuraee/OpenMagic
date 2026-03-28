@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.31.4";
+const CURRENT_VERSION = "0.31.5";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -691,18 +691,23 @@ function handleAction(action: string, target: HTMLElement) {
     }
     case "copy-msg": {
       const idx = parseInt(target.dataset.idx || "0", 10);
-      const debugText = collectDebugInfo(idx);
-      try { navigator.clipboard.writeText(debugText); } catch {}
-      target.innerHTML = ICON.check;
-      setTimeout(() => { target.innerHTML = ICON.copy; }, 1500);
+      target.innerHTML = '<span class="om-spinner"></span>';
+      collectDebugInfo(idx).then(debugText => {
+        try { navigator.clipboard.writeText(debugText); } catch {}
+        target.innerHTML = ICON.check;
+        setTimeout(() => { target.innerHTML = ICON.copy; }, 1500);
+      });
       break;
     }
     case "report-issue": {
-      const debugInfo = collectDebugInfo();
-      try { navigator.clipboard.writeText(debugInfo); } catch {}
-      window.open("https://github.com/Kalmuraee/OpenMagic/issues/new?template=bug_report.yml", "_blank", "noopener");
-      state.messages.push({ role: "system", content: "Debug info copied to clipboard. Paste it in the Debug Info field on GitHub." });
-      if (state.panelOpen) refreshPanelContent();
+      target.innerHTML = '<span class="om-spinner"></span>';
+      collectDebugInfo().then(debugInfo => {
+        try { navigator.clipboard.writeText(debugInfo); } catch {}
+        target.innerHTML = ICON.bug;
+        window.open("https://github.com/Kalmuraee/OpenMagic/issues/new?template=bug_report.yml", "_blank", "noopener");
+        state.messages.push({ role: "system", content: "Debug info copied to clipboard. Paste it in the Debug Info field on GitHub." });
+        if (state.panelOpen) refreshPanelContent();
+      });
       break;
     }
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
@@ -1653,8 +1658,20 @@ function renderMarkdown(text: string): string {
   return html;
 }
 
-function collectDebugInfo(messageIdx?: number): string {
+async function collectDebugInfo(messageIdx?: number): Promise<string> {
   const lines: string[] = [];
+
+  // ── Fetch server-side info ──
+  let serverInfo: any = null;
+  try {
+    if (ws.isConnected()) {
+      const res = await Promise.race([
+        ws.request("debug.logs"),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
+      ]) as any;
+      serverInfo = res?.payload || null;
+    }
+  } catch {}
 
   // ── Environment ──
   lines.push("## Environment");
@@ -1665,6 +1682,13 @@ function collectDebugInfo(messageIdx?: number): string {
   lines.push(`- **Viewport**: ${window.innerWidth}x${window.innerHeight} (devicePixelRatio: ${window.devicePixelRatio})`);
   lines.push(`- **Page URL**: ${window.location.href}`);
   lines.push(`- **Page Title**: ${document.title}`);
+  if (serverInfo) {
+    lines.push(`- **Node.js**: ${serverInfo.nodeVersion} (${serverInfo.platform}/${serverInfo.arch})`);
+    lines.push(`- **Server PID**: ${serverInfo.pid}`);
+    lines.push(`- **Server Uptime**: ${serverInfo.uptime}s`);
+    lines.push(`- **Server Memory**: ${serverInfo.memoryMB}MB RSS`);
+    lines.push(`- **Server CWD**: ${serverInfo.cwd}`);
+  }
 
   // ── Connection & Config ──
   lines.push("");
@@ -1765,29 +1789,44 @@ function collectDebugInfo(messageIdx?: number): string {
     if (fcp) lines.push(`- **FCP**: ${Math.round(fcp.startTime)}ms`);
   }
 
-  // ── Console Errors & Warnings ──
+  // ── Browser Console (all levels) ──
   const consoleLogs = getConsoleLogs();
-  const errors = consoleLogs.filter(l => l.level === "error");
-  const warnings = consoleLogs.filter(l => l.level === "warn");
-  if (errors.length || warnings.length) {
+  if (consoleLogs.length) {
+    const errors = consoleLogs.filter(l => l.level === "error");
+    const warnings = consoleLogs.filter(l => l.level === "warn");
+    const infos = consoleLogs.filter(l => l.level === "log" || l.level === "info" || l.level === "debug");
     lines.push("");
-    lines.push("## Console Issues");
+    lines.push("## Browser Console");
     lines.push("");
+    lines.push(`Total: ${consoleLogs.length} entries (${errors.length} errors, ${warnings.length} warnings, ${infos.length} log/info/debug)`);
     if (errors.length) {
+      lines.push("");
       lines.push(`### Errors (${errors.length})`);
       lines.push("```");
       for (const err of errors.slice(-15)) {
-        lines.push(err.args.map((a: any) => String(a)).join(" ").slice(0, 300));
+        lines.push(`[${new Date(err.timestamp).toISOString()}] ${err.args.map((a: any) => String(a)).join(" ").slice(0, 300)}`);
       }
       lines.push("```");
     }
     if (warnings.length) {
+      lines.push("");
       lines.push(`### Warnings (${warnings.length})`);
       lines.push("```");
       for (const w of warnings.slice(-10)) {
-        lines.push(w.args.map((a: any) => String(a)).join(" ").slice(0, 200));
+        lines.push(`[${new Date(w.timestamp).toISOString()}] ${w.args.map((a: any) => String(a)).join(" ").slice(0, 200)}`);
       }
       lines.push("```");
+    }
+    if (infos.length) {
+      lines.push("");
+      lines.push("<details><summary>Log/Info/Debug (" + infos.length + " entries)</summary>");
+      lines.push("");
+      lines.push("```");
+      for (const l of infos.slice(-30)) {
+        lines.push(`[${new Date(l.timestamp).toISOString()}] [${l.level}] ${l.args.map((a: any) => String(a)).join(" ").slice(0, 200)}`);
+      }
+      lines.push("```");
+      lines.push("</details>");
     }
   }
 
@@ -1815,6 +1854,45 @@ function collectDebugInfo(messageIdx?: number): string {
       }
       lines.push("```");
     }
+  }
+
+  // ── Server-Side Logs (terminal) ──
+  if (serverInfo?.logs?.length) {
+    const sLogs = serverInfo.logs as { level: string; msg: string; ts: number }[];
+    const sErrors = sLogs.filter(l => l.level === "error");
+    const sWarnings = sLogs.filter(l => l.level === "warn");
+    const sInfos = sLogs.filter(l => l.level === "log" || l.level === "info");
+    lines.push("");
+    lines.push("## Server Logs (Terminal)");
+    lines.push("");
+    lines.push(`Total: ${sLogs.length} entries (${sErrors.length} errors, ${sWarnings.length} warnings, ${sInfos.length} log/info)`);
+    if (sErrors.length) {
+      lines.push("");
+      lines.push(`### Server Errors (${sErrors.length})`);
+      lines.push("```");
+      for (const e of sErrors.slice(-15)) {
+        lines.push(`[${new Date(e.ts).toISOString()}] ${e.msg.slice(0, 300)}`);
+      }
+      lines.push("```");
+    }
+    if (sWarnings.length) {
+      lines.push("");
+      lines.push(`### Server Warnings (${sWarnings.length})`);
+      lines.push("```");
+      for (const w of sWarnings.slice(-10)) {
+        lines.push(`[${new Date(w.ts).toISOString()}] ${w.msg.slice(0, 200)}`);
+      }
+      lines.push("```");
+    }
+    lines.push("");
+    lines.push("<details><summary>All server logs (" + sLogs.length + " entries)</summary>");
+    lines.push("");
+    lines.push("```");
+    for (const l of sLogs.slice(-50)) {
+      lines.push(`[${new Date(l.ts).toISOString()}] [${l.level}] ${l.msg.slice(0, 200)}`);
+    }
+    lines.push("```");
+    lines.push("</details>");
   }
 
   // ── Full Chat History ──

@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.31.2";
+const CURRENT_VERSION = "0.31.3";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -236,7 +236,6 @@ function buildStaticDOM(): string {
     <div class="om-toolbar">
       <div class="om-toolbar-header">
         <span class="om-grab">${ICON.grip}</span>
-        <button class="om-pill-btn om-pill-btn-bug" data-action="report-issue" title="Report a bug on GitHub">${ICON.bug}</button>
         <span class="om-pill-brand">
           <span class="om-pill-text">✨OpenMagic🪄</span>
         </span>
@@ -254,6 +253,7 @@ function buildStaticDOM(): string {
         <div class="om-panel-header">
           <span class="om-panel-title"></span>
           <span class="om-panel-version">v${CURRENT_VERSION}</span>
+          <button class="om-panel-bug" data-action="report-issue" title="Report a bug on GitHub">${ICON.bug}</button>
           <button class="om-panel-clear" data-action="clear-chat" title="Clear chat">${ICON.trash}</button>
           <button class="om-panel-close" data-action="close-panel">${ICON.x}</button>
         </div>
@@ -737,7 +737,9 @@ function handleAction(action: string, target: HTMLElement) {
 function updateStatusDot() {
   const dot = shadow.querySelector(".om-status-dot");
   if (dot) {
-    dot.className = `om-status-dot ${state.connected ? "connected" : "disconnected"}`;
+    const cls = state.updateAvailable ? "outdated" : state.connected ? "connected" : "disconnected";
+    dot.className = `om-status-dot ${cls}`;
+    dot.setAttribute("title", state.updateAvailable ? `v${state.latestVersion} available — run npx openmagic@latest` : state.connected ? "Connected" : "Disconnected");
   }
 }
 
@@ -1731,14 +1733,7 @@ function checkForUpdates() {
 }
 
 function showUpdateDot() {
-  const existing = shadow.querySelector(".om-update-dot");
-  if (existing) return;
-  const dot = document.createElement("span");
-  dot.className = "om-update-dot";
-  dot.title = `v${state.latestVersion} available`;
-  dot.addEventListener("click", () => openPanel("settings"));
-  const header = shadow.querySelector(".om-toolbar-header");
-  if (header) header.appendChild(dot);
+  updateStatusDot();
 }
 
 // ── Boot ─────────────────────────────────────────────────────────

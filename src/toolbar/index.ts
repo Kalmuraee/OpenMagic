@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.3";
+const CURRENT_VERSION = "0.30.4";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1275,16 +1275,36 @@ async function sendPrompt() {
         state.messages.push({ role: "system", content: `Reading ${neededFile}...` });
         refreshPanelContent();
 
-        // Read the requested file and add to context
+        // Read the requested file — try primary path, then fallbacks
         try {
           const root = state.roots[0] || "";
-          const filePath = root ? `${root}/${neededFile}` : neededFile;
-          const fileResult = await ws.request("fs.read", { path: filePath });
-          const content = String(fileResult?.payload?.content || "");
+          const primaryPath = root ? `${root}/${neededFile}` : neededFile;
+          let content: string | undefined;
+          let usedPath = primaryPath;
+
+          // Try primary path
+          const r1 = await ws.request("fs.read", { path: primaryPath }).catch(() => null);
+          content = r1?.payload?.content ? String(r1.payload.content) : undefined;
+
+          // Fallback: try as-is (without root prefix)
+          if (!content && neededFile !== primaryPath) {
+            const r2 = await ws.request("fs.read", { path: neededFile }).catch(() => null);
+            if (r2?.payload?.content) { content = String(r2.payload.content); usedPath = neededFile; }
+          }
+
+          // Fallback: try just the basename in root
+          if (!content) {
+            const basename = neededFile.split("/").pop() || neededFile;
+            const fallbackPath = root ? `${root}/${basename}` : basename;
+            if (fallbackPath !== primaryPath) {
+              const r3 = await ws.request("fs.read", { path: fallbackPath }).catch(() => null);
+              if (r3?.payload?.content) { content = String(r3.payload.content); usedPath = fallbackPath; }
+            }
+          }
+
           if (content) {
             if (!context.files) context.files = [];
             context.files.push({ path: neededFile, content: content.slice(0, 8000) });
-            // Add as assistant message so context carries forward
             state.messages.push({ role: "assistant", content: responseContent });
             state.messages.push({ role: "user", content: `Here is ${neededFile}. Now please make the edit.` });
           } else {

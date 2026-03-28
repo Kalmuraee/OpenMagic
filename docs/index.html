@@ -189,16 +189,21 @@
       margin-bottom: 24px;
       letter-spacing: -1.5px;
       color: var(--text-bright);
-      animation: heroFadeUp 0.9s ease-out both;
     }
 
     h1 .gradient {
+      display: inline-block;
+      width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      vertical-align: bottom;
+      border-right: 2px solid var(--purple-light);
       background: linear-gradient(135deg, #fff 0%, var(--purple-light) 60%, #c4b5fd 100%);
       background-size: 200% 200%;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      animation: gradientShift 5s ease-in-out infinite;
+      animation: typing 2s steps(17, end) 0.2s forwards, blinkCaret 0.8s step-end 0.2s 6, gradientShift 5s ease-in-out infinite 2.2s;
     }
 
     @keyframes heroFadeUp {
@@ -210,6 +215,16 @@
         opacity: 1;
         transform: translateY(0);
       }
+    }
+
+    @keyframes typing {
+      from { width: 0; }
+      to { width: 17ch; }
+    }
+
+    @keyframes blinkCaret {
+      0%, 100% { border-color: transparent; }
+      50% { border-color: var(--purple-light); }
     }
 
     @keyframes gradientShift {

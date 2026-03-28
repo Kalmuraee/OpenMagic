@@ -25,6 +25,14 @@ No framework plugin. No IDE extension. No account. Bring your own API key.
 
 ---
 
+<div align="center">
+
+![OpenMagic Demo](https://raw.githubusercontent.com/Kalmuraee/OpenMagic/main/docs/demo.gif)
+
+</div>
+
+---
+
 ## Quick Start
 
 ```bash

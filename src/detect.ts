@@ -1,6 +1,7 @@
 import { createConnection } from "node:net";
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { execSync } from "node:child_process";
 
 const COMMON_DEV_PORTS = [
   3000, // React (CRA), Next.js, Express
@@ -45,18 +46,70 @@ export interface DetectedServer {
   fromScripts?: boolean; // true if detected via package.json scripts
 }
 
-export async function detectDevServer(): Promise<DetectedServer | null> {
+/**
+ * Check if the process listening on a port is running from (or near) the expected directory.
+ * Uses lsof on macOS/Linux to get the PID, then checks its working directory.
+ * Returns true if verified, false if wrong project, null if can't determine.
+ */
+export function verifyPortOwnership(port: number, expectedDir: string): boolean | null {
+  try {
+    // Get PIDs listening on this port
+    const pidOutput = execSync(`lsof -i :${port} -sTCP:LISTEN -t 2>/dev/null`, {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+
+    if (!pidOutput) return null;
+
+    const pids = pidOutput.split("\n").map((p) => p.trim()).filter(Boolean);
+    const expected = resolve(expectedDir);
+
+    for (const pid of pids) {
+      try {
+        // Get working directory of this process
+        const cwdOutput = execSync(
+          `lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | grep ^n | head -1`,
+          { encoding: "utf-8", timeout: 3000 }
+        ).trim();
+
+        if (!cwdOutput) continue;
+        const processCwd = resolve(cwdOutput.slice(1)); // strip leading 'n'
+
+        // Match if the process cwd is the project dir, a parent, or a child
+        if (processCwd === expected || expected.startsWith(processCwd) || processCwd.startsWith(expected)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // We got PIDs but none matched the project directory
+    return false;
+  } catch {
+    // lsof not available or failed — can't verify
+    return null;
+  }
+}
+
+export async function detectDevServer(cwd: string = process.cwd()): Promise<DetectedServer | null> {
   // First: check ports hinted by the project's dev scripts (most reliable)
-  const scripts = detectDevScripts();
+  const scripts = detectDevScripts(cwd);
   const scriptPorts = scripts.map((s) => s.defaultPort).filter((p, i, a) => a.indexOf(p) === i);
 
   if (scriptPorts.length > 0) {
     for (const port of scriptPorts) {
       if (await checkPort(port)) {
+        // Verify this port actually belongs to this project
+        const owned = verifyPortOwnership(port, cwd);
+        if (owned === false) {
+          // Wrong project on this port — skip it
+          continue;
+        }
         return { port, host: "localhost", fromScripts: true };
       }
     }
-    // Scripts exist but none running — don't scan random ports
+    // Scripts exist but none running (or all belong to other projects)
     return null;
   }
 
@@ -67,9 +120,12 @@ export async function detectDevServer(): Promise<DetectedServer | null> {
   });
 
   const results = await Promise.all(checks);
-  const foundPort = results.find((p) => p !== null);
 
-  if (foundPort) {
+  for (const foundPort of results) {
+    if (foundPort === null) continue;
+    // For generic scan, also check ownership
+    const owned = verifyPortOwnership(foundPort, cwd);
+    if (owned === false) continue; // skip — belongs to another project
     return { port: foundPort, host: "localhost", fromScripts: false };
   }
 

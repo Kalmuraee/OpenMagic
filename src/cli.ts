@@ -40,7 +40,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
-const VERSION = "0.29.4";
+const VERSION = "0.30.0";
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -327,8 +327,65 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   const scripts = detectDevScripts();
 
   if (scripts.length === 0) {
+    // Check for plain HTML project (index.html without package.json scripts)
+    const htmlPath = join(process.cwd(), "index.html");
+    if (existsSync(htmlPath)) {
+      console.log(
+        chalk.dim("  No dev scripts found, but index.html detected.")
+      );
+      console.log("");
+      const answer = await ask(
+        chalk.white("  Serve this directory as a static site? ") + chalk.dim("(Y/n) ")
+      );
+      if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
+        return false;
+      }
+
+      // Start a built-in static file server using Node's http module
+      const staticPort = expectedPort || 8080;
+      console.log(chalk.dim(`  Starting static server on port ${staticPort}...`));
+
+      const staticChild = spawn("node", ["-e", `
+        const http = require("http");
+        const fs = require("fs");
+        const path = require("path");
+        const mimes = {".html":"text/html",".css":"text/css",".js":"application/javascript",".json":"application/json",".png":"image/png",".jpg":"image/jpeg",".svg":"image/svg+xml",".ico":"image/x-icon",".gif":"image/gif",".woff2":"font/woff2",".woff":"font/woff"};
+        http.createServer((req, res) => {
+          let p = path.join(${JSON.stringify(process.cwd())}, req.url === "/" ? "/index.html" : req.url);
+          try { p = decodeURIComponent(p); } catch {}
+          fs.readFile(p, (err, data) => {
+            if (err) { res.writeHead(404); res.end("Not found"); return; }
+            const ext = path.extname(p).toLowerCase();
+            res.writeHead(200, {"Content-Type": mimes[ext] || "application/octet-stream"});
+            res.end(data);
+          });
+        }).listen(${staticPort}, "localhost", () => console.log("Static server ready on port ${staticPort}"));
+      `], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
+      });
+
+      childProcesses.push(staticChild);
+      staticChild.stdout?.on("data", (d: Buffer) => {
+        for (const line of d.toString().trim().split("\n")) {
+          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+        }
+      });
+
+      // Wait for it to start
+      const up = await waitForPort(staticPort, 5000);
+      if (up) {
+        lastDetectedPort = staticPort;
+        console.log(chalk.green(`  ✓  Static server running on port ${staticPort}`));
+        return true;
+      }
+      console.log(chalk.red("  ✗  Failed to start static server."));
+      return false;
+    }
+
     console.log(
-      chalk.yellow("  ⚠  No dev server detected and no dev scripts found in package.json")
+      chalk.yellow("  ⚠  No dev server detected and no dev scripts found.")
     );
     console.log("");
     console.log(chalk.white("  Start your dev server manually, then run:"));

@@ -80,6 +80,8 @@ export const TOOLBAR_CSS = `
 .om-pill-btn:hover { background: rgba(108, 92, 231, 0.15); color: #a29bfe; }
 .om-pill-btn:focus-visible { outline: 2px solid #6c5ce7; outline-offset: 2px; }
 .om-pill-btn.active { background: rgba(108, 92, 231, 0.25); color: #c4b5fd; }
+.om-pill-btn-bug { color: #888; opacity: 0.7; padding: 5px 4px; }
+.om-pill-btn-bug:hover { opacity: 1; color: #e94560; background: rgba(233, 69, 96, 0.1); }
 
 .om-status-dot {
   width: 7px; height: 7px; border-radius: 50%; margin-left: auto; flex-shrink: 0;

@@ -19,6 +19,7 @@ const ICON = {
   grip: `<svg width="7" height="14" viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>`,
   network: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
   activity: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+  bug: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 2 1.88 1.88M14.12 3.88 16 2M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>`,
   paperclip: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
   image: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
   trash: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
@@ -235,6 +236,7 @@ function buildStaticDOM(): string {
     <div class="om-toolbar">
       <div class="om-toolbar-header">
         <span class="om-grab">${ICON.grip}</span>
+        <button class="om-pill-btn om-pill-btn-bug" data-action="report-issue" title="Report a bug on GitHub">${ICON.bug}</button>
         <span class="om-pill-brand">
           <span class="om-pill-text">✨OpenMagic🪄</span>
         </span>
@@ -689,13 +691,18 @@ function handleAction(action: string, target: HTMLElement) {
     }
     case "copy-msg": {
       const idx = parseInt(target.dataset.idx || "0", 10);
-      const msg = state.messages[idx];
-      if (msg) {
-        try { navigator.clipboard.writeText(msg.content); } catch {}
-        // Brief feedback
-        target.innerHTML = ICON.check;
-        setTimeout(() => { target.innerHTML = ICON.copy; }, 1500);
-      }
+      const debugText = collectDebugInfo(idx);
+      try { navigator.clipboard.writeText(debugText); } catch {}
+      target.innerHTML = ICON.check;
+      setTimeout(() => { target.innerHTML = ICON.copy; }, 1500);
+      break;
+    }
+    case "report-issue": {
+      const debugInfo = collectDebugInfo();
+      try { navigator.clipboard.writeText(debugInfo); } catch {}
+      window.open("https://github.com/Kalmuraee/OpenMagic/issues/new?template=bug_report.yml", "_blank", "noopener");
+      state.messages.push({ role: "system", content: "Debug info copied to clipboard. Paste it in the Debug Info field on GitHub." });
+      if (state.panelOpen) refreshPanelContent();
       break;
     }
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
@@ -1642,6 +1649,74 @@ function renderMarkdown(text: string): string {
   // Line breaks
   html = html.replace(/\n/g, '<br>');
   return html;
+}
+
+function collectDebugInfo(messageIdx?: number): string {
+  const lines: string[] = [];
+  lines.push("## Debug Info");
+  lines.push("");
+  lines.push(`- **OpenMagic**: v${CURRENT_VERSION}`);
+  lines.push(`- **Provider**: ${MODEL_REGISTRY[state.provider]?.name || state.provider || "not set"}`);
+  lines.push(`- **Model**: ${state.model || "not set"}`);
+  lines.push(`- **Page URL**: ${window.location.href}`);
+  lines.push(`- **Browser**: ${navigator.userAgent}`);
+
+  // Selected element
+  if (state.selectedElement) {
+    const el = state.selectedElement;
+    const selector = el.cssSelector || `${el.tagName}${el.id ? "#" + el.id : ""}${el.className ? "." + el.className.split(" ")[0] : ""}`;
+    lines.push(`- **Selected Element**: \`${selector}\``);
+  }
+
+  // Console errors
+  const consoleLogs = getConsoleLogs();
+  const errors = consoleLogs.filter(l => l.level === "error");
+  if (errors.length) {
+    lines.push("");
+    lines.push("### Console Errors");
+    lines.push("```");
+    for (const err of errors.slice(-10)) {
+      lines.push(err.args.map((a: any) => String(a)).join(" ").slice(0, 200));
+    }
+    lines.push("```");
+  }
+
+  // Network errors
+  const networkLogs = getNetworkLogs();
+  const failedRequests = networkLogs.filter(l => l.status && l.status >= 400);
+  if (failedRequests.length) {
+    lines.push("");
+    lines.push("### Failed Requests");
+    lines.push("```");
+    for (const req of failedRequests.slice(-10)) {
+      lines.push(`${req.method} ${req.url.slice(0, 100)} → ${req.status}`);
+    }
+    lines.push("```");
+  }
+
+  // Chat context (specific message or recent history)
+  if (messageIdx !== undefined) {
+    const msg = state.messages[messageIdx];
+    if (msg) {
+      lines.push("");
+      lines.push("### Message");
+      lines.push("```");
+      lines.push(`[${msg.role}] ${msg.content.slice(0, 1000)}`);
+      lines.push("```");
+    }
+  } else if (state.messages.length) {
+    lines.push("");
+    lines.push("### Recent Chat");
+    lines.push("```");
+    const recent = state.messages.slice(-6);
+    for (const m of recent) {
+      if (m.content.startsWith("__DIFF__") || m.content.startsWith("__DIFFGROUP__")) continue;
+      lines.push(`[${m.role}] ${m.content.slice(0, 300)}`);
+    }
+    lines.push("```");
+  }
+
+  return lines.join("\n");
 }
 
 function checkForUpdates() {

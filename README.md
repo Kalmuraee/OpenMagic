@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/logo.png" alt="OpenMagic" width="120" />
+<img src="./docs/logo.png" alt="OpenMagic" width="200" />
 
 # OpenMagic
 

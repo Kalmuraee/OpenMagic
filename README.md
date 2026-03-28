@@ -44,7 +44,7 @@ npm run dev
 npx openmagic@latest
 ```
 
-Run `npx openmagic@latest` from your project folder so it can find your source files and dev server. A proxied version of your app opens with the AI toolbar overlaid. That is it.
+Run this from your project folder so OpenMagic can find your source files and dev server. A proxied version of your app opens with the toolbar overlaid.
 
 ---
 
@@ -91,7 +91,7 @@ OpenMagic is a single-port reverse proxy. It sits between your browser and your 
 3. **Server** -- Local Node.js process handling file I/O and proxying LLM calls. API keys never leave your machine.
 4. **HMR** -- When the AI modifies source files, your dev server's hot module replacement picks up changes automatically.
 
-Stop with `Ctrl+C`. No files modified. No dependencies added. No traces.
+Stop with `Ctrl+C`. Nothing stays behind.
 
 ---
 
@@ -182,11 +182,9 @@ npx openmagic --port 3000
 
 ## Known Limitations
 
-Honesty matters. Here is what you should know:
-
-- **Origin change** -- Your app runs on `:3000` but is accessed via `:4567`. This can affect OAuth redirect URIs, `localStorage` isolation, and Service Worker scope. Most dev workflows are unaffected, but apps that depend on `window.location.origin` may need dev config adjustments.
-- **CSP via meta tags** -- OpenMagic strips CSP response headers to allow the toolbar script, but CSP defined in `<meta>` tags cannot be modified at the proxy level and may block the toolbar on strict pages.
-- **Not for production** -- OpenMagic is a development tool. Do not deploy the proxy to production.
+- **Origin change** -- Your app runs on `:3000` but you access it via `:4567`. This can break OAuth redirect URIs, `localStorage` isolation, and Service Worker scope. Most dev setups work fine, but if your app checks `window.location.origin`, you may need to adjust your dev config.
+- **CSP via meta tags** -- OpenMagic strips CSP response headers so the toolbar script can load, but `<meta>` tag CSP can't be modified at the proxy level and may still block it.
+- **Not for production** -- This is a dev tool. Don't deploy the proxy to production.
 
 ---
 
@@ -221,7 +219,7 @@ OpenMagic works via reverse proxy, so it supports any framework that serves HTML
 
 ## Contributing
 
-PRs are welcome! Bug fixes, new providers, UI improvements, docs — all appreciated.
+PRs are welcome. Bug fixes, new providers, UI improvements, docs.
 
 ```bash
 git clone https://github.com/Kalmuraee/OpenMagic.git
@@ -231,7 +229,7 @@ npm run build
 node dist/cli.js --port 3000   # Test with your dev server
 ```
 
-See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the full guide — architecture overview, how to add LLM providers, toolbar development, code style, and PR process.
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the architecture overview, how to add providers, and PR process.
 
 ---
 

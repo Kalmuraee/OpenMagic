@@ -1,10 +1,10 @@
 # Contributing to OpenMagic
 
-PRs are welcome! Whether it's a bug fix, new feature, new LLM provider, or documentation improvement — we appreciate every contribution.
+PRs are welcome. Bug fixes, new providers, UI work, docs, whatever you've got.
 
 ---
 
-## Quick Start
+## Local setup
 
 ```bash
 git clone https://github.com/Kalmuraee/OpenMagic.git
@@ -13,41 +13,41 @@ npm install
 npm run build
 ```
 
-To test locally, start any dev server (e.g., a Vite or Next.js app), then:
+Start any dev server (Vite, Next.js, whatever), then point OpenMagic at it:
 
 ```bash
 node dist/cli.js --port 3000
 ```
 
-This opens a proxied version of your app at `localhost:4567` with the toolbar injected.
+Your app opens at `localhost:4567` with the toolbar injected.
 
 ---
 
-## Project Architecture
+## Project structure
 
-OpenMagic is a single-port reverse proxy that injects a floating AI toolbar into any web app during development.
+OpenMagic is a reverse proxy that sits between the browser and your dev server, injecting a toolbar into HTML responses.
 
 ```
 src/
-├── cli.ts              # CLI entry — commander, port detection, dev server management
-├── proxy.ts            # Reverse proxy (http-proxy), streaming HTML injection
-├── server.ts           # WebSocket server, file I/O, LLM routing, debug.logs endpoint
-├── filesystem.ts       # Sandboxed file read/write with path traversal protection
+├── cli.ts              # CLI entry, port detection, child process management
+├── proxy.ts            # http-proxy reverse proxy, streaming HTML injection
+├── server.ts           # WebSocket server, file I/O, LLM routing, debug endpoint
+├── filesystem.ts       # Sandboxed file read/write, path traversal protection
 ├── config.ts           # Atomic config persistence (~/.openmagic/config.json)
-├── security.ts         # Session token generation (randomBytes)
+├── security.ts         # Session token generation
 ├── detect.ts           # Dev server auto-detection (script parsing, port scanning)
-├── shared-types.ts     # TypeScript interfaces for WebSocket protocol
+├── shared-types.ts     # WebSocket protocol types
 ├── llm/
-│   ├── registry.ts     # 14 providers, 70+ models — all pre-configured
-│   ├── proxy.ts        # LLM routing — picks adapter based on provider
-│   ├── prompts.ts      # System prompt and context builder for LLM calls
-│   ├── openai.ts       # OpenAI-compatible adapter (also used by Groq, Mistral, etc.)
-│   ├── anthropic.ts    # Anthropic adapter with extended thinking support
+│   ├── registry.ts     # 14 providers, 70+ models, all pre-configured
+│   ├── proxy.ts        # Routes LLM calls to the right adapter
+│   ├── prompts.ts      # System prompt and context builder
+│   ├── openai.ts       # OpenAI-compatible adapter (also handles Groq, Mistral, etc.)
+│   ├── anthropic.ts    # Anthropic adapter with extended thinking
 │   └── google.ts       # Google Gemini adapter
 ├── toolbar/
-│   ├── index.ts        # Main toolbar — Shadow DOM Web Component (~1800 lines)
+│   ├── index.ts        # Main toolbar UI, Shadow DOM Web Component (~1800 lines)
 │   ├── services/
-│   │   ├── ws-client.ts       # WebSocket client with handshake, reconnect, streaming
+│   │   ├── ws-client.ts       # WebSocket client, handshake, reconnect, streaming
 │   │   ├── dom-inspector.ts   # Element inspection, CSS rules, React fiber props
 │   │   ├── capture.ts         # Screenshot via SVG foreignObject
 │   │   └── context-builder.ts # Network/console capture, context assembly
@@ -60,19 +60,23 @@ tests/
 └── security.test.ts
 ```
 
-### Key design decisions
+### Why it works this way
 
-- **Single port**: The proxy, toolbar bundle, and WebSocket all share one HTTP server. No CORS issues.
-- **Shadow DOM**: The toolbar is a Web Component with a closed shadow root — fully isolated from the host app's styles.
-- **Event delegation**: All toolbar click/change handlers are attached once to the root, using `data-action` attributes. No listener accumulation across re-renders.
-- **Streaming HTML injection**: HTML responses are streamed through — the toolbar `<script>` tag is appended at the end of the stream, not buffered.
-- **Fuzzy diff matching**: When applying LLM-proposed edits, exact match is tried first, then line-by-line fuzzy matching to handle indentation differences.
+The proxy, toolbar bundle, and WebSocket all share one HTTP server. This avoids CORS issues entirely.
+
+The toolbar is a Web Component with a closed shadow root, so it can't clash with the host app's styles.
+
+All click/change handlers use event delegation attached once to the root via `data-action` attributes. This prevents listener accumulation when the panel re-renders.
+
+HTML responses are streamed through, not buffered. The toolbar script tag gets appended at the end of the stream.
+
+When applying LLM edits, OpenMagic tries exact string match first, then falls back to fuzzy line-by-line matching to handle indentation differences.
 
 ---
 
-## How to Add a New LLM Provider
+## Adding a new LLM provider
 
-1. **Add to the registry** in `src/llm/registry.ts`:
+1. Add to the registry in `src/llm/registry.ts`:
    ```ts
    newprovider: {
      name: "New Provider",
@@ -83,78 +87,73 @@ tests/
    },
    ```
 
-2. **If OpenAI-compatible** (most are): no adapter needed — `src/llm/openai.ts` handles it automatically via the registry's `baseUrl`.
+2. If the provider uses an OpenAI-compatible API (most do), you're done. The `openai.ts` adapter handles it via the registry's `baseUrl`.
 
-3. **If not OpenAI-compatible**: create `src/llm/newprovider.ts` with `chat()` function matching the same signature as `openai.ts`, then add routing in `src/llm/proxy.ts`.
+3. If the API is different, create `src/llm/newprovider.ts` with a `chat()` function matching the same signature as `openai.ts`, then add routing in `src/llm/proxy.ts`.
 
-4. **Add to the toolbar registry** in `src/toolbar/index.ts` (the `MODEL_REGISTRY` object near the top) so users can select it from the dropdown.
-
----
-
-## How to Modify the Toolbar UI
-
-The toolbar lives in `src/toolbar/index.ts` as a Shadow DOM Web Component.
-
-- **DOM is built once** in `buildStaticDOM()` — returns an HTML string.
-- **Updates are targeted** — functions like `updateStatusDot()`, `updatePillButtons()`, `refreshPanelContent()` update specific elements, not the whole tree.
-- **Actions use data attributes** — add `data-action="your-action"` to any button, then handle it in `handleAction()`.
-- **Styles** go in `src/toolbar/styles/toolbar.css.ts` — exported as a string and injected into the shadow root.
-- **No emojis in the toolbar UI** — use SVG icons (defined in the `ICON` object at the top of `index.ts`).
+4. Add the provider to the browser-side `MODEL_REGISTRY` object at the top of `src/toolbar/index.ts` so it shows in the dropdown.
 
 ---
 
-## Code Style
+## Working on the toolbar
 
-- **TypeScript strict mode** — `tsconfig.json` has strict enabled
-- Keep code consistent with the existing style in each file
-- No eslint config yet — just match what's there
-- Prefer simple, direct code over abstractions
-- Toolbar icons: SVG only, no emojis (except the `✨OpenMagic🪄` brand text)
+The toolbar code is in `src/toolbar/index.ts`.
+
+`buildStaticDOM()` returns the HTML string. It runs once. After that, functions like `updateStatusDot()` and `refreshPanelContent()` update specific elements rather than rebuilding everything.
+
+To add a new button: put `data-action="your-action"` on it in `buildStaticDOM()`, then add a case for it in `handleAction()`.
+
+Styles go in `src/toolbar/styles/toolbar.css.ts`. It's a string that gets injected into the shadow root.
+
+Icons are SVGs defined in the `ICON` object at the top of `index.ts`. No emojis in the toolbar UI (the `✨OpenMagic🪄` brand text is the only exception).
+
+---
+
+## Code style
+
+TypeScript strict mode is on. No eslint config yet. Just match what's already in each file. Keep things simple and direct.
 
 ---
 
 ## Testing
 
 ```bash
-npm test           # Run all tests (vitest)
-npm run build      # Build CLI + toolbar
-npx tsc --noEmit   # Type check without emitting
+npm test           # vitest
+npm run build      # build CLI + toolbar
+npx tsc --noEmit   # type check
 ```
 
-- Tests live in `tests/` and use [vitest](https://vitest.dev/)
-- Write tests for new server-side logic (filesystem, config, security, detection)
-- The toolbar runs in the browser and is tested manually with a dev server
+Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection). The toolbar is tested manually against a running dev server.
 
 ---
 
-## Pull Request Process
+## PR process
 
-1. **Fork** the repo and create a branch from `main`
-2. Make your changes — keep PRs focused (one feature or fix per PR)
-3. Make sure all checks pass:
+1. Fork the repo and branch from `main`
+2. Make your changes. One feature or fix per PR.
+3. Check that everything passes:
    ```bash
    npm run build
    npm test
    npx tsc --noEmit
    ```
-4. Test manually with a real dev server if you changed proxy/toolbar/LLM logic
-5. Fill out the PR template
-6. Submit against `main`
+4. If you changed proxy, toolbar, or LLM logic, test manually with a dev server
+5. Fill out the PR template and submit against `main`
 
 ### Commit messages
 
-Use a short descriptive subject line. Examples:
+Short subject line describing what changed:
 - `Fix WebSocket reconnect when server restarts`
 - `Add Mistral provider with Codestral model`
-- `Update toolbar screenshot capture for cross-origin iframes`
+- `Update screenshot capture for cross-origin iframes`
 
-### What makes a good first contribution?
+### Good first contributions
 
 - Adding a new LLM provider to the registry
-- Improving the toolbar UI or fixing a CSS issue
-- Adding tests for untested server-side code
-- Documentation improvements
-- Look for issues labeled [`good first issue`](https://github.com/Kalmuraee/OpenMagic/labels/good%20first%20issue)
+- Fixing a toolbar CSS issue
+- Adding tests for server-side code
+- Docs improvements
+- Issues labeled [`good first issue`](https://github.com/Kalmuraee/OpenMagic/labels/good%20first%20issue)
 
 ---
 

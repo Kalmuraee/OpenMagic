@@ -793,7 +793,7 @@
 
     <h1><span class="gradient">AI coding toolbar</span><br>for any web app</h1>
 
-    <p class="hero-sub">One command adds a floating AI toolbar to your running dev server. Select elements, describe changes, get diffs. Single-port reverse proxy -- no plugins, no code changes.</p>
+    <p class="hero-sub">Run one command and get a floating AI toolbar on your dev server. Select elements, describe changes, approve diffs. It's a reverse proxy, so it works with any framework without plugins or code changes.</p>
 
     <div class="install-box">
       <span class="dollar">$</span>
@@ -853,8 +853,8 @@
   <!-- Features -->
   <section class="section" id="features">
     <div class="section-header">
-      <h2>Everything you need, nothing you don't</h2>
-      <p>A focused set of features designed for practical AI-assisted coding.</p>
+      <h2>What it does</h2>
+      <p>The toolbar gives your LLM enough context to actually change your code.</p>
     </div>
 
     <div class="feature-grid">
@@ -863,7 +863,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
         </div>
         <h3>Element Selection</h3>
-        <p>Click any element in your running app. OpenMagic captures the DOM structure, styles, and context so the LLM knows exactly what to modify.</p>
+        <p>Click any element. OpenMagic grabs its DOM, computed styles, parent layout, siblings, and React component name if available.</p>
       </div>
 
       <div class="feature-card">
@@ -871,7 +871,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
         </div>
         <h3>Smart Grounding</h3>
-        <p>Automatically collects file contents, network requests, and console output. The LLM sees your actual API responses, errors, and app state.</p>
+        <p>Reads project files, follows import chains, captures network requests and console output. The LLM sees your actual API responses and errors.</p>
       </div>
 
       <div class="feature-card">
@@ -879,7 +879,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
         </div>
         <h3>Diff Preview</h3>
-        <p>Review proposed changes as a unified diff before applying. See exactly what the AI wants to modify, line by line, then approve or reject.</p>
+        <p>Changes show up as diffs. You see what gets modified line by line, then approve or reject each one.</p>
       </div>
 
       <div class="feature-card">
@@ -887,7 +887,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         </div>
         <h3>Undo</h3>
-        <p>Every file modification is tracked. One click to revert any change. No more fear of AI breaking your code -- roll back instantly.</p>
+        <p>Every file change gets backed up. One click to revert.</p>
       </div>
 
       <div class="feature-card">
@@ -895,7 +895,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </div>
         <h3>Fuzzy File Matching</h3>
-        <p>The AI references files by name; OpenMagic finds the right file in your project tree using fuzzy matching. No exact paths needed.</p>
+        <p>When the AI names a file, OpenMagic finds it in your project tree with fuzzy matching. No exact paths needed.</p>
       </div>
 
       <div class="feature-card">
@@ -903,7 +903,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
         </div>
         <h3>Auto-Retry</h3>
-        <p>Rate limits and transient failures are handled automatically with exponential backoff. Your workflow stays uninterrupted.</p>
+        <p>If the LLM needs more files, OpenMagic reads them and retries automatically. Rate limits and transient failures are retried with backoff.</p>
       </div>
 
       <div class="feature-card">
@@ -911,7 +911,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
         </div>
         <h3>Network Profiling</h3>
-        <p>Captures fetch/XHR requests, response bodies, status codes, and timing. Include this context so the AI understands your API layer.</p>
+        <p>Captures fetch/XHR requests, status codes, and timing. This context helps the AI understand what your APIs return and where they fail.</p>
       </div>
 
       <div class="feature-card">
@@ -919,7 +919,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
         </div>
         <h3>Image Attachments</h3>
-        <p>Attach screenshots or design mockups directly in chat. Vision-capable models use them to understand layout and match your intent.</p>
+        <p>Drag-drop or paste screenshots into chat. Vision models use them to see what you see.</p>
       </div>
 
       <div class="feature-card">
@@ -927,7 +927,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
         </div>
         <h3>Keyboard Shortcuts & Session Persistence</h3>
-        <p>Keyboard shortcuts for power users. Chat history and settings persist across page reloads and browser sessions automatically.</p>
+        <p>Ctrl+Shift+O toggles the toolbar. Chat history and settings survive page reloads via sessionStorage.</p>
       </div>
 
       <div class="feature-card">
@@ -935,7 +935,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         </div>
         <h3>Markdown Chat</h3>
-        <p>Full markdown rendering in the chat panel with syntax-highlighted code blocks. Read AI responses like documentation, not raw text.</p>
+        <p>Markdown rendering in the chat panel with code blocks. Responses are readable, not raw JSON.</p>
       </div>
     </div>
   </section>
@@ -946,7 +946,7 @@
   <section class="section" id="how-it-works">
     <div class="section-header">
       <h2>How it works</h2>
-      <p>A single-port reverse proxy that injects the toolbar. No build step, no framework plugin.</p>
+      <p>A reverse proxy sits between your browser and dev server. It injects a script tag. That's the whole trick.</p>
     </div>
 
     <div class="steps">
@@ -954,7 +954,7 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h3>Start your dev server, then run OpenMagic in your project folder</h3>
-          <p>Open a terminal in your project folder and run the command below. OpenMagic wraps your existing dev server with a reverse proxy and injects the toolbar via a script tag. Your app runs unmodified. Works with React, Vue, Svelte, Angular, Next.js, Nuxt, Astro, plain HTML -- anything with a dev server.</p>
+          <p>Run this in your project folder. OpenMagic detects your dev server, wraps it with a reverse proxy, and injects the toolbar. Your app runs unmodified. Works with anything that serves HTML.</p>
           <div class="step-code"><span class="dim">$</span> npx openmagic@latest</div>
         </div>
       </div>
@@ -963,7 +963,7 @@
         <div class="step-num">2</div>
         <div class="step-content">
           <h3>Pick a provider and paste your API key</h3>
-          <p>Choose from 14 pre-configured providers and 70+ models. Select from the toolbar dropdown, paste your key once. It is stored locally in <code style="color:var(--purple-light);background:var(--purple-glow);padding:1px 6px;border-radius:4px;font-size:13px;">~/.openmagic/config.json</code> -- never sent anywhere except the provider's API.</p>
+          <p>Pick a provider from the dropdown, paste your API key. It's saved to <code style="color:var(--purple-light);background:var(--purple-glow);padding:1px 6px;border-radius:4px;font-size:13px;">~/.openmagic/config.json</code> on your machine and only sent to the provider's API.</p>
         </div>
       </div>
 
@@ -971,7 +971,7 @@
         <div class="step-num">3</div>
         <div class="step-content">
           <h3>Select elements, describe changes, review diffs</h3>
-          <p>Click any element to ground the AI in your actual UI. Describe what you want in plain language. The AI proposes file changes as a diff -- review, approve, and your dev server hot-reloads the result instantly.</p>
+          <p>Click an element to give the AI context. Type what you want changed. It proposes edits as diffs. Approve them, and your dev server hot-reloads.</p>
         </div>
       </div>
     </div>
@@ -983,7 +983,7 @@
   <section class="section" id="providers">
     <div class="section-header">
       <h2>14 providers, 70+ models</h2>
-      <p>All pre-configured with correct API formats, thinking modes, and vision support. Just add your key.</p>
+      <p>API formats, thinking modes, and vision support are pre-configured. You just add your key.</p>
     </div>
 
     <div class="provider-grid">
@@ -1104,7 +1104,7 @@
   <section class="section" id="comparison">
     <div class="section-header">
       <h2>How OpenMagic compares</h2>
-      <p>Honest feature comparison with alternatives in the space.</p>
+      <p>Side-by-side with other tools that do something similar.</p>
     </div>
 
     <div class="comparison-wrap">

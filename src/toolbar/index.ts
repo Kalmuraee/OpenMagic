@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.2";
+const CURRENT_VERSION = "0.30.3";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1621,7 +1621,8 @@ function renderMarkdown(text: string): string {
   // Bold (**...**)
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   // Italic (*...*)
-  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Italic: *text* but not **text** — avoid lookbehind for Safari compatibility
+  html = html.replace(/([^*]|^)\*([^*]+)\*([^*]|$)/g, '$1<em>$2</em>$3');
   // Bullet lists (- item)
   html = html.replace(/^- (.+)$/gm, '&#8226; $1');
   // Line breaks

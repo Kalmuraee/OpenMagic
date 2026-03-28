@@ -55,7 +55,7 @@ function ask(question: string): Promise<string> {
 
 function waitForPort(
   port: number,
-  timeoutMs: number = 30000,
+  timeoutMs: number = 60000,
   shouldAbort?: () => boolean
 ): Promise<boolean> {
   const start = Date.now();
@@ -69,11 +69,14 @@ function waitForPort(
         resolve(true);
         return;
       }
-      if (Date.now() - start > timeoutMs) {
+      const elapsed = Date.now() - start;
+      if (elapsed > timeoutMs) {
         resolve(false);
         return;
       }
-      setTimeout(check, 500);
+      // Aggressive early polling, then back off
+      const interval = elapsed < 10000 ? 300 : 1000;
+      setTimeout(check, interval);
     };
     check();
   });
@@ -558,9 +561,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   try {
     child = spawn(runCmd, runArgs, {
       cwd: process.cwd(),
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-      shell: true,
+      stdio: "inherit",
       env: {
         ...process.env,
         PORT: String(port),
@@ -575,68 +576,16 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   childProcesses.push(child);
   let childExited = false;
-  let detectedPort: number | null = null; // Port detected from dev server output
-
-  // Watch stdout/stderr for the actual port the server starts on
-  function parsePortFromOutput(line: string) {
-    // Strip ALL escape sequences and control characters (ANSI SGR, OSC, hyperlinks, etc.)
-    const clean = line
-      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")  // OSC sequences (hyperlinks, titles)
-      .replace(/\x1b[^a-zA-Z]*[a-zA-Z]/g, "")               // CSI/SGR sequences
-      .replace(/[\x00-\x1f\x7f]/g, "");                      // remaining control chars
-
-    // Match: "http://localhost:3000", "https://127.0.0.1:8080", etc.
-    const portMatch = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)/);
-    if (portMatch && !detectedPort) {
-      const p = parseInt(portMatch[1], 10);
-      if (p > 0 && p < 65536) {
-        if (p === port) {
-          // Server confirmed on expected port — mark as detected so waitForPort exits early
-          detectedPort = p;
-          return;
-        }
-        detectedPort = p;
-        return;
-      }
-    }
-
-    // Fallback: look for "port XXXX" or ":XXXX" patterns in clean text
-    if (!detectedPort) {
-      const fallback = clean.match(/(?:port|Port|PORT)\s+(\d{4,5})/);
-      if (fallback) {
-        const p = parseInt(fallback[1], 10);
-        if (p > 0 && p < 65536 && p !== port) {
-          detectedPort = p;
-        }
-      }
-    }
-  }
-
-  child.stdout?.on("data", (data: Buffer) => {
-    for (const line of data.toString().trim().split("\n")) {
-      parsePortFromOutput(line);
-      const formatted = formatDevServerLine(line);
-      if (formatted) process.stdout.write(formatted + "\n");
-    }
-  });
-
-  child.stderr?.on("data", (data: Buffer) => {
-    for (const line of data.toString().trim().split("\n")) {
-      parsePortFromOutput(line);
-      const formatted = formatDevServerLine(line);
-      if (formatted) process.stdout.write(formatted + "\n");
-    }
-  });
 
   child.on("error", (err) => {
     childExited = true;
-    console.log(chalk.red(`  ✗  Failed to start: ${err.message}`));
+    console.log(chalk.red(`\n  ✗  Failed to start: ${err.message}`));
   });
 
   child.on("exit", (code) => {
     childExited = true;
     if (code !== null && code !== 0) {
-      console.log(chalk.red(`  ✗  Dev server exited with code ${code}`));
+      console.log(chalk.red(`\n  ✗  Dev server exited with code ${code}`));
     }
   });
 
@@ -655,33 +604,37 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  // Wait for the port to open — also watch for the actual port from dev server output
+  // Wait for the port to open via TCP polling
   console.log(
-    chalk.dim(`  Waiting for dev server...`)
+    chalk.dim(`  Waiting for dev server on port ${port}...`)
   );
 
-  const isUp = await waitForPort(port, 60000, () => {
-    if (childExited) return true;
-    // If we detected a different port from the output, check that instead
-    if (detectedPort) return true;
-    return false;
-  });
+  const isUp = await waitForPort(port, 60000, () => childExited);
 
-  // If we detected a port from the output (same or different), verify and use it
-  if (detectedPort) {
-    const altUp = detectedPort === port ? isUp : await isPortOpen(detectedPort);
-    if (altUp) {
-      if (detectedPort !== port) {
+  if (isUp) {
+    lastDetectedPort = port;
+    console.log("");
+    return true;
+  }
+
+  // Port didn't open but process is still running — scan nearby ports
+  if (!childExited) {
+    const scanPorts = [port, 3000, 3001, 3002, 5173, 5174, 4200, 8080, 8000, 4000, 1234, 4321, 3333, 8081]
+      .filter((p, i, a) => a.indexOf(p) === i); // dedupe
+    for (const scanPort of scanPorts) {
+      if (await isPortOpen(scanPort)) {
+        const owned = verifyPortOwnership(scanPort, process.cwd());
+        if (owned === false) continue;
         console.log(
-          chalk.green(`  ✓  Dev server is on port ${detectedPort} (configured in project, not default ${port})`)
+          chalk.green(`\n  ✓  Dev server found on port ${scanPort}.`)
         );
+        lastDetectedPort = scanPort;
+        return true;
       }
-      lastDetectedPort = detectedPort;
-      return true;
     }
   }
 
-  if (childExited && !isUp) {
+  if (childExited) {
     console.log(
       chalk.red(`  ✗  Dev server failed to start.`)
     );
@@ -708,45 +661,15 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     return false;
   }
 
-  if (!isUp) {
-    // Last resort: scan ALL common ports (bypass the script-based optimization)
-    // because the dev server might be on a custom port configured in the project
-    for (const scanPort of [3000, 3001, 5173, 5174, 4200, 8080, 8000, 4000, 1234, 4321, 3333, 8081]) {
-      if (scanPort === port) continue; // Already tried this one
-      if (await isPortOpen(scanPort)) {
-        // Verify this port belongs to this project, not another one
-        const owned = verifyPortOwnership(scanPort, process.cwd());
-        if (owned === false) continue;
-        console.log(
-          chalk.green(`  ✓  Dev server found on port ${scanPort}.`)
-        );
-        lastDetectedPort = scanPort;
-        return true;
-      }
-    }
-
-    console.log(
-      chalk.yellow(`  ⚠  Port ${port} didn't open after 60s.`)
-    );
-    console.log(
-      chalk.dim(`     The server might use a different port. Check the output above.`)
-    );
-    console.log("");
-
-    // Try to detect any port that opened
-    const detected = await detectDevServer();
-    if (detected) {
-      console.log(
-        chalk.green(`  ✓  Found server on port ${detected.port} instead.`)
-      );
-      return true;
-    }
-
-    return false;
-  }
-
+  // All detection methods exhausted
+  console.log(
+    chalk.yellow(`\n  ⚠  Could not find the dev server after 60s.`)
+  );
+  console.log(chalk.dim(`     Check the output above for errors.`));
+  console.log(chalk.dim(`     Or start the server manually, then run:`));
+  console.log(chalk.cyan(`     npx openmagic --port <your-port>`));
   console.log("");
-  return true;
+  return false;
 }
 
 program.parse();

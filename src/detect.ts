@@ -23,7 +23,8 @@ const COMMON_DEV_PORTS = [
 
 function checkPortSingle(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = createConnection({ port, host, timeout: 500 });
+    const socket = createConnection({ port, host, timeout: 1000 });
+    socket.unref();
     socket.on("connect", () => { socket.destroy(); resolve(true); });
     socket.on("error", () => { socket.destroy(); resolve(false); });
     socket.on("timeout", () => { socket.destroy(); resolve(false); });

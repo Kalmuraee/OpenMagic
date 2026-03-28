@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.31.3";
+const CURRENT_VERSION = "0.31.4";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1655,67 +1655,206 @@ function renderMarkdown(text: string): string {
 
 function collectDebugInfo(messageIdx?: number): string {
   const lines: string[] = [];
-  lines.push("## Debug Info");
+
+  // ── Environment ──
+  lines.push("## Environment");
   lines.push("");
-  lines.push(`- **OpenMagic**: v${CURRENT_VERSION}`);
+  lines.push(`- **OpenMagic**: v${CURRENT_VERSION}${state.updateAvailable ? ` (v${state.latestVersion} available)` : ""}`);
+  lines.push(`- **Browser**: ${navigator.userAgent}`);
+  lines.push(`- **Platform**: ${navigator.platform}`);
+  lines.push(`- **Viewport**: ${window.innerWidth}x${window.innerHeight} (devicePixelRatio: ${window.devicePixelRatio})`);
+  lines.push(`- **Page URL**: ${window.location.href}`);
+  lines.push(`- **Page Title**: ${document.title}`);
+
+  // ── Connection & Config ──
+  lines.push("");
+  lines.push("## Configuration");
+  lines.push("");
+  lines.push(`- **WebSocket**: ${state.connected ? "connected" : "disconnected"}`);
   lines.push(`- **Provider**: ${MODEL_REGISTRY[state.provider]?.name || state.provider || "not set"}`);
   lines.push(`- **Model**: ${state.model || "not set"}`);
-  lines.push(`- **Page URL**: ${window.location.href}`);
-  lines.push(`- **Browser**: ${navigator.userAgent}`);
+  lines.push(`- **API Key Set**: ${state.hasApiKey ? "yes" : "no"}`);
+  const configuredList = Object.entries(state.configuredProviders)
+    .filter(([, v]) => v)
+    .map(([k]) => MODEL_REGISTRY[k]?.name || k);
+  if (configuredList.length) {
+    lines.push(`- **Configured Providers**: ${configuredList.join(", ")}`);
+  }
+  if (state.roots.length) {
+    lines.push(`- **Project Roots**: ${state.roots.join(", ")}`);
+  }
 
-  // Selected element
+  // ── Selected Element ──
   if (state.selectedElement) {
     const el = state.selectedElement;
-    const selector = el.cssSelector || `${el.tagName}${el.id ? "#" + el.id : ""}${el.className ? "." + el.className.split(" ")[0] : ""}`;
-    lines.push(`- **Selected Element**: \`${selector}\``);
+    lines.push("");
+    lines.push("## Selected Element");
+    lines.push("");
+    lines.push(`- **Selector**: \`${el.cssSelector || ""}\``);
+    lines.push(`- **Tag**: \`${el.tagName}\``);
+    if (el.id) lines.push(`- **ID**: \`${el.id}\``);
+    if (el.className) lines.push(`- **Class**: \`${el.className}\``);
+    if ((el as any).componentHint) lines.push(`- **Component**: \`${(el as any).componentHint}\``);
+    if ((el as any).ancestry?.length) lines.push(`- **Ancestry**: ${(el as any).ancestry.join(" > ")}`);
+    if (el.textContent) lines.push(`- **Text**: ${el.textContent.slice(0, 150)}`);
   }
 
-  // Console errors
+  // ── Grounded Files (sent to LLM) ──
+  if (state.groundedFiles.length) {
+    lines.push("");
+    lines.push("## Files Sent to LLM");
+    lines.push("");
+    for (const f of state.groundedFiles) {
+      lines.push(`- \`${f}\``);
+    }
+  }
+
+  // ── Proposed Changes (diffs) ──
+  const diffs: { file: string; type: string }[] = [];
+  for (const m of state.messages) {
+    if (m.content.startsWith("__DIFF__")) {
+      try {
+        const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
+        diffs.push({ file: diff.file, type: diff.type || "edit" });
+      } catch {}
+    }
+  }
+  if (diffs.length) {
+    lines.push("");
+    lines.push("## Proposed Changes");
+    lines.push("");
+    for (const d of diffs) {
+      lines.push(`- \`${d.file}\` (${d.type})`);
+    }
+  }
+
+  // ── Applied / Rejected / Reverted ──
+  const appliedMsgs = state.messages.filter(m =>
+    m.role === "system" && (
+      m.content.startsWith("Applied change to ") ||
+      m.content.startsWith("Rejected change to ") ||
+      m.content.startsWith("Reverted change to ") ||
+      m.content.startsWith("Created ") ||
+      m.content.startsWith("Change rejected") ||
+      m.content.startsWith("No matching code") ||
+      m.content.startsWith("Write failed") ||
+      m.content.startsWith("Could not read")
+    )
+  );
+  if (appliedMsgs.length) {
+    lines.push("");
+    lines.push("## Applied/Rejected Changes");
+    lines.push("");
+    for (const m of appliedMsgs) {
+      lines.push(`- ${m.content.slice(0, 200)}`);
+    }
+  }
+
+  // ── Performance ──
+  const perf = window.performance;
+  const navEntry = perf.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  const paintEntries = perf.getEntriesByType("paint");
+  if (navEntry) {
+    lines.push("");
+    lines.push("## Page Performance");
+    lines.push("");
+    lines.push(`- **Page Load**: ${Math.round(navEntry.loadEventEnd - navEntry.startTime)}ms`);
+    lines.push(`- **DOM Ready**: ${Math.round(navEntry.domContentLoadedEventEnd - navEntry.startTime)}ms`);
+    lines.push(`- **TTFB**: ${Math.round(navEntry.responseStart - navEntry.startTime)}ms`);
+    const fcp = paintEntries.find(e => e.name === "first-contentful-paint");
+    if (fcp) lines.push(`- **FCP**: ${Math.round(fcp.startTime)}ms`);
+  }
+
+  // ── Console Errors & Warnings ──
   const consoleLogs = getConsoleLogs();
   const errors = consoleLogs.filter(l => l.level === "error");
-  if (errors.length) {
+  const warnings = consoleLogs.filter(l => l.level === "warn");
+  if (errors.length || warnings.length) {
     lines.push("");
-    lines.push("### Console Errors");
-    lines.push("```");
-    for (const err of errors.slice(-10)) {
-      lines.push(err.args.map((a: any) => String(a)).join(" ").slice(0, 200));
+    lines.push("## Console Issues");
+    lines.push("");
+    if (errors.length) {
+      lines.push(`### Errors (${errors.length})`);
+      lines.push("```");
+      for (const err of errors.slice(-15)) {
+        lines.push(err.args.map((a: any) => String(a)).join(" ").slice(0, 300));
+      }
+      lines.push("```");
     }
-    lines.push("```");
+    if (warnings.length) {
+      lines.push(`### Warnings (${warnings.length})`);
+      lines.push("```");
+      for (const w of warnings.slice(-10)) {
+        lines.push(w.args.map((a: any) => String(a)).join(" ").slice(0, 200));
+      }
+      lines.push("```");
+    }
   }
 
-  // Network errors
+  // ── Network ──
   const networkLogs = getNetworkLogs();
   const failedRequests = networkLogs.filter(l => l.status && l.status >= 400);
-  if (failedRequests.length) {
+  const slowRequests = networkLogs.filter(l => l.duration && l.duration > 2000);
+  if (failedRequests.length || slowRequests.length) {
     lines.push("");
-    lines.push("### Failed Requests");
-    lines.push("```");
-    for (const req of failedRequests.slice(-10)) {
-      lines.push(`${req.method} ${req.url.slice(0, 100)} → ${req.status}`);
+    lines.push("## Network Issues");
+    lines.push("");
+    if (failedRequests.length) {
+      lines.push(`### Failed Requests (${failedRequests.length})`);
+      lines.push("```");
+      for (const req of failedRequests.slice(-15)) {
+        lines.push(`${req.method} ${req.url.slice(0, 120)} → ${req.status} (${req.duration || "?"}ms)`);
+      }
+      lines.push("```");
     }
-    lines.push("```");
+    if (slowRequests.length) {
+      lines.push(`### Slow Requests >2s (${slowRequests.length})`);
+      lines.push("```");
+      for (const req of slowRequests.slice(-10)) {
+        lines.push(`${req.method} ${req.url.slice(0, 120)} → ${req.status} (${req.duration}ms)`);
+      }
+      lines.push("```");
+    }
   }
 
-  // Chat context (specific message or recent history)
+  // ── Full Chat History ──
+  if (state.messages.length) {
+    lines.push("");
+    lines.push("## Chat History");
+    lines.push("");
+    lines.push("<details><summary>Full conversation (" + state.messages.length + " messages)</summary>");
+    lines.push("");
+    lines.push("```");
+    for (const m of state.messages) {
+      if (m.content.startsWith("__DIFFGROUP__")) continue;
+      if (m.content.startsWith("__DIFF__")) {
+        try {
+          const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
+          lines.push(`[diff] ${diff.type || "edit"}: ${diff.file}`);
+          if (diff.search) lines.push(`  - search: ${diff.search.slice(0, 100)}...`);
+          if (diff.replace) lines.push(`  + replace: ${diff.replace.slice(0, 100)}...`);
+        } catch {
+          lines.push(`[diff] (parse error)`);
+        }
+        continue;
+      }
+      lines.push(`[${m.role}] ${m.content.slice(0, 500)}`);
+    }
+    lines.push("```");
+    lines.push("</details>");
+  }
+
+  // ── Specific message context (for copy button) ──
   if (messageIdx !== undefined) {
     const msg = state.messages[messageIdx];
     if (msg) {
       lines.push("");
-      lines.push("### Message");
+      lines.push("## Copied Message");
+      lines.push("");
       lines.push("```");
-      lines.push(`[${msg.role}] ${msg.content.slice(0, 1000)}`);
+      lines.push(`[${msg.role}] ${msg.content.slice(0, 2000)}`);
       lines.push("```");
     }
-  } else if (state.messages.length) {
-    lines.push("");
-    lines.push("### Recent Chat");
-    lines.push("```");
-    const recent = state.messages.slice(-6);
-    for (const m of recent) {
-      if (m.content.startsWith("__DIFF__") || m.content.startsWith("__DIFFGROUP__")) continue;
-      lines.push(`[${m.role}] ${m.content.slice(0, 300)}`);
-    }
-    lines.push("```");
   }
 
   return lines.join("\n");

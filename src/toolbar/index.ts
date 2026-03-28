@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.5";
+const CURRENT_VERSION = "0.30.6";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -530,9 +530,9 @@ async function applyDiff(target: HTMLElement) {
         } else {
           const idx = card?.dataset.diffIdx;
           if (idx !== undefined) {
-            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Refresh the page to see the update.` };
+            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Reloading...` };
           } else {
-            state.messages.push({ role: "system", content: `Applied change to ${file}. Refresh the page to see the update.` });
+            state.messages.push({ role: "system", content: `Applied change to ${file}. Reloading...` });
           }
         }
       } else if (exactCount > 1) {
@@ -548,9 +548,9 @@ async function applyDiff(target: HTMLElement) {
           } else {
             const idx = card?.dataset.diffIdx;
             if (idx !== undefined) {
-              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Refresh the page to see the update.` };
+              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` };
             } else {
-              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Refresh the page to see the update.` });
+              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` });
             }
           }
         } else {
@@ -564,6 +564,10 @@ async function applyDiff(target: HTMLElement) {
 
   refreshPanelContent();
   scrollChatToBottom();
+
+  // Auto-reload page after 1.5s so user sees the change
+  // (HMR-based dev servers handle this automatically, but static servers don't)
+  setTimeout(() => { window.location.reload(); }, 1500);
 }
 
 function rejectDiff(target: HTMLElement) {
@@ -896,7 +900,7 @@ function renderChatHTML(): string {
       }
     }
     if (m.content.startsWith("Applied change to ")) {
-      const file = m.content.replace("Applied change to ", "").replace(/ \(fuzzy match.*?\)/g, "").replace(". Refresh the page to see the update.", "");
+      const file = m.content.replace("Applied change to ", "").replace(/ \(fuzzy match.*?\)/g, "").replace(". Reloading...", "");
       return `<div class="om-msg om-msg-system">${escapeHtml(m.content)} <button class="om-undo-btn" data-action="undo-diff" data-file="${escapeHtml(file)}">Undo</button></div>`;
     }
     // Regular messages with copy button

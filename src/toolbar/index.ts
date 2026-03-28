@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.1";
+const CURRENT_VERSION = "0.30.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -494,18 +494,39 @@ async function applyDiff(target: HTMLElement) {
       return;
     }
 
-    const fileResult = await ws.request("fs.read", { path: filePath });
-    const content = fileResult?.payload?.content;
+    // Try primary path, then fallbacks if it fails
+    let content: string | undefined;
+    let resolvedPath = filePath;
+
+    const readAttempt = await ws.request("fs.read", { path: filePath }).catch(() => null);
+    content = readAttempt?.payload?.content;
+
+    // Fallback 1: try the path as-is (without root prefix)
+    if (!content && file !== filePath) {
+      const fallback1 = await ws.request("fs.read", { path: file }).catch(() => null);
+      if (fallback1?.payload?.content) { content = fallback1.payload.content; resolvedPath = file; }
+    }
+
+    // Fallback 2: try just the filename in root
+    if (!content) {
+      const basename = file.split("/").pop() || file;
+      const root = state.roots[0] || "";
+      const fallback2Path = root ? `${root}/${basename}` : basename;
+      if (fallback2Path !== filePath) {
+        const fallback2 = await ws.request("fs.read", { path: fallback2Path }).catch(() => null);
+        if (fallback2?.payload?.content) { content = fallback2.payload.content; resolvedPath = fallback2Path; }
+      }
+    }
 
     if (!content) {
-      state.messages.push({ role: "system", content: `Could not read ${file} — file may not exist at ${filePath}` });
+      state.messages.push({ role: "system", content: `Could not read ${file} — file not found` });
     } else {
       // Try exact match first
       const exactCount = content.split(search).length - 1;
 
       if (exactCount === 1) {
         // Exact match — apply directly
-        const writeResult = await ws.request("fs.write", { path: filePath, content: content.replace(search, replace) });
+        const writeResult = await ws.request("fs.write", { path: resolvedPath, content: content.replace(search, replace) });
         if (writeResult?.payload?.ok === false) {
           state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
         } else {
@@ -523,7 +544,7 @@ async function applyDiff(target: HTMLElement) {
         const fuzzyResult = fuzzyLineMatch(content, search);
         if (fuzzyResult) {
           const newContent = content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
-          const writeResult = await ws.request("fs.write", { path: filePath, content: newContent });
+          const writeResult = await ws.request("fs.write", { path: resolvedPath, content: newContent });
           if (writeResult?.payload?.ok === false) {
             state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
           } else {

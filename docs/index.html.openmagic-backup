@@ -189,32 +189,13 @@
       margin-bottom: 24px;
       letter-spacing: -1.5px;
       color: var(--text-bright);
-      animation: heroFadeUp 0.9s ease-out both;
     }
 
     h1 .gradient {
       background: linear-gradient(135deg, #fff 0%, var(--purple-light) 60%, #c4b5fd 100%);
-      background-size: 200% 200%;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      animation: gradientShift 5s ease-in-out infinite;
-    }
-
-    @keyframes heroFadeUp {
-      from {
-        opacity: 0;
-        transform: translateY(18px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes gradientShift {
-      0%, 100% { background-position: 0% 50%; }
-      50% { background-position: 100% 50%; }
     }
 
     .hero-sub {

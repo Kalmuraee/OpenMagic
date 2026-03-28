@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.31.9";
+const CURRENT_VERSION = "0.32.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1119,10 +1119,12 @@ async function sendPrompt() {
     const scored = textFiles.map((f: { path: string; type: string }) => {
       let score = 0;
       const lower = f.path.toLowerCase();
+      // Strip Next.js route groups like (dashboard) from path for scoring
+      const lowerNoGroups = lower.replace(/\([^)]+\)\//g, "");
 
       // Route match: files matching URL path get highest priority (+15)
       for (const rt of routeTokens) {
-        if (lower.includes(rt.toLowerCase())) score += 15;
+        if (lowerNoGroups.includes(rt.toLowerCase())) score += 15;
       }
 
       // Component hint match (+12)
@@ -1290,7 +1292,7 @@ async function sendPrompt() {
       const needFileMatch = responseContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
         || responseContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
         || responseContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i);
-      if (needFileMatch && !result?.modifications?.length && retryCount < MAX_RETRIES) {
+      if (needFileMatch && retryCount < MAX_RETRIES) {
         const neededFile = needFileMatch[1].trim();
         retryCount++;
 

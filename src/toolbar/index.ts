@@ -87,7 +87,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.30.4";
+const CURRENT_VERSION = "0.30.5";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -498,28 +498,26 @@ async function applyDiff(target: HTMLElement) {
     let content: string | undefined;
     let resolvedPath = filePath;
 
-    const readAttempt = await ws.request("fs.read", { path: filePath }).catch(() => null);
-    content = readAttempt?.payload?.content;
+    // Try reading from multiple paths
+    const pathsToTry = [filePath];
+    if (file !== filePath) pathsToTry.push(file);
+    const basename = file.split("/").pop() || file;
+    const root = state.roots[0] || "";
+    const baseInRoot = root ? `${root}/${basename}` : basename;
+    if (baseInRoot !== filePath && baseInRoot !== file) pathsToTry.push(baseInRoot);
 
-    // Fallback 1: try the path as-is (without root prefix)
-    if (!content && file !== filePath) {
-      const fallback1 = await ws.request("fs.read", { path: file }).catch(() => null);
-      if (fallback1?.payload?.content) { content = fallback1.payload.content; resolvedPath = file; }
-    }
-
-    // Fallback 2: try just the filename in root
-    if (!content) {
-      const basename = file.split("/").pop() || file;
-      const root = state.roots[0] || "";
-      const fallback2Path = root ? `${root}/${basename}` : basename;
-      if (fallback2Path !== filePath) {
-        const fallback2 = await ws.request("fs.read", { path: fallback2Path }).catch(() => null);
-        if (fallback2?.payload?.content) { content = fallback2.payload.content; resolvedPath = fallback2Path; }
+    for (const tryPath of pathsToTry) {
+      const r = await ws.request("fs.read", { path: tryPath }).catch(() => null);
+      const c = r?.payload?.content;
+      if (c !== undefined && c !== null && String(c).length > 0) {
+        content = String(c);
+        resolvedPath = tryPath;
+        break;
       }
     }
 
     if (!content) {
-      state.messages.push({ role: "system", content: `Could not read ${file} — file not found` });
+      state.messages.push({ role: "system", content: `Could not read ${file} — tried: ${pathsToTry.join(", ")}` });
     } else {
       // Try exact match first
       const exactCount = content.split(search).length - 1;
@@ -532,9 +530,9 @@ async function applyDiff(target: HTMLElement) {
         } else {
           const idx = card?.dataset.diffIdx;
           if (idx !== undefined) {
-            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}` };
+            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Refresh the page to see the update.` };
           } else {
-            state.messages.push({ role: "system", content: `Applied change to ${file}` });
+            state.messages.push({ role: "system", content: `Applied change to ${file}. Refresh the page to see the update.` });
           }
         }
       } else if (exactCount > 1) {
@@ -550,9 +548,9 @@ async function applyDiff(target: HTMLElement) {
           } else {
             const idx = card?.dataset.diffIdx;
             if (idx !== undefined) {
-              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match — whitespace adjusted)` };
+              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Refresh the page to see the update.` };
             } else {
-              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match)` });
+              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Refresh the page to see the update.` });
             }
           }
         } else {
@@ -898,7 +896,7 @@ function renderChatHTML(): string {
       }
     }
     if (m.content.startsWith("Applied change to ")) {
-      const file = m.content.replace("Applied change to ", "").replace(" (fuzzy match — whitespace adjusted)", "").replace(" (fuzzy match)", "");
+      const file = m.content.replace("Applied change to ", "").replace(/ \(fuzzy match.*?\)/g, "").replace(". Refresh the page to see the update.", "");
       return `<div class="om-msg om-msg-system">${escapeHtml(m.content)} <button class="om-undo-btn" data-action="undo-diff" data-file="${escapeHtml(file)}">Undo</button></div>`;
     }
     // Regular messages with copy button

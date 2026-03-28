@@ -14,6 +14,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue?style=flat-square)](https://www.typescriptlang.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Kalmuraee/OpenMagic/pulls)
 [![Node](https://img.shields.io/node/v/openmagic?style=flat-square)](https://nodejs.org/)
+[![Hits](https://hits.sh/github.com/Kalmuraee/OpenMagic.svg?style=flat-square&label=views&color=6c5ce7)](https://hits.sh/github.com/Kalmuraee/OpenMagic/)
 
 OpenMagic injects a floating AI toolbar into your running web app via reverse proxy.
 Select any element, describe what you want, review the diff, approve — your code updates and HMR refreshes the page.

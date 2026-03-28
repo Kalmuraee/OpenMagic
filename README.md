@@ -85,7 +85,7 @@ OpenMagic is a single-port reverse proxy. It sits between your browser and your 
                         +-----------------------+
 ```
 
-1. **Proxy** -- All requests forward to your dev server. HTML responses get a `<script>` tag injected before `</body>`.
+1. **Proxy** -- All requests forward to your dev server. HTML responses get the toolbar `<script>` tag appended automatically.
 2. **Toolbar** -- A Shadow DOM Web Component. Fully isolated from your app's styles.
 3. **Server** -- Local Node.js process handling file I/O and proxying LLM calls. API keys never leave your machine.
 4. **HMR** -- When the AI modifies source files, your dev server's hot module replacement picks up changes automatically.
@@ -137,7 +137,7 @@ Stop with `Ctrl+C`. No files modified. No dependencies added. No traces.
 | `-p, --port <port>` | Dev server port to proxy | Auto-detect |
 | `-l, --listen <port>` | OpenMagic proxy port | `4567` |
 | `-r, --root <paths...>` | Project root directories | Current directory |
-| `--host <host>` | Dev server host | `127.0.0.1` |
+| `--host <host>` | Dev server host | `localhost` |
 | `--no-open` | Do not auto-open browser | `false` |
 
 ### Multi-Repo Support
@@ -153,7 +153,7 @@ Settings persist in `~/.openmagic/config.json` (your home directory, never in yo
 ```json
 {
   "provider": "anthropic",
-  "model": "claude-opus-4-6-20260326",
+  "model": "claude-opus-4-6",
   "apiKey": "sk-ant-..."
 }
 ```
@@ -170,7 +170,7 @@ npx openmagic --port 3000
 
 ## Security
 
-- **Localhost only** -- The proxy and WebSocket bind to `127.0.0.1`. Not accessible from the network.
+- **Localhost only** -- The proxy and WebSocket bind to `localhost`. Not accessible from the network.
 - **Session tokens** -- Each session generates a random token. The toolbar authenticates before accessing any API.
 - **Path sandboxing** -- File operations are restricted to configured root directories. Symlinks that escape the root are rejected.
 - **API keys stay local** -- Keys live in `~/.openmagic/config.json`. They are proxied through the local server, never exposed to the browser or any third party.
@@ -253,7 +253,7 @@ See the repo for project structure and contribution guidelines.
 
 ## License
 
-MIT -- Copyright (c) 2025-2026 Khalid Almuraee. See [LICENSE](./LICENSE) for details.
+MIT -- Copyright (c) 2026 Khalid Almuraee. See [LICENSE](./LICENSE) for details.
 
 ---
 

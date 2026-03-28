@@ -19,8 +19,28 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.31.1";
+const VERSION = "0.31.4";
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Server-side log buffer ──
+const MAX_SERVER_LOGS = 200;
+const serverLogs: { level: string; msg: string; ts: number }[] = [];
+
+function captureServerLog(level: string, ...args: any[]) {
+  const msg = args.map(a => {
+    try { return typeof a === "object" ? JSON.stringify(a).slice(0, 500) : String(a); }
+    catch { return String(a); }
+  }).join(" ");
+  serverLogs.push({ level, msg, ts: Date.now() });
+  if (serverLogs.length > MAX_SERVER_LOGS) serverLogs.shift();
+}
+
+// Intercept console to buffer server logs
+const _origLog = console.log, _origWarn = console.warn, _origErr = console.error, _origInfo = console.info;
+console.log = (...a: any[]) => { captureServerLog("log", ...a); _origLog(...a); };
+console.warn = (...a: any[]) => { captureServerLog("warn", ...a); _origWarn(...a); };
+console.error = (...a: any[]) => { captureServerLog("error", ...a); _origErr(...a); };
+console.info = (...a: any[]) => { captureServerLog("info", ...a); _origInfo(...a); };
 
 interface ClientState {
   authenticated: boolean;
@@ -282,6 +302,24 @@ async function handleMessage(
       } else {
         send(ws, { id: msg.id, type: "config.saved", payload: { ok: true } });
       }
+      break;
+    }
+
+    case "debug.logs": {
+      send(ws, {
+        id: msg.id,
+        type: "debug.logs",
+        payload: {
+          logs: serverLogs.slice(-100),
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          uptime: Math.round(process.uptime()),
+          memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+          pid: process.pid,
+          cwd: process.cwd(),
+        },
+      });
       break;
     }
 

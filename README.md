@@ -39,11 +39,11 @@ No framework plugin. No IDE extension. No account. Bring your own API key.
 # 1. Start your dev server as usual
 npm run dev
 
-# 2. Launch OpenMagic (auto-detects your dev server)
+# 2. In your project folder, run OpenMagic (auto-detects your dev server)
 npx openmagic@latest
 ```
 
-A proxied version of your app opens with the AI toolbar overlaid. That is it.
+Run `npx openmagic@latest` from your project folder so it can find your source files and dev server. A proxied version of your app opens with the AI toolbar overlaid. That is it.
 
 ---
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/logo.png" alt="OpenMagic" width="200" />
+<img src="https://raw.githubusercontent.com/Kalmuraee/OpenMagic/main/docs/logo.png" alt="OpenMagic" width="200" />
 
 # OpenMagic
 
@@ -22,11 +22,6 @@ No framework plugin. No IDE extension. No account. Bring your own API key.
 [Website](https://kalmuraee.github.io/OpenMagic/) &#183; [Quick Start](#quick-start) &#183; [How It Works](#how-it-works) &#183; [Providers](#supported-providers) &#183; [GitHub](https://github.com/Kalmuraee/OpenMagic)
 
 </div>
-
----
-
-<!-- DEMO GIF -->
-![OpenMagic Demo](./docs/demo.gif)
 
 ---
 

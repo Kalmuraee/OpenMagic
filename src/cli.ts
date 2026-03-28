@@ -37,6 +37,7 @@ import {
   detectDevScripts,
   getProjectName,
   checkDependenciesInstalled,
+  verifyPortOwnership,
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 
@@ -503,7 +504,28 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   }
 
   // Start the dev server
-  const port = expectedPort || chosen.defaultPort;
+  let port = expectedPort || chosen.defaultPort;
+
+  // Check if the expected port is already occupied by another process
+  if (await isPortOpen(port)) {
+    const owned = verifyPortOwnership(port, process.cwd());
+    if (owned === true) {
+      // Port is occupied by this project — already running
+      console.log(chalk.green(`  ✓  Dev server already running on port ${port}`));
+      lastDetectedPort = port;
+      return true;
+    }
+    // Port is taken by something else — find a free one
+    const altPort = await findAvailablePort(port + 1);
+    console.log("");
+    console.log(
+      chalk.yellow(`  ⚠  Port ${port} is already in use by another process.`)
+    );
+    console.log(
+      chalk.dim(`     Starting on port ${altPort} instead.`)
+    );
+    port = altPort;
+  }
 
   console.log("");
   console.log(
@@ -672,6 +694,9 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     for (const scanPort of [3000, 3001, 5173, 5174, 4200, 8080, 8000, 4000, 1234, 4321, 3333, 8081]) {
       if (scanPort === port) continue; // Already tried this one
       if (await isPortOpen(scanPort)) {
+        // Verify this port belongs to this project, not another one
+        const owned = verifyPortOwnership(scanPort, process.cwd());
+        if (owned === false) continue;
         console.log(
           chalk.green(`  ✓  Dev server found on port ${scanPort}.`)
         );

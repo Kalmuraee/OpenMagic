@@ -5,8 +5,13 @@
 **Add an AI coding toolbar to any web app. One command. Zero code changes.**
 
 [![npm version](https://img.shields.io/npm/v/openmagic.svg?style=flat-square)](https://www.npmjs.com/package/openmagic)
+[![npm downloads](https://img.shields.io/npm/dw/openmagic?style=flat-square)](https://www.npmjs.com/package/openmagic)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/Kalmuraee/OpenMagic?style=flat-square)](https://github.com/Kalmuraee/OpenMagic/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/Kalmuraee/OpenMagic/ci.yml?style=flat-square&label=CI)](https://github.com/Kalmuraee/OpenMagic/actions)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue?style=flat-square)](https://www.typescriptlang.org/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Kalmuraee/OpenMagic/pulls)
+[![Node](https://img.shields.io/node/v/openmagic?style=flat-square)](https://nodejs.org/)
 
 OpenMagic injects a floating AI toolbar into your running web app via reverse proxy.
 Select any element, describe what you want, review the diff, approve — your code updates and HMR refreshes the page.

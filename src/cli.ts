@@ -507,6 +507,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   let port = expectedPort || chosen.defaultPort;
 
   // Check if the expected port is already occupied by another process
+  let portChanged = false;
   if (await isPortOpen(port)) {
     const owned = verifyPortOwnership(port, process.cwd());
     if (owned === true) {
@@ -525,12 +526,14 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       chalk.dim(`     Starting on port ${altPort} instead.`)
     );
     port = altPort;
+    portChanged = true;
   }
 
   console.log("");
   console.log(
     chalk.dim(`  Starting `) +
     chalk.cyan(`npm run ${chosen.name}`) +
+    (portChanged ? chalk.dim(` (port ${port})`) : "") +
     chalk.dim("...")
   );
 
@@ -540,6 +543,16 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     depsInfo.packageManager === "pnpm" ? "pnpm" :
     depsInfo.packageManager === "bun" ? "bun" : "npm";
   const runArgs = runCmd === "npm" ? ["run", chosen.name] : [chosen.name];
+
+  // If port was changed due to conflict, pass --port to the framework CLI
+  // Most frameworks (Next.js, Vite, Angular, Vue CLI, Astro) accept --port
+  if (portChanged) {
+    if (runCmd === "npm") {
+      runArgs.push("--", "--port", String(port));
+    } else {
+      runArgs.push("--port", String(port));
+    }
+  }
 
   let child: ReturnType<typeof spawn>;
   try {
@@ -573,10 +586,15 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       .replace(/[\x00-\x1f\x7f]/g, "");                      // remaining control chars
 
     // Match: "http://localhost:3000", "https://127.0.0.1:8080", etc.
-    const portMatch = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/);
+    const portMatch = clean.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d+)/);
     if (portMatch && !detectedPort) {
       const p = parseInt(portMatch[1], 10);
-      if (p > 0 && p < 65536 && p !== port) {
+      if (p > 0 && p < 65536) {
+        if (p === port) {
+          // Server confirmed on expected port — mark as detected so waitForPort exits early
+          detectedPort = p;
+          return;
+        }
         detectedPort = p;
         return;
       }
@@ -642,20 +660,22 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     chalk.dim(`  Waiting for dev server...`)
   );
 
-  const isUp = await waitForPort(port, 30000, () => {
+  const isUp = await waitForPort(port, 60000, () => {
     if (childExited) return true;
     // If we detected a different port from the output, check that instead
     if (detectedPort) return true;
     return false;
   });
 
-  // If the expected port didn't open but we detected a different one from output
-  if (!isUp && detectedPort) {
-    const altUp = await isPortOpen(detectedPort);
+  // If we detected a port from the output (same or different), verify and use it
+  if (detectedPort) {
+    const altUp = detectedPort === port ? isUp : await isPortOpen(detectedPort);
     if (altUp) {
-      console.log(
-        chalk.green(`  ✓  Dev server is on port ${detectedPort} (configured in project, not default ${port})`)
-      );
+      if (detectedPort !== port) {
+        console.log(
+          chalk.green(`  ✓  Dev server is on port ${detectedPort} (configured in project, not default ${port})`)
+        );
+      }
       lastDetectedPort = detectedPort;
       return true;
     }
@@ -706,7 +726,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     }
 
     console.log(
-      chalk.yellow(`  ⚠  Port ${port} didn't open after 30s.`)
+      chalk.yellow(`  ⚠  Port ${port} didn't open after 60s.`)
     );
     console.log(
       chalk.dim(`     The server might use a different port. Check the output above.`)

@@ -80,20 +80,18 @@ export const TOOLBAR_CSS = `
 .om-pill-btn:hover { background: rgba(108, 92, 231, 0.15); color: #a29bfe; }
 .om-pill-btn:focus-visible { outline: 2px solid #6c5ce7; outline-offset: 2px; }
 .om-pill-btn.active { background: rgba(108, 92, 231, 0.25); color: #c4b5fd; }
-.om-pill-btn-bug { color: #888; opacity: 0.7; padding: 5px 4px; }
-.om-pill-btn-bug:hover { opacity: 1; color: #e94560; background: rgba(233, 69, 96, 0.1); }
+.om-panel-bug {
+  background: none; border: none; color: #666; cursor: pointer; padding: 2px 4px;
+  border-radius: 4px; line-height: 1; display: flex; align-items: center;
+}
+.om-panel-bug:hover { color: #e94560; background: rgba(233, 69, 96, 0.1); }
 
 .om-status-dot {
   width: 7px; height: 7px; border-radius: 50%; margin-left: auto; flex-shrink: 0;
 }
 .om-status-dot.connected { background: #00b894; }
 .om-status-dot.disconnected { background: #e94560; }
-
-.om-update-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: #fdcb6e;
-  margin-left: 4px; cursor: pointer; flex-shrink: 0;
-  animation: om-pulse 2s ease infinite;
-}
+.om-status-dot.outdated { background: #fdcb6e; animation: om-pulse 2s ease infinite; }
 @keyframes om-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(253,203,110,0.4); }
   50% { box-shadow: 0 0 0 5px rgba(253,203,110,0); }

@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.0";
+const CURRENT_VERSION = "0.33.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -619,12 +619,9 @@ async function undoDiff(target: HTMLElement) {
   const file = target.dataset.file;
   if (!file) return;
   const filePath = resolveFilePath(file);
-  const backupPath = filePath + ".openmagic-backup";
   try {
-    const backupResult = await ws.request("fs.read", { path: backupPath });
-    const backupContent = backupResult?.payload?.content;
-    if (backupContent) {
-      await ws.request("fs.write", { path: filePath, content: backupContent });
+    const result = await ws.request("fs.undo", { path: filePath });
+    if (result?.payload?.ok) {
       state.messages.push({ role: "system", content: `Reverted change to ${file}` });
     } else {
       state.messages.push({ role: "system", content: `No backup found for ${file}` });

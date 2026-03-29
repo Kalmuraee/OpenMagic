@@ -8,8 +8,12 @@ import {
   copyFileSync,
   mkdirSync,
   realpathSync,
+  unlinkSync,
+  rmSync,
 } from "node:fs";
 import { join, resolve, relative, dirname, extname } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import type { FileEntry } from "./shared-types.js";
 
 const IGNORED_DIRS = new Set([
@@ -86,6 +90,29 @@ export function readFileSafe(
   }
 }
 
+// ── Backup Management (temp directory) ──
+const BACKUP_DIR = join(tmpdir(), "openmagic-backups");
+const backupMap = new Map<string, string>(); // originalPath -> backupTempPath
+
+function getBackupPath(filePath: string): string {
+  const hash = createHash("md5").update(resolve(filePath)).digest("hex").slice(0, 12);
+  const name = filePath.split(/[/\\]/).pop() || "file";
+  return join(BACKUP_DIR, `${hash}_${name}`);
+}
+
+export function getBackupForFile(filePath: string): string | undefined {
+  return backupMap.get(resolve(filePath));
+}
+
+export function cleanupBackups(): void {
+  try {
+    if (existsSync(BACKUP_DIR)) {
+      rmSync(BACKUP_DIR, { recursive: true, force: true });
+    }
+  } catch {}
+  backupMap.clear();
+}
+
 export function writeFileSafe(
   filePath: string,
   content: string,
@@ -96,11 +123,13 @@ export function writeFileSafe(
   }
 
   try {
-    // Create backup
+    // Create backup in temp directory
     let backupPath: string | undefined;
     if (existsSync(filePath)) {
-      backupPath = filePath + ".openmagic-backup";
+      if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
+      backupPath = getBackupPath(filePath);
       copyFileSync(filePath, backupPath);
+      backupMap.set(resolve(filePath), backupPath);
     }
 
     // Ensure directory exists

@@ -40,6 +40,7 @@ import {
   verifyPortOwnership,
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
+import { cleanupBackups } from "./filesystem.js";
 
 const VERSION = "0.31.1";
 
@@ -316,6 +317,7 @@ program
     const shutdown = () => {
       console.log("");
       console.log(chalk.dim("  Shutting down OpenMagic..."));
+      cleanupBackups();
       proxyServer.close();
       process.exit(0);
     };

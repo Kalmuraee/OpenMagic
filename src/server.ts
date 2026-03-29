@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { validateToken } from "./security.js";
 import { loadConfig, saveConfig } from "./config.js";
-import { readFileSafe, writeFileSafe, listFiles, getProjectTree, grepFiles } from "./filesystem.js";
+import { readFileSafe, writeFileSafe, listFiles, getProjectTree, grepFiles, getBackupForFile, cleanupBackups } from "./filesystem.js";
 import type {
   WsMessage,
   HandshakePayload,
@@ -212,6 +212,22 @@ async function handleMessage(
           type: "fs.written",
           payload: { path: payload.path, ok: true },
         });
+      }
+      break;
+    }
+
+    case "fs.undo": {
+      const payload = msg.payload as { path: string };
+      if (!payload?.path) { sendError(ws, "invalid_payload", "Missing path", msg.id); break; }
+      const backupPath = getBackupForFile(payload.path);
+      if (!backupPath) { sendError(ws, "fs_error", "No backup found", msg.id); break; }
+      try {
+        const backupContent = readFileSync(backupPath, "utf-8");
+        const writeResult = writeFileSafe(payload.path, backupContent, roots);
+        if (!writeResult.ok) { sendError(ws, "fs_error", writeResult.error || "Undo failed", msg.id); break; }
+        send(ws, { id: msg.id, type: "fs.undone", payload: { path: payload.path, ok: true } });
+      } catch (e: unknown) {
+        sendError(ws, "fs_error", `Backup read failed: ${(e as Error).message}`, msg.id);
       }
       break;
     }

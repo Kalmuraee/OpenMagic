@@ -168,6 +168,68 @@ export function listFiles(
   return entries;
 }
 
+const GREP_EXTENSIONS = new Set([
+  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+  ".vue", ".svelte", ".astro",
+  ".html", ".htm", ".css", ".scss", ".less",
+  ".json", ".md", ".yaml", ".yml",
+  ".php", ".py", ".rb",
+]);
+
+export function grepFiles(
+  pattern: string,
+  searchRoot: string,
+  roots: string[],
+  maxResults: number = 30
+): { file: string; lineNum: number; line: string }[] {
+  if (!isPathSafe(searchRoot, roots)) return [];
+
+  const results: { file: string; lineNum: number; line: string }[] = [];
+  const lowerPattern = pattern.toLowerCase();
+
+  function walk(dir: string, depth: number): void {
+    if (depth > 5 || results.length >= maxResults) return;
+    let items: string[];
+    try { items = readdirSync(dir); } catch { return; }
+
+    for (const item of items) {
+      if (results.length >= maxResults) return;
+      if (IGNORED_DIRS.has(item) || (item.startsWith(".") && item !== ".env.example")) continue;
+
+      const fullPath = join(dir, item);
+      let stat;
+      try { stat = lstatSync(fullPath); } catch { continue; }
+      if (stat.isSymbolicLink()) continue;
+
+      if (stat.isDirectory()) {
+        walk(fullPath, depth + 1);
+      } else if (stat.isFile()) {
+        const ext = extname(item).toLowerCase();
+        if (!GREP_EXTENSIONS.has(ext)) continue;
+
+        try {
+          const content = readFileSync(fullPath, "utf-8");
+          const lines = content.split("\n");
+          let fileMatches = 0;
+          for (let i = 0; i < lines.length && fileMatches < 5; i++) {
+            if (lines[i].toLowerCase().includes(lowerPattern)) {
+              results.push({
+                file: relative(searchRoot, fullPath),
+                lineNum: i + 1,
+                line: lines[i].trim().slice(0, 200),
+              });
+              fileMatches++;
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+
+  walk(searchRoot, 0);
+  return results;
+}
+
 export function getProjectTree(roots: string[]): string {
   const lines: string[] = [];
   for (const root of roots) {

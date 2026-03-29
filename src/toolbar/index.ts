@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.32.0";
+const CURRENT_VERSION = "0.33.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1194,6 +1194,38 @@ async function sendPrompt() {
             break; // Only read the first matching style file
           }
         }
+        // Auto-read layout files up the directory tree (for the first scored file only)
+        if (files.length <= 2 && totalChars < MAX_GROUNDED_CHARS) {
+          const LAYOUT_NAMES = ["layout.tsx", "layout.jsx", "layout.js", "layout.ts"];
+          let layoutDir = f.path.replace(/\/[^/]+$/, "");
+          let layoutDepth = 0;
+          while (layoutDir && layoutDepth < 4 && totalChars < MAX_GROUNDED_CHARS) {
+            let foundLayout = false;
+            for (const layoutName of LAYOUT_NAMES) {
+              const layoutPath = `${layoutDir}/${layoutName}`;
+              if (readPaths.has(layoutPath)) { foundLayout = true; break; }
+              try {
+                const lr = await ws.request("fs.read", { path: root ? `${root}/${layoutPath}` : layoutPath }).catch(() => null);
+                const lc = String(lr?.payload?.content || "");
+                if (lc) {
+                  const lMax = Math.min(4000, MAX_GROUNDED_CHARS - totalChars);
+                  let lt = lc.slice(0, lMax);
+                  if (lc.length > lMax) lt += `\n// [TRUNCATED]`;
+                  files.push({ path: layoutPath, content: lt });
+                  readPaths.add(layoutPath);
+                  totalChars += lt.length;
+                  foundLayout = true;
+                  break;
+                }
+              } catch {}
+            }
+            const parentDir = layoutDir.replace(/\/[^/]+$/, "");
+            if (parentDir === layoutDir || !parentDir) break;
+            layoutDir = parentDir;
+            layoutDepth++;
+          }
+        }
+
         // Follow imports: extract local imports from the file and auto-read referenced components
         const importMatches = content.matchAll(/(?:import|from)\s+['"]\.?\.\/([\w/.-]+)['"]/g);
         for (const im of importMatches) {
@@ -1251,6 +1283,32 @@ async function sendPrompt() {
           }
         }
       } catch {}
+    }
+
+    // Auto-ground config files (tailwind, global styles)
+    if (totalChars < MAX_GROUNDED_CHARS) {
+      const root = state.roots[0] || "";
+      const CONFIG_CANDIDATES = [
+        "tailwind.config.ts", "tailwind.config.js", "tailwind.config.mjs",
+        "src/app/globals.css", "src/styles/globals.css", "styles/globals.css",
+        "app/globals.css", "src/index.css", "src/global.css",
+      ];
+      for (const candidate of CONFIG_CANDIDATES) {
+        if (totalChars >= MAX_GROUNDED_CHARS || readPaths.has(candidate)) continue;
+        try {
+          const cfgPath = root ? `${root}/${candidate}` : candidate;
+          const cfgResult = await ws.request("fs.read", { path: cfgPath }).catch(() => null);
+          const cfgContent = String(cfgResult?.payload?.content || "");
+          if (cfgContent) {
+            const cap = Math.min(4000, MAX_GROUNDED_CHARS - totalChars);
+            let trimmed = cfgContent.slice(0, cap);
+            if (cfgContent.length > cap) trimmed += `\n/* [TRUNCATED] */`;
+            files.push({ path: candidate, content: trimmed });
+            readPaths.add(candidate);
+            totalChars += trimmed.length;
+          }
+        } catch {}
+      }
     }
 
     if (files.length) {
@@ -1331,6 +1389,27 @@ async function sendPrompt() {
           break;
         }
         continue; // Retry with the new file context
+      }
+
+      // Check if LLM is requesting a codebase search (SEARCH_FILES pattern)
+      const searchMatch = responseContent.match(/SEARCH_FILES:\s*"([^"]+)"(?:\s+in\s+(\S+))?/);
+      if (searchMatch && retryCount < MAX_RETRIES) {
+        const pattern = searchMatch[1];
+        const searchPath = searchMatch[2] || "";
+        retryCount++;
+
+        const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
+        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> Searching: "${pattern}"...`;
+
+        try {
+          const grepResult = await ws.request("fs.grep", { pattern, path: searchPath });
+          const matches = grepResult?.payload?.results || [];
+          if (matches.length) {
+            if (!(context as any).searchResults) (context as any).searchResults = [];
+            (context as any).searchResults.push({ query: pattern, matches });
+          }
+        } catch {}
+        continue; // Retry with search results added
       }
 
       // Got a real response — extract clean text from JSON wrapper

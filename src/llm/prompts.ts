@@ -36,6 +36,7 @@ You MUST respond with valid JSON in this exact format:
 4. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
 5. Keep modifications minimal — change only what's needed. Do NOT rewrite entire files.
 6. If the grounded files don't contain the code you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: exact/relative/path/to/file.ext"}
+7. To search for a pattern across the codebase, return: {"modifications":[],"explanation":"SEARCH_FILES: \\"pattern\\" in optional/path/"}
 7. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
 8. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
 9. Use the page URL route and componentHint to identify the correct source file to modify
@@ -86,6 +87,14 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
     if (el.reactProps) {
       elementData.reactProps = el.reactProps;
     }
+    // Children layout measurements (pixel-level spacing between children)
+    if (el.childrenLayout?.length) {
+      elementData.childrenLayout = el.childrenLayout;
+    }
+    // Resolved Tailwind/utility classes to actual CSS values
+    if (el.resolvedClasses?.length) {
+      elementData.resolvedClasses = el.resolvedClasses;
+    }
     parts.selectedElement = JSON.stringify(elementData, null, 2);
   }
 
@@ -97,6 +106,11 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
   if ((context as any).pageTitle) parts.pageTitle = (context as any).pageTitle;
   if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
   if (context.consoleLogs) parts.consoleLogs = context.consoleLogs.map(l => `[${l.level}] ${l.args.join(" ")}`).join("\n");
+  if ((context as any).searchResults?.length) {
+    parts.searchResults = (context as any).searchResults.map(
+      (s: any) => `Search: "${s.query}"\n${s.matches.map((m: any) => `  ${m.file}:${m.lineNum}: ${m.line}`).join("\n")}`
+    ).join("\n\n");
+  }
   return parts;
 }
 
@@ -113,6 +127,7 @@ export function buildUserMessage(
     projectTree?: string;
     pageUrl?: string;
     pageTitle?: string;
+    searchResults?: string;
   }
 ): string {
   const parts: string[] = [];
@@ -144,6 +159,10 @@ export function buildUserMessage(
 
   if (context.consoleLogs) {
     parts.push(`## Console Output\n\`\`\`\n${context.consoleLogs}\n\`\`\``);
+  }
+
+  if (context.searchResults) {
+    parts.push(`## Search Results\n\`\`\`\n${context.searchResults}\n\`\`\``);
   }
 
   parts.push(`## User Request\n${userPrompt}`);

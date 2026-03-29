@@ -18,6 +18,15 @@ export interface SelectedElement {
   ariaAttributes: Record<string, string>;
   eventHandlers: string[];
   reactProps: Record<string, unknown> | null;
+  childrenLayout: {
+    tag: string;
+    className: string;
+    rect: { x: number; y: number; width: number; height: number };
+    gapToNext: { horizontal: number; vertical: number } | null;
+    margin: string;
+    padding: string;
+  }[];
+  resolvedClasses: { className: string; css: string }[];
 }
 
 const IMPORTANT_STYLES = [
@@ -89,8 +98,36 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     if (end < children.length) siblings.push(`... ${children.length - end} elements after ...`);
   }
 
+  // Children layout measurements (pixel-level spacing context)
+  const childrenLayout: SelectedElement["childrenLayout"] = [];
+  const directChildren = Array.from(el.children).slice(0, 12);
+  for (let i = 0; i < directChildren.length; i++) {
+    const child = directChildren[i] as HTMLElement;
+    const cRect = child.getBoundingClientRect();
+    const cComputed = window.getComputedStyle(child);
+    let gapToNext: { horizontal: number; vertical: number } | null = null;
+    if (i < directChildren.length - 1) {
+      const nextRect = (directChildren[i + 1] as HTMLElement).getBoundingClientRect();
+      gapToNext = {
+        vertical: Math.round(nextRect.top - cRect.bottom),
+        horizontal: Math.round(nextRect.left - cRect.right),
+      };
+    }
+    childrenLayout.push({
+      tag: child.tagName.toLowerCase(),
+      className: (child.className || "").toString().slice(0, 80),
+      rect: { x: Math.round(cRect.x), y: Math.round(cRect.y), width: Math.round(cRect.width), height: Math.round(cRect.height) },
+      gapToNext,
+      margin: cComputed.margin,
+      padding: cComputed.padding,
+    });
+  }
+
   // Matched CSS rules from stylesheets
   const matchedCssRules = getMatchedCssRules(el);
+
+  // Resolve Tailwind/utility classes to their CSS values
+  const resolvedClasses = resolveClasses(el, matchedCssRules);
 
   // ARIA / accessibility attributes
   const ariaAttributes: Record<string, string> = {};
@@ -128,7 +165,9 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     },
     parentStyles,
     siblings,
+    childrenLayout,
     matchedCssRules,
+    resolvedClasses,
     viewport: { width: window.innerWidth, height: window.innerHeight },
     ariaAttributes,
     eventHandlers,
@@ -329,6 +368,25 @@ function getReactProps(el: HTMLElement): Record<string, unknown> | null {
     }
   } catch { /* not React or access error */ }
   return null;
+}
+
+// --- Tailwind / Utility Class Resolution ---
+
+function resolveClasses(el: HTMLElement, matchedRules: string[]): { className: string; css: string }[] {
+  const resolved: { className: string; css: string }[] = [];
+  const classes = (el.className || "").toString().trim().split(/\s+/).filter(Boolean);
+
+  for (const cls of classes) {
+    const escaped = CSS.escape(cls);
+    for (const rule of matchedRules) {
+      if (rule.includes(`.${escaped}`) && rule.length < 200) {
+        resolved.push({ className: cls, css: rule });
+        break;
+      }
+    }
+    if (resolved.length >= 20) break;
+  }
+  return resolved;
 }
 
 // --- Highlight Overlay ---

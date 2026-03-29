@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { validateToken } from "./security.js";
 import { loadConfig, saveConfig } from "./config.js";
-import { readFileSafe, writeFileSafe, listFiles, getProjectTree } from "./filesystem.js";
+import { readFileSafe, writeFileSafe, listFiles, getProjectTree, grepFiles } from "./filesystem.js";
 import type {
   WsMessage,
   HandshakePayload,
@@ -302,6 +302,18 @@ async function handleMessage(
       } else {
         send(ws, { id: msg.id, type: "config.saved", payload: { ok: true } });
       }
+      break;
+    }
+
+    case "fs.grep": {
+      const payload = msg.payload as { pattern: string; path?: string };
+      if (!payload?.pattern) {
+        sendError(ws, "invalid_payload", "Missing pattern", msg.id);
+        break;
+      }
+      const searchRoot = payload.path ? join(roots[0] || process.cwd(), payload.path) : (roots[0] || process.cwd());
+      const results = grepFiles(payload.pattern, searchRoot, roots);
+      send(ws, { id: msg.id, type: "fs.grep.result", payload: { results } });
       break;
     }
 

@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.1";
+const CURRENT_VERSION = "0.33.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1399,7 +1399,10 @@ async function sendPrompt() {
         if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> Searching: "${pattern}"...`;
 
         try {
-          const grepResult = await ws.request("fs.grep", { pattern, path: searchPath });
+          const grepResult = await Promise.race([
+            ws.request("fs.grep", { pattern, path: searchPath }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("grep timeout")), 5000)),
+          ]) as any;
           const matches = grepResult?.payload?.results || [];
           if (matches.length) {
             if (!(context as any).searchResults) (context as any).searchResults = [];

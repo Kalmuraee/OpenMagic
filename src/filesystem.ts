@@ -145,6 +145,8 @@ export function writeFileSafe(
   }
 }
 
+const MAX_LIST_ENTRIES = 2000;
+
 export function listFiles(
   rootPath: string,
   roots: string[],
@@ -157,7 +159,7 @@ export function listFiles(
   const entries: FileEntry[] = [];
 
   function walk(dir: string, depth: number): void {
-    if (depth > maxDepth) return;
+    if (depth > maxDepth || entries.length >= MAX_LIST_ENTRIES) return;
 
     let items: string[];
     try {
@@ -167,6 +169,7 @@ export function listFiles(
     }
 
     for (const item of items) {
+      if (entries.length >= MAX_LIST_ENTRIES) return;
       if (IGNORED_DIRS.has(item)) continue;
       if (item.startsWith(".") && item !== ".env.example") continue;
 
@@ -205,6 +208,9 @@ const GREP_EXTENSIONS = new Set([
   ".php", ".py", ".rb",
 ]);
 
+const MAX_GREP_FILE_SIZE = 256 * 1024; // 256KB — skip large generated/bundled files
+const MAX_GREP_FILES_SCANNED = 500;   // stop walking after scanning this many files
+
 export function grepFiles(
   pattern: string,
   searchRoot: string,
@@ -215,14 +221,15 @@ export function grepFiles(
 
   const results: { file: string; lineNum: number; line: string }[] = [];
   const lowerPattern = pattern.toLowerCase();
+  let filesScanned = 0;
 
   function walk(dir: string, depth: number): void {
-    if (depth > 5 || results.length >= maxResults) return;
+    if (depth > 6 || results.length >= maxResults || filesScanned >= MAX_GREP_FILES_SCANNED) return;
     let items: string[];
     try { items = readdirSync(dir); } catch { return; }
 
     for (const item of items) {
-      if (results.length >= maxResults) return;
+      if (results.length >= maxResults || filesScanned >= MAX_GREP_FILES_SCANNED) return;
       if (IGNORED_DIRS.has(item) || (item.startsWith(".") && item !== ".env.example")) continue;
 
       const fullPath = join(dir, item);
@@ -235,6 +242,8 @@ export function grepFiles(
       } else if (stat.isFile()) {
         const ext = extname(item).toLowerCase();
         if (!GREP_EXTENSIONS.has(ext)) continue;
+        if (stat.size > MAX_GREP_FILE_SIZE) continue; // skip large files
+        filesScanned++;
 
         try {
           const content = readFileSync(fullPath, "utf-8");

@@ -42,7 +42,9 @@ import {
 import { loadConfig, saveConfig } from "./config.js";
 import { cleanupBackups } from "./filesystem.js";
 
-const VERSION = "0.31.1";
+import { createRequire } from "node:module";
+const _require = createRequire(import.meta.url);
+const VERSION: string = _require("../package.json").version;
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -602,9 +604,9 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       }
     }, 3000);
   };
-  process.on("exit", cleanup);
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  process.once("exit", cleanup);
+  process.once("SIGINT", cleanup);
+  process.once("SIGTERM", cleanup);
 
   // Wait for the port to open via TCP polling
   console.log(

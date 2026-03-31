@@ -61,7 +61,6 @@ export type ServerMessageType =
   | "llm.chunk"
   | "llm.done"
   | "llm.error"
-  | "fs.changed"
   | "error";
 
 // --- Chat & LLM Types ---

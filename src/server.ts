@@ -19,7 +19,9 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 
-const VERSION = "0.31.4";
+import { createRequire } from "node:module";
+const _require = createRequire(import.meta.url);
+const VERSION: string = _require("../package.json").version;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Server-side log buffer ──

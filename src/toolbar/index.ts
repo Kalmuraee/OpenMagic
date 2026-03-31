@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.2";
+const CURRENT_VERSION = "0.33.3";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -2024,7 +2024,7 @@ function checkForUpdates() {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(5000),
   }).then(r => r.ok ? r.json() : null).then(d => {
-    if (!d?.version) return;
+    if (!d || typeof d.version !== "string" || !/^\d+\.\d+\.\d+/.test(d.version)) return;
     const l = d.version.split(".").map(Number), c = CURRENT_VERSION.split(".").map(Number);
     for (let i = 0; i < 3; i++) { if ((l[i]||0) > (c[i]||0)) { state.updateAvailable = true; state.latestVersion = d.version; showUpdateDot(); return; } if ((l[i]||0) < (c[i]||0)) return; }
   }).catch(() => {});

@@ -40,6 +40,7 @@ export function createProxyServer(
     if (!isHtml && status < 400) {
       // Non-HTML success: pass through unchanged
       res.writeHead(status, proxyRes.headers);
+      proxyRes.on("error", () => { try { res.end(); } catch {} });
       proxyRes.pipe(res);
       return;
     }
@@ -58,6 +59,7 @@ export function createProxyServer(
       headers["cache-control"] = "no-store";
 
       res.writeHead(status, headers);
+      proxyRes.on("error", () => { try { res.end(buildInjectionScript(token)); } catch {} });
       proxyRes.pipe(res, { end: false });
       proxyRes.on("end", () => {
         res.end(buildInjectionScript(token));
@@ -67,7 +69,9 @@ export function createProxyServer(
 
     // Non-HTML error (4xx/5xx) — wrap in HTML with toolbar so user can still interact
     const chunks: Buffer[] = [];
-    proxyRes.on("data", (c: Buffer) => chunks.push(c));
+    let totalSize = 0;
+    proxyRes.on("data", (c: Buffer) => { if (totalSize < 16384) { chunks.push(c); totalSize += c.length; } });
+    proxyRes.on("error", () => { try { res.end(); } catch {} });
     proxyRes.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf-8").slice(0, 2000);
       const toolbarScript = buildInjectionScript(token);

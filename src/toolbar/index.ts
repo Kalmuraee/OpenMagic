@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.6";
+const CURRENT_VERSION = "0.33.7";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1297,7 +1297,7 @@ async function sendPrompt() {
           const cfgResult = await ws.request("fs.read", { path: cfgPath }).catch(() => null);
           const cfgContent = String(cfgResult?.payload?.content || "");
           if (cfgContent) {
-            const cap = Math.min(4000, MAX_GROUNDED_CHARS - totalChars);
+            const cap = Math.min(12000, MAX_GROUNDED_CHARS - totalChars);
             let trimmed = cfgContent.slice(0, cap);
             if (cfgContent.length > cap) trimmed += `\n/* [TRUNCATED] */`;
             files.push({ path: candidate, content: trimmed });
@@ -1440,8 +1440,13 @@ async function sendPrompt() {
         continue; // Retry with search results added
       }
 
-      // Got a real response — use already-decoded content for display
-      const displayContent = decodedContent;
+      // Got a real response — clean up any leftover NEED_FILE/SEARCH_FILES text
+      let displayContent = decodedContent;
+      // If the response is just a NEED_FILE or SEARCH_FILES request that couldn't be retried,
+      // show a helpful message instead of the raw pattern
+      if (/^NEED_FILE:\s/m.test(displayContent) || /^SEARCH_FILES:\s/m.test(displayContent)) {
+        displayContent = "I found the relevant files but couldn't determine the exact change needed. Try selecting a more specific element or describing the issue in more detail.";
+      }
       state.messages.push({ role: "assistant", content: displayContent });
 
       if (result?.modifications?.length) {

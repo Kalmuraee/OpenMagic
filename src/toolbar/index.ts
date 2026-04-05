@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.3";
+const CURRENT_VERSION = "0.33.4";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1342,11 +1342,24 @@ async function sendPrompt() {
 
       const responseContent = state.streamContent || result?.content || "";
 
+      // Decode JSON wrapper before pattern matching — LLM returns JSON with
+      // escaped quotes (e.g. \"nav-group\") which breaks regex on raw content
+      let decodedContent = responseContent;
+      try {
+        const p = JSON.parse(responseContent);
+        if (p.explanation) decodedContent = p.explanation;
+      } catch {
+        const mdMatch = responseContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (mdMatch) {
+          try { const p = JSON.parse(mdMatch[1]); if (p.explanation) decodedContent = p.explanation; } catch {}
+        }
+      }
+
       // Check if LLM is requesting a file (NEED_FILE pattern)
       // Try multiple patterns to detect file requests from LLM
-      const needFileMatch = responseContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
-        || responseContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
-        || responseContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i);
+      const needFileMatch = decodedContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
+        || decodedContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
+        || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i);
       if (needFileMatch && retryCount < MAX_RETRIES) {
         const neededFile = needFileMatch[1].trim();
         retryCount++;
@@ -1389,8 +1402,12 @@ async function sendPrompt() {
       }
 
       // Check if LLM is requesting a codebase search (SEARCH_FILES pattern)
-      const searchMatch = responseContent.match(/SEARCH_FILES:\s*"([^"]+)"(?:\s+in\s+(\S+))?/);
-      if (searchMatch && retryCount < MAX_RETRIES) {
+      // Try decoded content first, then raw content with escaped quotes as fallback
+      const searchMatch = decodedContent.match(/SEARCH_FILES:\s*"([^"]+)"(?:\s+in\s+(\S+))?/)
+        || responseContent.match(/SEARCH_FILES:\s*\\?"([^"\\]+)\\?"(?:\s+in\s+(\S+))?/);
+      // Prevent infinite loop: skip if we already searched for this pattern
+      const alreadySearched = (context as any).searchResults?.some((s: any) => s.query === searchMatch?.[1]);
+      if (searchMatch && retryCount < MAX_RETRIES && !alreadySearched) {
         const pattern = searchMatch[1];
         const searchPath = searchMatch[2] || "";
         retryCount++;
@@ -1412,20 +1429,8 @@ async function sendPrompt() {
         continue; // Retry with search results added
       }
 
-      // Got a real response — extract clean text from JSON wrapper
-      let displayContent = responseContent;
-      try {
-        const parsed = JSON.parse(responseContent);
-        if (parsed.explanation) displayContent = parsed.explanation;
-      } catch {
-        const mdMatch = responseContent.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (mdMatch) {
-          try {
-            const p = JSON.parse(mdMatch[1]);
-            if (p.explanation) displayContent = p.explanation;
-          } catch {}
-        }
-      }
+      // Got a real response — use already-decoded content for display
+      const displayContent = decodedContent;
       state.messages.push({ role: "assistant", content: displayContent });
 
       if (result?.modifications?.length) {

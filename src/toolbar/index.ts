@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.5";
+const CURRENT_VERSION = "0.33.6";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1317,9 +1317,10 @@ async function sendPrompt() {
     state.groundedFiles = files.map((f: {path: string}) => f.path);
   } catch { /* grounding is best-effort */ }
 
-  // Auto-retry loop: if LLM says "NEED_FILE: path", read it and retry
+  // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry
   const MAX_RETRIES = 4;
   let retryCount = 0;
+  const retriedFiles = new Set<string>(); // prevent re-reading same file
 
   try {
     while (retryCount <= MAX_RETRIES) {
@@ -1356,12 +1357,14 @@ async function sendPrompt() {
       }
 
       // Check if LLM is requesting a file (NEED_FILE pattern)
-      // Try multiple patterns to detect file requests from LLM
+      // Try decoded content first, then raw response with escaped quotes as fallback
       const needFileMatch = decodedContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
         || decodedContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
-        || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i);
-      if (needFileMatch && retryCount < MAX_RETRIES) {
+        || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
+        || responseContent.match(/NEED_FILE:\s*\\?"?([^\s"\\}\]]+)"?/);
+      if (needFileMatch && retryCount < MAX_RETRIES && !retriedFiles.has(needFileMatch[1].trim())) {
         const neededFile = needFileMatch[1].trim();
+        retriedFiles.add(neededFile);
         retryCount++;
 
         // Show transient status (update the spinner, don't add permanent messages)
@@ -1388,8 +1391,16 @@ async function sendPrompt() {
 
           if (fileContent) {
             if (!context.files) context.files = [];
-            context.files.push({ path: neededFile, content: fileContent.slice(0, 8000) });
-            // Don't push visible messages — just add to LLM context silently
+            // Replace existing truncated entry if present, otherwise add new
+            const existingIdx = context.files.findIndex((f: {path: string}) =>
+              f.path === neededFile || f.path.endsWith("/" + neededFile) || neededFile.endsWith("/" + f.path)
+            );
+            const fullContent = fileContent.slice(0, 16000); // larger cap for explicitly requested files
+            if (existingIdx >= 0) {
+              context.files[existingIdx] = { path: neededFile, content: fullContent };
+            } else {
+              context.files.push({ path: neededFile, content: fullContent });
+            }
           } else {
             state.messages.push({ role: "system", content: `Could not read ${neededFile}` });
             break;

@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.33.7";
+const CURRENT_VERSION = "0.34.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1113,11 +1113,41 @@ async function sendPrompt() {
     const pathname = window.location.pathname;
     const routeTokens = pathname.split("/").filter((s: string) => s.length > 1 && !/^\d+$/.test(s));
 
+    // Monorepo detection: find which top-level directory likely contains the running app
+    // by checking which subdir has files matching the component hint or route tokens
+    let activeSubdir = "";
+    if ((state.selectedElement as any)?.componentHint || routeTokens.length) {
+      const hint = ((state.selectedElement as any)?.componentHint || "").toLowerCase();
+      const subdirScores = new Map<string, number>();
+      for (const tf of textFiles) {
+        const topDir = tf.path.split("/")[0];
+        if (!topDir || topDir.includes(".")) continue;
+        const l = tf.path.toLowerCase();
+        let s = subdirScores.get(topDir) || 0;
+        if (hint && l.includes(hint)) s += 10;
+        for (const rt of routeTokens) { if (l.includes(rt.toLowerCase())) s += 5; }
+        if (/(component|page|route|layout)/.test(l)) s += 1;
+        subdirScores.set(topDir, s);
+      }
+      let best = 0;
+      for (const [dir, s] of subdirScores) {
+        if (s > best) { best = s; activeSubdir = dir; }
+      }
+    }
+
     const scored = textFiles.map((f: { path: string; type: string }) => {
       let score = 0;
       const lower = f.path.toLowerCase();
       // Strip Next.js route groups like (dashboard) from path for scoring
       const lowerNoGroups = lower.replace(/\([^)]+\)\//g, "");
+
+      // Monorepo: strongly boost files in the active sub-project, penalize others
+      if (activeSubdir) {
+        const topDir = f.path.split("/")[0];
+        if (topDir === activeSubdir) score += 20;
+        else if (topDir !== activeSubdir && !f.path.includes("/")) score += 0; // root files neutral
+        else score -= 15; // files from other sub-projects
+      }
 
       // Route match: files matching URL path get highest priority (+15)
       for (const rt of routeTokens) {

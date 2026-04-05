@@ -551,9 +551,9 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     depsInfo.packageManager === "bun" ? "bun" : "npm";
   const runArgs = runCmd === "npm" ? ["run", chosen.name] : [chosen.name];
 
-  // If port was changed due to conflict, pass --port to the framework CLI
-  // Most frameworks (Next.js, Vite, Angular, Vue CLI, Astro) accept --port
-  if (portChanged) {
+  // If port was changed due to conflict, pass --port to frameworks that accept it
+  const PORT_FLAG_FRAMEWORKS = new Set(["Next.js", "Vite", "Angular", "Vue CLI", "Astro", "Remix", "SvelteKit", "Nuxt", "Create React App", "Gatsby", "Parcel", "Webpack"]);
+  if (portChanged && PORT_FLAG_FRAMEWORKS.has(chosen.framework)) {
     if (runCmd === "npm") {
       runArgs.push("--", "--port", String(port));
     } else {

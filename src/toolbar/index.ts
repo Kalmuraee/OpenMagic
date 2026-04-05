@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.34.0";
+const CURRENT_VERSION = "0.34.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1386,12 +1386,20 @@ async function sendPrompt() {
         }
       }
 
+      // If the LLM returned real modifications, apply them immediately — don't chase NEED_FILE
+      const hasRealModifications = result?.modifications?.some((m: any) =>
+        (m.type === "edit" && m.file && m.search && m.replace) ||
+        (m.type === "create" && m.file && m.content)
+      );
+
       // Check if LLM is requesting a file (NEED_FILE pattern)
-      // Try decoded content first, then raw response with escaped quotes as fallback
-      const needFileMatch = decodedContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
+      // Only retry if there are NO real modifications to apply
+      const needFileMatch = !hasRealModifications && (
+        decodedContent.match(/NEED_FILE:\s*"?([^\s"}\]]+)"?/)
         || decodedContent.match(/(?:need|provide|show|read|see|contents?\s+of)\s+(?:the\s+)?(?:file\s+)?[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
         || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
-        || responseContent.match(/NEED_FILE:\s*\\?"?([^\s"\\}\]]+)"?/);
+        || responseContent.match(/NEED_FILE:\s*\\?"?([^\s"\\}\]]+)"?/)
+      );
       if (needFileMatch && retryCount < MAX_RETRIES && !retriedFiles.has(needFileMatch[1].trim())) {
         const neededFile = needFileMatch[1].trim();
         retriedFiles.add(neededFile);
@@ -1443,9 +1451,11 @@ async function sendPrompt() {
       }
 
       // Check if LLM is requesting a codebase search (SEARCH_FILES pattern)
-      // Try decoded content first, then raw content with escaped quotes as fallback
-      const searchMatch = decodedContent.match(/SEARCH_FILES:\s*"([^"]+)"(?:\s+in\s+(\S+))?/)
-        || responseContent.match(/SEARCH_FILES:\s*\\?"([^"\\]+)\\?"(?:\s+in\s+(\S+))?/);
+      // Only retry if there are NO real modifications to apply
+      const searchMatch = !hasRealModifications && (
+        decodedContent.match(/SEARCH_FILES:\s*"([^"]+)"(?:\s+in\s+(\S+))?/)
+        || responseContent.match(/SEARCH_FILES:\s*\\?"([^"\\]+)\\?"(?:\s+in\s+(\S+))?/)
+      );
       // Prevent infinite loop: skip if we already searched for this pattern
       const alreadySearched = (context as any).searchResults?.some((s: any) => s.query === searchMatch?.[1]);
       if (searchMatch && retryCount < MAX_RETRIES && !alreadySearched) {
@@ -1470,12 +1480,13 @@ async function sendPrompt() {
         continue; // Retry with search results added
       }
 
-      // Got a real response — clean up any leftover NEED_FILE/SEARCH_FILES text
-      let displayContent = decodedContent;
-      // If the response is just a NEED_FILE or SEARCH_FILES request that couldn't be retried,
-      // show a helpful message instead of the raw pattern
-      if (/^NEED_FILE:\s/m.test(displayContent) || /^SEARCH_FILES:\s/m.test(displayContent)) {
-        displayContent = "I found the relevant files but couldn't determine the exact change needed. Try selecting a more specific element or describing the issue in more detail.";
+      // Got a real response — strip any NEED_FILE/SEARCH_FILES lines from display
+      let displayContent = decodedContent
+        .replace(/^NEED_FILE:\s*\S+\s*/gm, "")
+        .replace(/^SEARCH_FILES:\s*"[^"]*"(?:\s+in\s+\S+)?\s*/gm, "")
+        .trim();
+      if (!displayContent) {
+        displayContent = "I couldn't determine the exact change from the available files. Try selecting a more specific element or giving more detail.";
       }
       state.messages.push({ role: "assistant", content: displayContent });
 

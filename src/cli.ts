@@ -39,6 +39,7 @@ import {
   checkDependenciesInstalled,
   verifyPortOwnership,
   checkNodeCompatibility,
+  scanParentLockfiles,
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { cleanupBackups } from "./filesystem.js";
@@ -199,13 +200,20 @@ async function validateAppHealth(targetHost: string, targetPort: number): Promis
       console.log("");
 
       if (detectedFramework === "Next.js") {
-        console.log(chalk.dim("     Common Next.js causes:"));
-        console.log(chalk.dim("     • A stray package-lock.json in a parent directory confuses"));
-        console.log(chalk.dim("       Turbopack's workspace root detection."));
-        console.log(chalk.dim("       → Check for ~/package-lock.json and remove if unneeded"));
-        console.log(chalk.dim("       → Or set turbopack.root in next.config (Next.js 15+)"));
-        console.log(chalk.dim("     • Missing src/app/page.tsx (App Router) or pages/index.tsx"));
-        console.log(chalk.dim("     • Middleware redirecting all routes to an auth provider"));
+        const strayLockfiles = scanParentLockfiles(process.cwd());
+        if (strayLockfiles.length > 0) {
+          console.log(chalk.yellow("     Found lockfiles in parent directories that confuse Turbopack:"));
+          for (const f of strayLockfiles) {
+            console.log(chalk.dim(`       • ${f}`));
+          }
+          console.log("");
+          console.log(chalk.dim("     Fix: remove them, or add to your next.config:"));
+          console.log(chalk.cyan("       turbopack: { root: __dirname }"));
+        } else {
+          console.log(chalk.dim("     Common Next.js causes:"));
+          console.log(chalk.dim("     • Missing src/app/page.tsx (App Router) or pages/index.tsx"));
+          console.log(chalk.dim("     • Middleware redirecting all routes to an auth provider"));
+        }
       } else if (detectedFramework === "Angular") {
         console.log(chalk.dim("     Angular hint: ensure the base href matches the proxy path."));
       } else if (detectedFramework === "Vite") {
@@ -331,6 +339,21 @@ program
     console.log(
       chalk.green(`  ✓  Dev server running at ${targetHost}:${targetPort}`)
     );
+
+    // Proactive warning: detect parent lockfiles that confuse Turbopack
+    if (detectedFramework === "Next.js") {
+      const strayLockfiles = scanParentLockfiles(process.cwd());
+      if (strayLockfiles.length > 0) {
+        console.log("");
+        console.log(chalk.yellow("  ⚠  Lockfiles found in parent directories:"));
+        for (const f of strayLockfiles) {
+          console.log(chalk.dim(`     • ${f}`));
+        }
+        console.log(chalk.dim("     Next.js Turbopack may use the wrong workspace root, causing 404s."));
+        console.log(chalk.dim("     Fix: remove them, or add to next.config:"));
+        console.log(chalk.cyan("       turbopack: { root: __dirname }"));
+      }
+    }
 
     // Set up roots
     const roots = (opts.root || [process.cwd()]).map((r: string) =>

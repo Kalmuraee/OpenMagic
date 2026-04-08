@@ -88,7 +88,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.35.0";
+const CURRENT_VERSION = "0.35.1";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {

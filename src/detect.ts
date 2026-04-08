@@ -296,6 +296,34 @@ export function checkEnvPort(cwd: string = process.cwd()): number | null {
   return null;
 }
 
+// --- Parent lockfile scanning (Turbopack workspace root detection) ---
+
+const LOCKFILE_NAMES = ["package-lock.json", "bun.lock", "bun.lockb", "yarn.lock", "pnpm-lock.yaml"];
+
+/**
+ * Scan parent directories for lockfiles that could confuse Turbopack's
+ * workspace root detection. Returns paths of lockfiles found above the
+ * project directory (up to and including the home directory).
+ */
+export function scanParentLockfiles(projectDir: string): string[] {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const project = resolve(projectDir);
+  const found: string[] = [];
+
+  let dir = resolve(project, "..");
+  while (dir.length > 1 && dir.length >= home.length) {
+    for (const lockfile of LOCKFILE_NAMES) {
+      const p = join(dir, lockfile);
+      if (existsSync(p)) found.push(p);
+    }
+    const parent = resolve(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return found;
+}
+
 // --- Project name ---
 
 export function getProjectName(cwd: string = process.cwd()): string {

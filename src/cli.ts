@@ -242,22 +242,31 @@ let detectedFramework: string | null = null;
  * After the proxy starts, check if the upstream app actually serves content.
  * If it returns 404, warn with framework-specific troubleshooting hints.
  */
-async function validateAppHealth(targetHost: string, targetPort: number): Promise<void> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+async function validateAppHealth(targetHost: string, targetPort: number): Promise<boolean> {
+  // Retry up to 10 times over ~15 seconds — the port may be open but the app
+  // hasn't compiled yet (common with Next.js Turbopack first compile)
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
 
-    const res = await fetch(`http://${targetHost}:${targetPort}/`, {
-      signal: controller.signal,
-      redirect: "manual",
-      headers: { Accept: "text/html" },
-    });
-    clearTimeout(timeout);
+      const res = await fetch(`http://${targetHost}:${targetPort}/`, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: { Accept: "text/html" },
+      });
+      clearTimeout(timeout);
 
-    const status = res.status;
+      const status = res.status;
 
-    // 2xx or redirect → app is healthy
-    if (status >= 200 && status < 400) return;
+      // 2xx or redirect → app is healthy
+      if (status >= 200 && status < 400) return true;
+
+      // 404 might be temporary during compilation — retry a few times
+      if (status === 404 && attempt < 6) {
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
 
     if (status === 404) {
       console.log(chalk.yellow("  ⚠  Your app returned 404 for the root path (\"/\")."));
@@ -290,14 +299,27 @@ async function validateAppHealth(targetHost: string, targetPort: number): Promis
       console.log("");
       console.log(chalk.dim("     The toolbar is still available — navigate to a working route."));
       console.log("");
+      return false;
     } else if (status >= 500) {
       console.log(chalk.yellow(`  ⚠  Your app returned HTTP ${status} on the root path.`));
       console.log(chalk.dim("     There may be a server-side error. Check your dev server output."));
       console.log("");
+      // 5xx might be temporary during startup — retry
+      if (attempt < 4) {
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      return false;
     }
-  } catch {
-    // Connection failed or timeout — don't warn here, proxy error page handles it
+    } catch {
+      // Connection failed or timeout — retry
+      if (attempt < 6) {
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+    }
   }
+  return false;
 }
 
 const program = new Command();
@@ -496,8 +518,14 @@ program
 
       await healthCheck(proxyPort, targetPort!);
 
-      // Validate the upstream app actually serves content
-      await validateAppHealth(targetHost, targetPort!);
+      // Wait for the upstream app to actually serve content before opening browser
+      // (Next.js Turbopack can take 5-15s to compile after port opens)
+      console.log(chalk.dim("  Waiting for app to compile..."));
+      const appReady = await validateAppHealth(targetHost, targetPort!);
+
+      if (appReady) {
+        console.log(chalk.green("  ✓  App is ready."));
+      }
 
       console.log(chalk.dim("  Press Ctrl+C to stop."));
       console.log(

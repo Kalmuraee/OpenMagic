@@ -1,6 +1,60 @@
 import type { ProviderRegistry } from "../shared-types.js";
 
 export const MODEL_REGISTRY: ProviderRegistry = {
+  // ─── Claude Code (CLI) ────────────────────────────────────────
+  "claude-code": {
+    name: "Claude Code (CLI)",
+    models: [
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        vision: false,
+        context: 200000,
+        maxOutput: 64000,
+      },
+    ],
+    apiBase: "",
+    keyPrefix: "",
+    keyPlaceholder: "not required",
+    local: true,
+  },
+
+  // ─── Codex CLI ────────────────────────────────────────────────
+  "codex-cli": {
+    name: "Codex CLI",
+    models: [
+      {
+        id: "codex-cli",
+        name: "Codex CLI",
+        vision: false,
+        context: 192000,
+        maxOutput: 100000,
+      },
+    ],
+    apiBase: "",
+    keyPrefix: "",
+    keyPlaceholder: "not required",
+    local: true,
+  },
+
+  // ─── Gemini CLI ───────────────────────────────────────────────
+  "gemini-cli": {
+    name: "Gemini CLI",
+    models: [
+      {
+        id: "gemini-cli",
+        name: "Gemini CLI",
+        vision: false,
+        context: 1048576,
+        maxOutput: 65536,
+      },
+    ],
+    apiBase: "",
+    keyPrefix: "",
+    keyPlaceholder: "not required",
+    local: true,
+  },
+
   // ─── OpenAI ───────────────────────────────────────────────────
   openai: {
     name: "OpenAI",

@@ -2,6 +2,9 @@ import type { ChatMessage, LlmContext, LlmResponse } from "../shared-types.js";
 import { chatOpenAICompatible } from "./openai.js";
 import { chatAnthropic } from "./anthropic.js";
 import { chatGoogle } from "./google.js";
+import { chatClaudeCode } from "./claude-code.js";
+import { chatCodexCli } from "./codex-cli.js";
+import { chatGeminiCli } from "./gemini-cli.js";
 
 // Providers that use OpenAI-compatible API format
 const OPENAI_COMPATIBLE_PROVIDERS = new Set([
@@ -84,7 +87,13 @@ export async function handleLlmChat(
   };
 
   try {
-    if (provider === "anthropic") {
+    if (provider === "claude-code") {
+      await chatClaudeCode(messages, context, onChunk, wrappedOnDone, onError);
+    } else if (provider === "codex-cli") {
+      await chatCodexCli(messages, context, onChunk, wrappedOnDone, onError);
+    } else if (provider === "gemini-cli") {
+      await chatGeminiCli(messages, context, onChunk, wrappedOnDone, onError);
+    } else if (provider === "anthropic") {
       await chatAnthropic(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
     } else if (provider === "google") {
       await chatGoogle(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);

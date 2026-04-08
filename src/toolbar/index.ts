@@ -28,6 +28,15 @@ const ICON = {
 
 // ── Model Registry (inline for browser bundle) ───────────────────
 const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean; keyUrl?: string }> = {
+  "claude-code": { name: "Claude Code (CLI)", keyPlaceholder: "not required", local: true, models: [
+    { id: "claude-code", name: "Claude Code" },
+  ]},
+  "codex-cli": { name: "Codex CLI", keyPlaceholder: "not required", local: true, models: [
+    { id: "codex-cli", name: "Codex CLI" },
+  ]},
+  "gemini-cli": { name: "Gemini CLI", keyPlaceholder: "not required", local: true, models: [
+    { id: "gemini-cli", name: "Gemini CLI" },
+  ]},
   openai: { name: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", keyPlaceholder: "sk-...", models: [
     { id: "gpt-5.4", name: "GPT-5.4" }, { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { id: "gpt-5.2", name: "GPT-5.2 Thinking" }, { id: "o3", name: "o3" }, { id: "o4-mini", name: "o4-mini" },
@@ -88,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.35.1";
+const CURRENT_VERSION = "0.36.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {

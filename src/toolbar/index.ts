@@ -97,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.37.0";
+const CURRENT_VERSION = "0.38.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -420,6 +420,30 @@ function attachGlobalEvents(root: HTMLElement) {
       }
       return;
     }
+    // Ctrl/Cmd + K: focus prompt input
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K") && !e.shiftKey) {
+      e.preventDefault();
+      if (!state.panelOpen) openPanel("chat");
+      $promptInput.focus();
+      return;
+    }
+    // Ctrl/Cmd + Z: undo last applied diff
+    if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
+      // Only handle if the active element is in the toolbar shadow
+      if (shadow.activeElement || state.panelOpen) {
+        const undoBtn = shadow.querySelector('[data-action="undo-diff"]') as HTMLElement;
+        if (undoBtn) { e.preventDefault(); undoDiff(undoBtn); return; }
+      }
+    }
+    // Ctrl/Cmd + . : apply all pending diffs
+    if ((e.ctrlKey || e.metaKey) && e.key === ".") {
+      const applyAllBtn = shadow.querySelector('[data-action="apply-all"]') as HTMLElement;
+      if (applyAllBtn && !shadow.querySelector(".om-apply-bar.om-hidden")) {
+        e.preventDefault();
+        handleAction("apply-all", applyAllBtn);
+        return;
+      }
+    }
     // Escape: only handle if the active element is inside the toolbar shadow DOM
     // or if we're in select mode. Don't steal from host app inputs.
     if (e.key === "Escape") {
@@ -444,50 +468,98 @@ function resolveFilePath(rel: string): string {
   return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
 }
 
-function fuzzyLineMatch(content: string, search: string): { start: number; end: number } | null {
-  // Normalize both to trimmed lines for comparison
-  const searchLines = search.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  if (searchLines.length === 0) return null;
+// ── 4-Layer Diff Matching (Aider-style) ──────────────────────────
+// Layer 1: Exact trimmed-line match (current behavior)
+// Layer 2: Indentation-adjusted match (handles LLM indentation errors)
+// Layer 3: Similarity-based fuzzy match (0.8 threshold)
 
+function fuzzyLineMatch(content: string, search: string): { start: number; end: number; replace?: string } | null {
+  const searchLines = search.split('\n');
+  const nonEmptySearch = searchLines.map(l => l.trim()).filter(l => l.length > 0);
+  if (nonEmptySearch.length === 0) return null;
   const contentLines = content.split('\n');
-  const firstSearchLine = searchLines[0];
-  const lastSearchLine = searchLines[searchLines.length - 1];
 
-  // Find candidate positions where first search line matches (trimmed)
-  for (let i = 0; i < contentLines.length; i++) {
-    if (contentLines[i].trim() !== firstSearchLine) continue;
-
-    // Check if remaining search lines match contiguously
-    if (i + searchLines.length > contentLines.length) continue;
-
+  // Layer 1: Trimmed line-by-line exact match
+  for (let i = 0; i <= contentLines.length - nonEmptySearch.length; i++) {
     let allMatch = true;
-    for (let j = 0; j < searchLines.length; j++) {
-      if (contentLines[i + j].trim() !== searchLines[j]) {
-        allMatch = false;
-        break;
-      }
+    let matchLen = 0;
+    let si = 0;
+    for (let ci = i; ci < contentLines.length && si < nonEmptySearch.length; ci++) {
+      if (contentLines[ci].trim() === "") { matchLen++; continue; } // skip blank lines in content
+      if (contentLines[ci].trim() !== nonEmptySearch[si]) { allMatch = false; break; }
+      si++; matchLen++;
     }
-
-    if (allMatch) {
-      // Calculate byte offsets for the matched range
-      let startOffset = 0;
-      for (let k = 0; k < i; k++) {
-        startOffset += contentLines[k].length + 1; // +1 for \n
-      }
-      let endOffset = startOffset;
-      for (let k = i; k < i + searchLines.length; k++) {
-        endOffset += contentLines[k].length + 1;
-      }
-      // Remove trailing \n from end offset if it's the last line
-      if (endOffset > 0 && endOffset <= content.length && content[endOffset - 1] === '\n') {
-        endOffset--;
-      }
-      return { start: startOffset, end: endOffset };
+    if (allMatch && si === nonEmptySearch.length) {
+      return lineRangeToOffsets(content, contentLines, i, matchLen);
     }
   }
 
-  // No fuzzy match found
+  // Layer 2: Indentation-adjusted match
+  // Strip leading whitespace from search lines, find match, compute indent delta
+  const strippedSearch = searchLines.map(l => l.trimStart());
+  for (let i = 0; i <= contentLines.length - strippedSearch.length; i++) {
+    let allMatch = true;
+    for (let j = 0; j < strippedSearch.length; j++) {
+      if (strippedSearch[j] === "") continue; // skip blank search lines
+      if (contentLines[i + j].trimStart() !== strippedSearch[j].trimEnd()) {
+        allMatch = false; break;
+      }
+    }
+    if (allMatch) {
+      return lineRangeToOffsets(content, contentLines, i, strippedSearch.length);
+    }
+  }
+
+  // Layer 3: Similarity-based fuzzy match (sliding window)
+  const searchStr = nonEmptySearch.join("\n").toLowerCase();
+  const searchLen = nonEmptySearch.length;
+  let bestScore = 0;
+  let bestStart = -1;
+  let bestLen = 0;
+
+  // Try windows of size searchLen ± 20%
+  const minWin = Math.max(1, Math.floor(searchLen * 0.8));
+  const maxWin = Math.min(contentLines.length, Math.ceil(searchLen * 1.2));
+
+  for (let winSize = minWin; winSize <= maxWin; winSize++) {
+    for (let i = 0; i <= contentLines.length - winSize; i++) {
+      const windowStr = contentLines.slice(i, i + winSize)
+        .map(l => l.trim()).filter(l => l).join("\n").toLowerCase();
+      const score = similarity(searchStr, windowStr);
+      if (score > bestScore) {
+        bestScore = score; bestStart = i; bestLen = winSize;
+      }
+    }
+  }
+
+  if (bestScore >= 0.8 && bestStart >= 0) {
+    return lineRangeToOffsets(content, contentLines, bestStart, bestLen);
+  }
+
   return null;
+}
+
+function lineRangeToOffsets(content: string, lines: string[], start: number, count: number): { start: number; end: number } {
+  let startOffset = 0;
+  for (let k = 0; k < start; k++) startOffset += lines[k].length + 1;
+  let endOffset = startOffset;
+  for (let k = start; k < start + count; k++) endOffset += lines[k].length + 1;
+  if (endOffset > 0 && endOffset <= content.length && content[endOffset - 1] === '\n') endOffset--;
+  return { start: startOffset, end: endOffset };
+}
+
+// Jaccard-ish similarity on character trigrams (fast, good enough for code)
+function similarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+  const trigramsA = new Set<string>();
+  const trigramsB = new Set<string>();
+  for (let i = 0; i <= a.length - 3; i++) trigramsA.add(a.slice(i, i + 3));
+  for (let i = 0; i <= b.length - 3; i++) trigramsB.add(b.slice(i, i + 3));
+  if (trigramsA.size === 0 || trigramsB.size === 0) return 0;
+  let intersection = 0;
+  for (const t of trigramsA) { if (trigramsB.has(t)) intersection++; }
+  return intersection / (trigramsA.size + trigramsB.size - intersection);
 }
 
 async function applyDiff(target: HTMLElement) {
@@ -671,7 +743,7 @@ async function undoDiff(target: HTMLElement) {
   refreshPanelContent();
 }
 
-function handleAction(action: string, target: HTMLElement) {
+async function handleAction(action: string, target: HTMLElement) {
   switch (action) {
     case "select": toggleSelectMode(); break;
     case "screenshot": takeScreenshot(); break;
@@ -703,9 +775,38 @@ function handleAction(action: string, target: HTMLElement) {
     case "apply-diff": applyDiff(target); break;
     case "reject-diff": rejectDiff(target); break;
     case "apply-all": {
-      const buttons = shadow.querySelectorAll(`[data-action="apply-diff"]`);
-      for (const btn of Array.from(buttons)) {
-        applyDiff(btn as HTMLElement);
+      const buttons = Array.from(shadow.querySelectorAll(`[data-action="apply-diff"]`));
+      if (buttons.length === 0) break;
+      // Snapshot files before batch for rollback
+      const filesToSnapshot = new Set<string>();
+      for (const btn of buttons) {
+        const file = (btn as HTMLElement).dataset.file;
+        if (file) filesToSnapshot.add(resolveFilePath(file));
+      }
+      const snapshots = new Map<string, string>();
+      for (const fp of filesToSnapshot) {
+        try {
+          const r = await ws.request("fs.read", { path: fp }).catch(() => null);
+          if (r?.payload?.content) snapshots.set(fp, String(r.payload.content));
+        } catch {}
+      }
+      // Apply diffs sequentially, track failures
+      let failed = false;
+      for (const btn of buttons) {
+        try {
+          await applyDiff(btn as HTMLElement);
+        } catch {
+          failed = true;
+          break;
+        }
+      }
+      // If any failed, rollback all
+      if (failed && snapshots.size > 0) {
+        for (const [fp, content] of snapshots) {
+          try { await ws.request("fs.write", { path: fp, content }); } catch {}
+        }
+        state.messages.push({ role: "system", content: "Batch apply failed — all changes reverted." });
+        refreshPanelContent();
       }
       hideApplyBar();
       break;
@@ -1226,16 +1327,23 @@ async function sendPrompt() {
     const readPaths = new Set<string>();
     let totalChars = 0;
 
-    for (const f of scored.slice(0, MAX_GROUNDED_FILES)) {
-      if (f.score <= 0) break;
+    // Parallel read of top scored files for faster grounding
+    const topScored = scored.slice(0, MAX_GROUNDED_FILES).filter((f: any) => f.score > 0);
+    const root = state.roots[0] || "";
+    const readResults = await Promise.all(
+      topScored.map((f: any) => {
+        const fullPath = root ? `${root}/${f.path}` : f.path;
+        return ws.request("fs.read", { path: fullPath }).catch(() => null);
+      })
+    );
+
+    for (let fi = 0; fi < topScored.length; fi++) {
+      const f = topScored[fi];
       if (totalChars >= MAX_GROUNDED_CHARS) break;
       try {
-        const root = state.roots[0] || "";
-        const fullPath = root ? `${root}/${f.path}` : f.path;
-        const result = await ws.request("fs.read", { path: fullPath });
-        const content = String(result?.payload?.content || "");
+        const content = String(readResults[fi]?.payload?.content || "");
         if (!content) continue;
-        const maxChars = Math.min(8000, MAX_GROUNDED_CHARS - totalChars);
+        const maxChars = Math.min(12000, MAX_GROUNDED_CHARS - totalChars);
         let trimmed = content.slice(0, maxChars);
         if (content.length > maxChars) {
           trimmed += `\n// [FILE TRUNCATED — showing ${maxChars} of ${content.length} chars]`;
@@ -1578,7 +1686,13 @@ async function sendPrompt() {
       break; // Done — no more retries needed
     }
   } catch (e: any) {
-    state.messages.push({ role: "system", content: `Error: ${e.message}` });
+    // Stream disconnect recovery: if we have partial content, show it
+    if (state.streamContent.trim().length > 20) {
+      state.messages.push({ role: "assistant", content: state.streamContent.trim() });
+      state.messages.push({ role: "system", content: `Response interrupted: ${e.message}. Partial response shown above.` });
+    } else {
+      state.messages.push({ role: "system", content: `Error: ${e.message}` });
+    }
   }
 
   state.streaming = false;

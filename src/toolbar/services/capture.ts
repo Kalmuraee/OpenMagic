@@ -81,7 +81,21 @@ async function captureViaSvg(element: HTMLElement): Promise<string | null> {
       ctx.scale(dpr, dpr);
       ctx.drawImage(img, 0, 0);
       try {
-        resolve(canvas.toDataURL("image/png", 0.8));
+        // Compress: resize to max 1280px wide, JPEG 80% quality
+        const MAX_W = 1280;
+        if (canvas.width > MAX_W) {
+          const ratio = MAX_W / canvas.width;
+          const small = document.createElement("canvas");
+          small.width = MAX_W;
+          small.height = Math.round(canvas.height * ratio);
+          const sCtx = small.getContext("2d");
+          if (sCtx) {
+            sCtx.drawImage(canvas, 0, 0, small.width, small.height);
+            resolve(small.toDataURL("image/jpeg", 0.8));
+            return;
+          }
+        }
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
       } catch {
         resolve(null); // Tainted canvas
       }

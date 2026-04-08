@@ -27,6 +27,24 @@ export interface SelectedElement {
     padding: string;
   }[];
   resolvedClasses: { className: string; css: string }[];
+  // Phase 3: Deep element intelligence (unique to OpenMagic)
+  themeState: {
+    darkMode: boolean;
+    colorScheme: string;
+    htmlDataAttributes: Record<string, string>;
+  };
+  cssVariables: Record<string, string>;
+  stackingContext: { zIndex: string; createsContext: boolean; parentZIndex: string };
+  visibilityState: {
+    isVisible: boolean;
+    isInViewport: boolean;
+    scrollTop: number;
+    scrollLeft: number;
+    isScrollable: boolean;
+  };
+  activeBreakpoints: string[];
+  pseudoElements: { before: string; after: string };
+  formState: { disabled: boolean; readOnly: boolean; invalid: boolean } | null;
 }
 
 const IMPORTANT_STYLES = [
@@ -146,6 +164,87 @@ export function inspectElement(el: HTMLElement): SelectedElement {
   // React props extraction
   const reactProps = getReactProps(el);
 
+  // ── Phase 3: Deep element intelligence ──
+
+  // Theme / dark mode state
+  const htmlEl = document.documentElement;
+  const htmlComputed = window.getComputedStyle(htmlEl);
+  const htmlDataAttributes: Record<string, string> = {};
+  for (const key of Object.keys(htmlEl.dataset)) {
+    htmlDataAttributes[key] = htmlEl.dataset[key] || "";
+  }
+  const themeState = {
+    darkMode: htmlEl.classList.contains("dark")
+      || htmlEl.dataset.theme === "dark"
+      || htmlEl.dataset.mode === "dark"
+      || window.matchMedia("(prefers-color-scheme: dark)").matches,
+    colorScheme: htmlComputed.colorScheme || "",
+    htmlDataAttributes,
+  };
+
+  // CSS custom properties used by this element
+  const cssVariables: Record<string, string> = {};
+  try {
+    for (const rule of matchedCssRules) {
+      const varMatches = rule.matchAll(/var\((--[a-zA-Z0-9_-]+)/g);
+      for (const vm of varMatches) {
+        const varName = vm[1];
+        if (!cssVariables[varName]) {
+          cssVariables[varName] = computed.getPropertyValue(varName).trim() || "(unset)";
+        }
+      }
+    }
+    // Also check inline style
+    const inlineVars = (el.getAttribute("style") || "").matchAll(/var\((--[a-zA-Z0-9_-]+)/g);
+    for (const iv of inlineVars) {
+      if (!cssVariables[iv[1]]) {
+        cssVariables[iv[1]] = computed.getPropertyValue(iv[1]).trim() || "(unset)";
+      }
+    }
+  } catch {}
+
+  // z-index stacking context
+  const zIndex = computed.zIndex;
+  const position = computed.position;
+  const createsContext = (position !== "static" && zIndex !== "auto") || computed.opacity !== "1"
+    || computed.transform !== "none" || computed.filter !== "none";
+  const parentZIndex = el.parentElement ? window.getComputedStyle(el.parentElement).zIndex : "auto";
+  const stackingContext = { zIndex, createsContext, parentZIndex };
+
+  // Visibility and scroll state
+  const isInViewport = rect.top < window.innerHeight && rect.bottom > 0 && rect.left < window.innerWidth && rect.right > 0;
+  let isVisible = true;
+  try { isVisible = el.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true; } catch { isVisible = computed.display !== "none" && computed.visibility !== "hidden"; }
+  const isScrollable = el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth;
+  const visibilityState = { isVisible, isInViewport, scrollTop: el.scrollTop, scrollLeft: el.scrollLeft, isScrollable };
+
+  // Active media queries / breakpoints
+  const activeBreakpoints: string[] = [];
+  const breakpointsToCheck = [
+    "(max-width: 639px)", "(min-width: 640px)", "(min-width: 768px)",
+    "(min-width: 1024px)", "(min-width: 1280px)", "(min-width: 1536px)",
+    "(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)",
+  ];
+  for (const bp of breakpointsToCheck) {
+    try { if (window.matchMedia(bp).matches) activeBreakpoints.push(bp); } catch {}
+  }
+
+  // Pseudo-element content
+  let beforeContent = "", afterContent = "";
+  try { beforeContent = window.getComputedStyle(el, "::before").content || ""; } catch {}
+  try { afterContent = window.getComputedStyle(el, "::after").content || ""; } catch {}
+  const pseudoElements = { before: beforeContent, after: afterContent };
+
+  // Form state (if applicable)
+  let formState: { disabled: boolean; readOnly: boolean; invalid: boolean } | null = null;
+  if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement || el instanceof HTMLButtonElement) {
+    formState = {
+      disabled: (el as any).disabled || false,
+      readOnly: (el as any).readOnly || false,
+      invalid: (el as any).checkValidity ? !(el as any).checkValidity() : false,
+    };
+  }
+
   return {
     tagName: el.tagName.toLowerCase(),
     id: el.id || "",
@@ -172,6 +271,13 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     ariaAttributes,
     eventHandlers,
     reactProps,
+    themeState,
+    cssVariables,
+    stackingContext,
+    visibilityState,
+    activeBreakpoints,
+    pseudoElements,
+    formState,
   };
 }
 

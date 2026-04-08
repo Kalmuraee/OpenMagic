@@ -118,22 +118,18 @@ export async function chatCodexCli(
  *
  * We extract text from agent_message items.
  */
+/**
+ * Extract text from a Codex JSONL event.
+ * item.text is the FULL accumulated text (not a delta), so we only
+ * extract from item.completed to avoid duplicates.
+ */
 function extractCodexText(event: Record<string, unknown>): string | undefined {
-  // item.completed or item.updated with agent_message
-  if (
-    event.type === "item.completed" ||
-    event.type === "item.updated" ||
-    event.type === "item.started"
-  ) {
+  // Only emit on item.completed — text is full content, not a delta
+  if (event.type === "item.completed") {
     const item = event.item as Record<string, unknown> | undefined;
     if (item?.type === "agent_message" && typeof item.text === "string") {
       return item.text;
     }
-  }
-
-  // Error event
-  if (event.type === "error" && typeof (event as any).message === "string") {
-    return undefined; // Don't stream errors as content
   }
 
   return undefined;

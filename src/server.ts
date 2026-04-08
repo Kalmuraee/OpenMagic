@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { validateToken } from "./security.js";
 import { loadConfig, saveConfig } from "./config.js";
+import { detectAvailableClis, invalidateCliCache } from "./llm/cli-detect.js";
 import { readFileSafe, writeFileSafe, listFiles, getProjectTree, grepFiles, getBackupForFile, cleanupBackups } from "./filesystem.js";
 import type {
   WsMessage,
@@ -283,17 +284,40 @@ async function handleMessage(
 
     case "config.get": {
       const config = loadConfig();
+
+      // Auto-detect available CLI agents
+      const detectedClis = await detectAvailableClis();
+      const cliStatuses = detectedClis.map((c) => ({
+        id: c.id,
+        name: c.name,
+        installed: c.installed,
+        authenticated: c.authenticated,
+        version: c.version,
+      }));
+
+      // Auto-select: if no provider is saved, pick the best available CLI
+      let provider = config.provider || "";
+      let model = config.model || "";
+      if (!provider) {
+        const bestCli = detectedClis.find((c) => c.installed && c.authenticated);
+        if (bestCli) {
+          provider = bestCli.id;
+          model = bestCli.id; // CLI providers use same ID for model
+        }
+      }
+
       send(ws, {
         id: msg.id,
         type: "config.value",
         payload: {
-          provider: config.provider,
-          model: config.model,
-          hasApiKey: !!(config.apiKeys?.[config.provider || ""] || config.apiKey),
+          provider,
+          model,
+          hasApiKey: !!(config.apiKeys?.[provider] || config.apiKey),
           roots: config.roots || roots,
           apiKeys: Object.fromEntries(
             Object.entries(config.apiKeys || {}).map(([k]) => [k, true])
           ),
+          detectedClis: cliStatuses,
         },
       });
       break;

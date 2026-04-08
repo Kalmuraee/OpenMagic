@@ -10,6 +10,10 @@ import {
   realpathSync,
   unlinkSync,
   rmSync,
+  openSync,
+  fsyncSync,
+  closeSync,
+  renameSync,
 } from "node:fs";
 import { join, resolve, relative, dirname, extname } from "node:path";
 import { tmpdir } from "node:os";
@@ -72,6 +76,9 @@ export function isPathSafe(filePath: string, roots: string[]): boolean {
   });
 }
 
+// Track line endings and BOM per file so writeFileSafe can restore them
+const fileMetadata = new Map<string, { hasBOM: boolean; lineEnding: string }>();
+
 export function readFileSafe(
   filePath: string,
   roots: string[]
@@ -83,7 +90,15 @@ export function readFileSafe(
     return { error: "File not found" };
   }
   try {
-    const content = readFileSync(filePath, "utf-8");
+    const raw = readFileSync(filePath);
+    // Detect BOM (UTF-8: EF BB BF)
+    const hasBOM = raw[0] === 0xEF && raw[1] === 0xBB && raw[2] === 0xBF;
+    let content = hasBOM ? raw.subarray(3).toString("utf-8") : raw.toString("utf-8");
+    // Detect and normalize line endings
+    const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
+    if (lineEnding === "\r\n") content = content.replace(/\r\n/g, "\n");
+    // Store metadata for write restoration
+    fileMetadata.set(resolve(filePath), { hasBOM, lineEnding });
     return { content };
   } catch (e: unknown) {
     return { error: `Failed to read file: ${(e as Error).message}` };
@@ -138,7 +153,29 @@ export function writeFileSafe(
       mkdirSync(dir, { recursive: true });
     }
 
-    writeFileSync(filePath, content, "utf-8");
+    // Restore original line endings and BOM
+    let output = content;
+    const meta = fileMetadata.get(resolve(filePath));
+    if (meta) {
+      if (meta.lineEnding === "\r\n") output = output.replace(/\n/g, "\r\n");
+      if (meta.hasBOM) output = "\uFEFF" + output;
+    }
+
+    // Atomic write: write to temp, then rename
+    const tmpPath = filePath + ".openmagic-tmp-" + Date.now();
+    writeFileSync(tmpPath, output, "utf-8");
+    try {
+      const fd = openSync(tmpPath, "r");
+      fsyncSync(fd);
+      closeSync(fd);
+    } catch {} // fsync best-effort
+    try {
+      renameSync(tmpPath, filePath);
+    } catch {
+      // rename failed (cross-device?) — fall back to direct write
+      writeFileSync(filePath, output, "utf-8");
+      try { unlinkSync(tmpPath); } catch {}
+    }
     return { ok: true, backupPath };
   } catch (e: unknown) {
     return { ok: false, error: `Failed to write file: ${(e as Error).message}` };

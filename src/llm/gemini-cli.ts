@@ -4,11 +4,11 @@ import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js
 
 /**
  * Google Gemini CLI adapter.
- * Uses `gemini -p` (non-interactive/headless mode) with stream-json output.
+ * Uses `gemini` with prompt piped via stdin (auto-detected headless mode).
  * Auth: uses GEMINI_API_KEY from env or Google OAuth (if logged in interactively).
  *
  * Docs: https://github.com/google-gemini/gemini-cli
- * Flags verified from packages/cli/src/config/config.ts
+ * When stdin is piped and no -p flag, Gemini CLI auto-enters non-interactive mode.
  */
 
 export async function chatGeminiCli(
@@ -27,16 +27,12 @@ export async function chatGeminiCli(
   const contextParts = buildContextParts(context);
   const fullPrompt = `${SYSTEM_PROMPT}\n\n${buildUserMessage(userPrompt, contextParts)}`;
 
-  // gemini -p: non-interactive/headless mode (no TTY required)
-  // --output-format stream-json: structured streaming output
-  // --yolo: auto-accept all actions
-  // Prompt is piped via stdin (auto-detected when stdin is not a TTY,
-  // prepended to -p prompt)
+  // Pipe full prompt via stdin — Gemini CLI auto-detects piped stdin
+  // and enters non-interactive headless mode.
+  // --yolo: auto-accept all tool actions without prompting
   const proc = spawn(
     "gemini",
     [
-      "-p", userPrompt,
-      "--output-format", "stream-json",
       "--yolo",
     ],
     {
@@ -45,48 +41,17 @@ export async function chatGeminiCli(
     }
   );
 
-  // Send full context (system prompt + grounded files) via stdin
-  // Gemini CLI prepends stdin content to the -p prompt
-  proc.stdin.write(`${SYSTEM_PROMPT}\n\n${buildUserMessage("", contextParts)}`);
+  // Send the complete prompt (system + context + user) via stdin
+  proc.stdin.write(fullPrompt);
   proc.stdin.end();
 
   let fullContent = "";
-  let resultContent = "";
-  let buffer = "";
   let errOutput = "";
 
   proc.stdout.on("data", (data: Buffer) => {
-    buffer += data.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-
-        // Final result event
-        if (event.type === "result") {
-          if (typeof event.result === "string") {
-            resultContent = event.result;
-          }
-          continue;
-        }
-
-        const text = extractGeminiText(event);
-        if (text) {
-          fullContent += text;
-          onChunk(text);
-        }
-      } catch {
-        // Not JSON — treat as raw text
-        const trimmed = line.trim();
-        if (trimmed) {
-          fullContent += trimmed + "\n";
-          onChunk(trimmed + "\n");
-        }
-      }
-    }
+    const text = data.toString();
+    fullContent += text;
+    onChunk(text);
   });
 
   proc.stderr.on("data", (data: Buffer) => {
@@ -102,26 +67,8 @@ export async function chatGeminiCli(
   });
 
   proc.on("close", (code) => {
-    // Process remaining buffer
-    if (buffer.trim()) {
-      try {
-        const event = JSON.parse(buffer);
-        if (event.type === "result" && typeof event.result === "string") {
-          resultContent = event.result;
-        } else {
-          const text = extractGeminiText(event);
-          if (text) fullContent += text;
-        }
-      } catch {
-        const trimmed = buffer.trim();
-        if (trimmed) fullContent += trimmed;
-      }
-    }
-
-    const finalContent = resultContent || fullContent;
-
-    if (code === 0 || finalContent.trim()) {
-      onDone({ content: finalContent });
+    if (code === 0 || fullContent.trim()) {
+      onDone({ content: fullContent });
     } else {
       const err = errOutput.trim();
       if (err.includes("auth") || err.includes("GEMINI_API_KEY") || err.includes("credentials") || err.includes("login")) {
@@ -131,31 +78,4 @@ export async function chatGeminiCli(
       }
     }
   });
-}
-
-/**
- * Extract text from a Gemini CLI stream-json event.
- * Gemini CLI uses similar event formats to other AI CLIs.
- */
-function extractGeminiText(event: Record<string, unknown>): string | undefined {
-  // Assistant message with content blocks
-  if (event.type === "assistant" || event.type === "message") {
-    const content = (event as any).content ?? (event as any).message?.content;
-    if (Array.isArray(content)) {
-      return content
-        .filter((b: any) => b.type === "text" && b.text)
-        .map((b: any) => b.text)
-        .join("");
-    }
-    if (typeof content === "string") return content;
-    if (typeof (event as any).text === "string") return (event as any).text;
-  }
-
-  // Content block delta (streaming chunks)
-  if (event.type === "content_block_delta") {
-    const delta = event.delta as Record<string, unknown> | undefined;
-    if (typeof delta?.text === "string") return delta.text;
-  }
-
-  return undefined;
 }

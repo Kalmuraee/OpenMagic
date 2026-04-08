@@ -37,11 +37,17 @@ You MUST respond with valid JSON in this exact format:
 5. Keep modifications minimal — change only what's needed. Do NOT rewrite entire files.
 6. If the grounded files don't contain the code you need to modify, return: {"modifications":[],"explanation":"NEED_FILE: exact/relative/path/to/file.ext"}
 7. To search for a pattern across the codebase, return: {"modifications":[],"explanation":"SEARCH_FILES: \\"pattern\\" in optional/path/"}
-7. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
-8. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
-9. Use the page URL route and componentHint to identify the correct source file to modify
-10. Always preserve existing code style, conventions, and indentation
-11. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
+8. For style changes: check the dependencies (package.json) to know if the project uses Tailwind, MUI, etc. Use the project's styling approach, not raw CSS
+9. Use the selected element's cssSelector, className, parentContainerStyles, and siblings to understand the full layout context
+10. Use the page URL route and componentHint to identify the correct source file to modify
+11. Use childrenLayout pixel measurements for spacing. gapToNext.vertical=0 means elements are touching.
+12. Use resolvedClasses to see actual CSS values behind utility classes (space-y-6 = margin-top: 1.5rem).
+13. Check themeState.darkMode — if true, use dark-mode-aware colors and respect the project's dark mode classes.
+14. Use cssVariables to leverage existing design tokens (var(--color-primary)) instead of hardcoding hex values.
+15. Check activeBreakpoints to know which responsive breakpoint is active. Suggest responsive-aware changes.
+16. Check visibilityState — the element may be scrolled out of view, hidden, or inside a scrollable container.
+17. Always preserve existing code style, conventions, and indentation
+18. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
@@ -95,6 +101,16 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
     if (el.resolvedClasses?.length) {
       elementData.resolvedClasses = el.resolvedClasses;
     }
+    // Deep element intelligence
+    if (el.themeState) elementData.themeState = el.themeState;
+    if (el.cssVariables && Object.keys(el.cssVariables).length) elementData.cssVariables = el.cssVariables;
+    if (el.stackingContext) elementData.stackingContext = el.stackingContext;
+    if (el.visibilityState) elementData.visibilityState = el.visibilityState;
+    if (el.activeBreakpoints?.length) elementData.activeBreakpoints = el.activeBreakpoints;
+    if (el.pseudoElements && (el.pseudoElements.before !== "none" || el.pseudoElements.after !== "none")) {
+      elementData.pseudoElements = el.pseudoElements;
+    }
+    if (el.formState) elementData.formState = el.formState;
     parts.selectedElement = JSON.stringify(elementData, null, 2);
   }
 

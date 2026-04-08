@@ -3,7 +3,8 @@ import chalk from "chalk";
 import open from "open";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import http from "node:http";
 import { createInterface } from "node:readline";
 
 // Suppress http-proxy deprecation warning noise
@@ -55,6 +56,70 @@ function ask(question: string): Promise<string> {
       rl.close();
       resolve(answer.trim());
     });
+  });
+}
+
+/** Wait for a port to CLOSE (become free). Used after killing orphan processes. */
+function waitForPortClose(port: number, timeoutMs: number = 10000): Promise<boolean> {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const check = async () => {
+      if (!(await isPortOpen(port))) {
+        resolve(true);
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        resolve(false);
+        return;
+      }
+      setTimeout(check, 300);
+    };
+    check();
+  });
+}
+
+/**
+ * Kill a process listening on a given port.
+ * Returns true if the process was killed and the port freed.
+ */
+function killPortProcess(port: number): boolean {
+  try {
+    const pidOutput = execSync(`lsof -i :${port} -sTCP:LISTEN -t 2>/dev/null`, {
+      encoding: "utf-8",
+      timeout: 3000,
+    }).trim();
+    if (!pidOutput) return false;
+    const pids = pidOutput.split("\n").map((p) => p.trim()).filter(Boolean);
+    for (const pid of pids) {
+      try { process.kill(parseInt(pid, 10), "SIGTERM"); } catch {}
+    }
+    return pids.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a server on the given port is healthy (responds with non-error status).
+ * Returns true if healthy, false if not responding or returning errors.
+ */
+/**
+ * Check if a server on the given port is healthy (responds with non-error status).
+ * Returns true if healthy, false if not responding or returning errors.
+ */
+function isPortHealthy(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `http://${host}:${port}/`,
+      { timeout: 3000 },
+      (res) => {
+        // 2xx/3xx = healthy, 4xx/5xx = unhealthy
+        resolve(res.statusCode !== undefined && res.statusCode < 400);
+        res.resume(); // drain
+      }
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => { req.destroy(); resolve(false); });
   });
 }
 
@@ -288,9 +353,48 @@ program
       const detected = await detectDevServer();
 
       if (detected && detected.fromScripts) {
-        // Trusted detection via package.json scripts
-        targetPort = detected.port;
-        targetHost = detected.host;
+        // Trusted detection via package.json scripts — but verify it's healthy.
+        // An orphaned dev server from a previous OpenMagic session may still be
+        // on the port but serving errors (zombie/dying process).
+        const healthy = await isPortHealthy(detected.host, detected.port);
+        if (healthy) {
+          targetPort = detected.port;
+          targetHost = detected.host;
+        } else {
+          console.log(chalk.yellow(`  ⚠  Dev server on port ${detected.port} is not responding properly.`));
+          console.log(chalk.dim("     Cleaning up orphaned process..."));
+          killPortProcess(detected.port);
+          // Wait for the port to be freed
+          const freed = await waitForPortClose(detected.port, 5000);
+          if (!freed) {
+            // Force kill
+            try {
+              const pidOutput = execSync(`lsof -i :${detected.port} -sTCP:LISTEN -t 2>/dev/null`, {
+                encoding: "utf-8", timeout: 3000,
+              }).trim();
+              for (const pid of pidOutput.split("\n").filter(Boolean)) {
+                try { process.kill(parseInt(pid, 10), "SIGKILL"); } catch {}
+              }
+              await waitForPortClose(detected.port, 3000);
+            } catch {}
+          }
+          // Start a fresh dev server
+          const started = await offerToStartDevServer();
+          if (!started) { process.exit(1); }
+          if (lastDetectedPort) {
+            targetPort = lastDetectedPort;
+          } else {
+            const redetected = await detectDevServer();
+            if (redetected) {
+              targetPort = redetected.port;
+              targetHost = redetected.host;
+            } else {
+              console.log(chalk.red("  ✗  Could not detect the dev server after starting."));
+              console.log(chalk.dim("     Try specifying the port: npx openmagic --port 3000"));
+              process.exit(1);
+            }
+          }
+        }
       } else if (detected && !detected.fromScripts) {
         // Found a port via generic scan — confirm with user
         const answer = await ask(
@@ -406,9 +510,18 @@ program
       }
     });
 
-    // Graceful shutdown — kill child processes before exiting
+    // Graceful shutdown — ensure child processes AND the dev server port are
+    // fully released before exiting. This prevents the "404 on restart" bug
+    // where an orphaned dev server zombie holds the port.
+    //
+    // Strategy:
+    // 1. SIGTERM direct children (they also got SIGINT from the terminal)
+    // 2. Kill any process still listening on the dev server port (catches grandchildren)
+    // 3. Wait for the port to actually close (TCP poll)
+    // 4. SIGKILL anything remaining after 3s
+    // 5. Only then call process.exit(0)
     let shuttingDown = false;
-    const shutdown = () => {
+    const shutdown = async () => {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log("");
@@ -416,40 +529,65 @@ program
       cleanupBackups();
       proxyServer.close();
 
-      // Kill all child processes (dev server, static server, etc.)
-      for (const cp of childProcesses) {
+      // Step 1: SIGTERM direct children
+      const alive = childProcesses.filter((cp) => cp.exitCode === null);
+      for (const cp of alive) {
         try { cp.kill("SIGTERM"); } catch {}
       }
 
-      // Force-kill after 2s, then exit
-      const forceExit = setTimeout(() => {
-        for (const cp of childProcesses) {
-          try { cp.kill("SIGKILL"); } catch {}
+      // Step 2: Also kill anything on the dev server port (catches grandchildren
+      // like Next.js workers that our direct child.kill() won't reach)
+      if (targetPort) {
+        killPortProcess(targetPort);
+      }
+
+      // Step 3: Wait for the port to actually close (poll every 200ms, up to 4s)
+      if (targetPort && (await isPortOpen(targetPort))) {
+        const freed = await waitForPortClose(targetPort, 4000);
+        if (!freed) {
+          // Step 4: Force-kill everything on the port
+          console.log(chalk.dim("  Force-killing remaining processes..."));
+          if (targetPort) {
+            try {
+              const pids = execSync(`lsof -i :${targetPort} -sTCP:LISTEN -t 2>/dev/null`, {
+                encoding: "utf-8", timeout: 2000,
+              }).trim().split("\n").filter(Boolean);
+              for (const pid of pids) {
+                try { process.kill(parseInt(pid, 10), "SIGKILL"); } catch {}
+              }
+            } catch {}
+          }
+          for (const cp of childProcesses) {
+            if (cp.exitCode === null) {
+              try { cp.kill("SIGKILL"); } catch {}
+            }
+          }
+          // Brief wait for SIGKILL to take effect
+          await new Promise((r) => setTimeout(r, 300));
         }
-        process.exit(0);
-      }, 2000);
-      forceExit.unref();
-
-      // If all children are already dead, exit immediately
-      const allDead = childProcesses.every((cp) => cp.killed || cp.exitCode !== null);
-      if (allDead) {
-        clearTimeout(forceExit);
-        process.exit(0);
+      } else {
+        // No port to wait on — just wait for children
+        if (alive.length > 0) {
+          await Promise.race([
+            Promise.all(alive.map((cp) => new Promise<void>((r) => {
+              if (cp.exitCode !== null) { r(); return; }
+              cp.once("exit", () => r());
+            }))),
+            new Promise<void>((r) => setTimeout(() => {
+              for (const cp of childProcesses) {
+                if (cp.exitCode === null) try { cp.kill("SIGKILL"); } catch {}
+              }
+              setTimeout(r, 200);
+            }, 3000)),
+          ]);
+        }
       }
 
-      // Wait for children to exit
-      let remaining = childProcesses.filter((cp) => !cp.killed && cp.exitCode === null).length;
-      if (remaining === 0) { clearTimeout(forceExit); process.exit(0); }
-      for (const cp of childProcesses) {
-        cp.once("exit", () => {
-          remaining--;
-          if (remaining <= 0) { clearTimeout(forceExit); process.exit(0); }
-        });
-      }
+      process.exit(0);
     };
 
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", () => { shutdown(); });
+    process.on("SIGTERM", () => { shutdown(); });
   });
 
 // --- Smart Dev Server Start ---
@@ -732,20 +870,14 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     }
   });
 
-  // Clean up all child processes on exit
-  const cleanup = () => {
+  // Safety-net cleanup on exit (main shutdown handler does the real work)
+  process.once("exit", () => {
     for (const cp of childProcesses) {
-      try { cp.kill("SIGTERM"); } catch {}
-    }
-    setTimeout(() => {
-      for (const cp of childProcesses) {
+      if (cp.exitCode === null) {
         try { cp.kill("SIGKILL"); } catch {}
       }
-    }, 3000);
-  };
-  process.once("exit", cleanup);
-  process.once("SIGINT", cleanup);
-  process.once("SIGTERM", cleanup);
+    }
+  });
 
   // Wait for the port to open via TCP polling
   console.log(

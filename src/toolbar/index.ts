@@ -97,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.36.4";
+const CURRENT_VERSION = "0.37.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -114,6 +114,7 @@ const state = {
   model: "",
   hasApiKey: false,
   configuredProviders: {} as Record<string, boolean>, // which providers have keys
+  detectedClis: [] as { id: string; name: string; installed: boolean; authenticated: boolean; version?: string }[],
   roots: [] as string[],
   updateAvailable: false,
   latestVersion: "",
@@ -136,8 +137,22 @@ let $panelBody: HTMLDivElement;
 // ── State Persistence (survives HMR page reloads) ────────────────
 function saveState() {
   try {
+    // Prune messages for storage: keep first 5 + last 45, strip large diff payloads
+    let msgs = state.messages;
+    if (msgs.length > 50) {
+      msgs = [...msgs.slice(0, 5), ...msgs.slice(-45)];
+    }
+    const prunedMsgs = msgs.map(m => {
+      if (m.content.startsWith("__DIFF__") && m.content.length > 500) {
+        try {
+          const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
+          return { ...m, content: `Applied ${diff.type || "edit"} to ${diff.file || "file"}` };
+        } catch { return m; }
+      }
+      return m;
+    });
     sessionStorage.setItem("__om_state__", JSON.stringify({
-      messages: state.messages,
+      messages: prunedMsgs,
       provider: state.provider,
       model: state.model,
       panelOpen: state.panelOpen,
@@ -216,19 +231,31 @@ function init() {
         return ws.request("config.get");
       })
       .then((msg: any) => {
+        // Store detected CLI agents from server
+        state.detectedClis = msg.payload?.detectedClis || [];
+
         // Merge server config with restored state (restored state takes precedence for provider/model)
         const serverProvider = msg.payload?.provider || "";
         const serverModel = msg.payload?.model || "";
         state.provider = state.provider || serverProvider;
         state.model = state.model || serverModel;
         state.configuredProviders = msg.payload?.apiKeys || {};
-        state.hasApiKey = state.configuredProviders[state.provider] || false;
+
+        // Local providers (CLI-based) are always "configured" — no API key needed
+        // Also mark detected+authenticated CLIs as configured
+        for (const cli of state.detectedClis) {
+          if (cli.installed && cli.authenticated) {
+            state.configuredProviders[cli.id] = true;
+          }
+        }
+        const provMeta = MODEL_REGISTRY[state.provider];
+        state.hasApiKey = !!(state.configuredProviders[state.provider] || provMeta?.local);
         state.roots = msg.payload?.roots || [];
 
         // Restore panel state if we had it open before refresh
         if (state.panelOpen && state.activePanel) {
           openPanel(state.activePanel as "chat" | "settings");
-        } else if (!state.provider || (!state.hasApiKey && !Object.values(state.configuredProviders).some(Boolean))) {
+        } else if (!state.provider || (!state.hasApiKey && !Object.values(state.configuredProviders).some(Boolean) && !provMeta?.local)) {
           openPanel("settings");
         }
         updatePillButtons();
@@ -598,7 +625,10 @@ function rejectDiff(target: HTMLElement) {
     const i = parseInt(idx);
     try {
       const diff = JSON.parse(decodeBase64Utf8(state.messages[i]?.content.slice(8) || ""));
-      state.messages[i] = { role: "system", content: `Rejected change to ${diff.file || "file"}` };
+      // Feedback to LLM: include what was rejected so it can adjust on next turn
+      const searchPreview = (diff.search || "").split("\n")[0].slice(0, 80);
+      const replacePreview = (diff.replace || "").split("\n")[0].slice(0, 80);
+      state.messages[i] = { role: "system", content: `Rejected change to ${diff.file || "file"}: "${searchPreview}" → "${replacePreview}"` };
     } catch {
       state.messages[i] = { role: "system", content: "Change rejected" };
     }
@@ -820,8 +850,17 @@ function refreshPanelContent() {
 function renderSettingsHTML(): string {
   const providerOpts = Object.entries(MODEL_REGISTRY)
     .map(([k, p]) => {
-      const configured = state.configuredProviders[k] || p.local;
-      const indicator = configured ? " \u2713" : "";
+      // For CLI providers, show detailed detection status
+      const cliInfo = state.detectedClis.find((c) => c.id === k);
+      let indicator = "";
+      if (cliInfo) {
+        if (cliInfo.installed && cliInfo.authenticated) indicator = " \u2713 ready";
+        else if (cliInfo.installed) indicator = " (not logged in)";
+        else indicator = " (not installed)";
+      } else {
+        const configured = state.configuredProviders[k] || p.local;
+        indicator = configured ? " \u2713" : "";
+      }
       return `<option value="${k}" ${state.provider === k ? "selected" : ""}>${p.name}${indicator}</option>`;
     }).join("");
 
@@ -1079,8 +1118,8 @@ async function sendPrompt() {
   }
 
   // Grounding: read project tree + score and read relevant source files
-  const MAX_GROUNDED_FILES = 5;
-  const MAX_GROUNDED_CHARS = 32000;
+  const MAX_GROUNDED_FILES = 8;
+  const MAX_GROUNDED_CHARS = 48000;
   const TEXT_RE = /\.(?:[cm]?[jt]sx?|svelte|vue|astro|html?|css|scss|less|php|py)$/i;
 
   // Show grounding status
@@ -1328,6 +1367,10 @@ async function sendPrompt() {
         "tailwind.config.ts", "tailwind.config.js", "tailwind.config.mjs",
         "src/app/globals.css", "src/styles/globals.css", "styles/globals.css",
         "app/globals.css", "src/index.css", "src/global.css",
+        "tsconfig.json", "tsconfig.app.json",
+        "next.config.js", "next.config.mjs", "next.config.ts",
+        "vite.config.ts", "vite.config.js",
+        "astro.config.mjs", "astro.config.ts",
       ];
       for (const candidate of CONFIG_CANDIDATES) {
         if (totalChars >= MAX_GROUNDED_CHARS || readPaths.has(candidate)) continue;

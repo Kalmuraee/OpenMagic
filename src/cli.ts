@@ -5,7 +5,7 @@ import { resolve, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import http from "node:http";
-import { createInterface } from "node:readline";
+import { createInterface, clearLine, cursorTo } from "node:readline";
 
 // Raise file descriptor limit — Turbopack/Webpack need thousands of watchers.
 // macOS launchctl defaults to 256 which causes EMFILE in large projects.
@@ -19,15 +19,135 @@ process.emitWarning = function (warning: any, ...args: any[]) {
   return origEmitWarning.call(process, warning, ...args);
 } as typeof process.emitWarning;
 
+const INDENT = "  ";
+const LABEL_WIDTH = 10;
+let activeStatusLine = false;
+
+function clearActiveStatus(): void {
+  if (!activeStatusLine || !process.stdout.isTTY) return;
+  clearLine(process.stdout, 0);
+  cursorTo(process.stdout, 0);
+  activeStatusLine = false;
+}
+
+function writeLine(line: string = ""): void {
+  clearActiveStatus();
+  process.stdout.write(line ? `${line}\n` : "\n");
+}
+
+function formatInfo(message: string): string {
+  return chalk.dim(`${INDENT}${message}`);
+}
+
+function formatPending(message: string): string {
+  return chalk.dim(`${INDENT}●  ${message}`);
+}
+
+function formatSuccess(message: string): string {
+  return chalk.greenBright(`${INDENT}✓  ${message}`);
+}
+
+function formatReady(seconds: number = process.uptime()): string {
+  return chalk.greenBright(`${INDENT}✓ Ready in ${seconds.toFixed(1)}s`);
+}
+
+function formatWarning(message: string): string {
+  return chalk.yellow(`${INDENT}▲  ${message}`);
+}
+
+function formatError(message: string): string {
+  return chalk.red(`${INDENT}✗  ${message}`);
+}
+
+function printInfo(message: string): void {
+  writeLine(formatInfo(message));
+}
+
+function printSuccess(message: string): void {
+  writeLine(formatSuccess(message));
+}
+
+function printReady(): void {
+  writeLine(formatReady());
+}
+
+function printWarning(message: string): void {
+  writeLine(formatWarning(message));
+}
+
+function printError(message: string): void {
+  writeLine(formatError(message));
+}
+
+function printDetail(message: string, formatter: (text: string) => string = chalk.dim): void {
+  writeLine(formatter(`${INDENT}   ${message}`));
+}
+
+function printCommand(message: string): void {
+  printDetail(message, chalk.cyan);
+}
+
+function printLocation(label: string, value: string, brightValue: boolean = false): void {
+  const prefix = chalk.dim(`${INDENT}➜  ${`${label}:`.padEnd(LABEL_WIDTH)}`);
+  const renderedValue = brightValue ? chalk.whiteBright(value) : chalk.dim(value);
+  writeLine(`${prefix}${renderedValue}`);
+}
+
+function startInlineStatus(message: string): void {
+  clearActiveStatus();
+  const line = formatPending(message);
+  if (!process.stdout.isTTY) {
+    writeLine(line);
+    return;
+  }
+  process.stdout.write(line);
+  activeStatusLine = true;
+}
+
+function replaceInlineStatus(line: string): void {
+  if (!process.stdout.isTTY) {
+    writeLine(line);
+    return;
+  }
+  clearLine(process.stdout, 0);
+  cursorTo(process.stdout, 0);
+  process.stdout.write(`${line}\n`);
+  activeStatusLine = false;
+}
+
+function finishInlineStatus(message: string): void {
+  replaceInlineStatus(formatSuccess(message));
+}
+
+function warnInlineStatus(message: string): void {
+  replaceInlineStatus(formatWarning(message));
+}
+
+function failInlineStatus(message: string): void {
+  replaceInlineStatus(formatError(message));
+}
+
+function finishInlineReady(): void {
+  replaceInlineStatus(formatReady());
+}
+
+function getDetectedFrameworkLabel(): string | null {
+  if (detectedFramework) return detectedFramework;
+  const scripts = detectDevScripts();
+  return scripts.length > 0 ? scripts[0].framework : null;
+}
+
 // Global error handlers — prevent silent crashes
 process.on("unhandledRejection", (err) => {
-  console.error(chalk.red("\n  [OpenMagic] Unhandled error:"), (err as Error)?.message || err);
-  console.error(chalk.dim("  Please report this at https://github.com/Kalmuraee/OpenMagic/issues"));
+  writeLine();
+  printError(`Unhandled error: ${(err as Error)?.message || err}`);
+  printDetail("Please report this at https://github.com/Kalmuraee/OpenMagic/issues");
 });
 
 process.on("uncaughtException", (err) => {
-  console.error(chalk.red("\n  [OpenMagic] Fatal error:"), err.message);
-  console.error(chalk.dim("  Please report this at https://github.com/Kalmuraee/OpenMagic/issues"));
+  writeLine();
+  printError(`Fatal error: ${err.message}`);
+  printDetail("Please report this at https://github.com/Kalmuraee/OpenMagic/issues");
   process.exit(1);
 });
 
@@ -39,11 +159,13 @@ try {
     try { execSync("ulimit -n 65536", { shell: true, stdio: "ignore" }); } catch {}
     const newLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: true }).trim(), 10);
     if (newLimit < 4096) {
-      console.log(chalk.yellow("\n  ⚠  File descriptor limit is " + fdLimit + " (need 4096+)."));
-      console.log(chalk.dim("     This causes EMFILE errors in large Next.js/Turbopack projects."));
-      console.log(chalk.dim("     Fix: add this to your ~/.zshrc (or ~/.bashrc):"));
-      console.log(chalk.cyan("       ulimit -n 65536"));
-      console.log(chalk.dim("     Then restart your terminal.\n"));
+      writeLine();
+      printWarning(`File descriptor limit is ${fdLimit} (need 4096+).`);
+      printDetail("This can cause EMFILE errors in large Next.js and Turbopack projects.");
+      printDetail("Add this to your shell profile:");
+      printCommand("ulimit -n 65536");
+      printDetail("Then restart your terminal.");
+      writeLine();
     }
   }
 } catch {}
@@ -186,14 +308,14 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
       child.stdout?.on("data", (data: Buffer) => {
         const lines = data.toString().trim().split("\n");
         for (const line of lines) {
-          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
         }
       });
 
       child.stderr?.on("data", (data: Buffer) => {
         const lines = data.toString().trim().split("\n");
         for (const line of lines) {
-          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
         }
       });
 
@@ -205,7 +327,10 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
   });
 }
 
-async function healthCheck(proxyPort: number, _targetPort: number): Promise<void> {
+async function healthCheck(
+  proxyPort: number,
+  _targetPort: number
+): Promise<{ message: string; details?: string[] } | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -216,20 +341,18 @@ async function healthCheck(proxyPort: number, _targetPort: number): Promise<void
     });
     clearTimeout(timeout);
 
-    if (res.ok) {
-      console.log(chalk.green("  ✓  Toolbar ready."));
-    } else {
-      console.log(chalk.yellow("  ⚠  Proxy started but toolbar health check failed."));
-    }
+    if (res.ok) return null;
+
+    return {
+      message: "Proxy started, but the toolbar health check failed.",
+      details: ["Try refreshing the page in a few seconds."],
+    };
   } catch {
-    console.log(
-      chalk.yellow("  ⚠  Could not verify proxy. The dev server may still be starting.")
-    );
-    console.log(
-      chalk.dim("     Try refreshing the page in a few seconds.")
-    );
+    return {
+      message: "Could not verify the proxy while it was starting.",
+      details: ["Try refreshing the page in a few seconds."],
+    };
   }
-  console.log("");
 }
 
 // Detect common dev server errors and show hints
@@ -242,19 +365,19 @@ function formatDevServerLine(line: string): string {
     return chalk.red(`  │ ${trimmed}`);
   }
   if (trimmed.includes("EADDRINUSE") || trimmed.includes("address already in use")) {
-    return chalk.red(`  │ ${trimmed}`) + "\n" +
-      chalk.yellow("  │ → Port is already in use. Stop the other process or use --port <different-port>");
+    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      chalk.yellow(`${INDENT}│ ➜ Port is already in use. Stop the other process or use --port <different-port>`);
   }
   if (trimmed.includes("EACCES") || trimmed.includes("permission denied")) {
-    return chalk.red(`  │ ${trimmed}`) + "\n" +
-      chalk.yellow("  │ → Permission denied. Try a different port or check file permissions.");
+    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      chalk.yellow(`${INDENT}│ ➜ Permission denied. Try a different port or check file permissions.`);
   }
   if (trimmed.includes("Cannot find module") || trimmed.includes("MODULE_NOT_FOUND")) {
-    return chalk.red(`  │ ${trimmed}`) + "\n" +
-      chalk.yellow("  │ → Missing dependency. Try running npm install.");
+    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      chalk.yellow(`${INDENT}│ ➜ Missing dependency. Try running npm install.`);
   }
 
-  return chalk.dim(`  │ ${trimmed}`);
+  return chalk.dim(`${INDENT}│ ${trimmed}`);
 }
 
 // Track which framework was detected (for diagnostic hints)
@@ -291,41 +414,38 @@ async function validateAppHealth(targetHost: string, targetPort: number): Promis
       }
 
     if (status === 404) {
-      console.log(chalk.yellow("  ⚠  Your app returned 404 for the root path (\"/\")."));
-      console.log(chalk.dim("     The dev server is running, but no page matched."));
-      console.log("");
+      printWarning("Your app returned 404 for the root path (/).");
+      printDetail("The dev server is running, but no page matched the root path.");
 
       if (detectedFramework === "Next.js") {
         const strayLockfiles = scanParentLockfiles(process.cwd());
         if (strayLockfiles.length > 0) {
-          console.log(chalk.yellow("     Found lockfiles in parent directories that confuse Turbopack:"));
+          printDetail("Found lockfiles in parent directories that can confuse Turbopack.");
           for (const f of strayLockfiles) {
-            console.log(chalk.dim(`       • ${f}`));
+            printDetail(`- ${f}`);
           }
-          console.log("");
-          console.log(chalk.dim("     Fix: remove them, or add to your next.config:"));
-          console.log(chalk.cyan("       turbopack: { root: __dirname }"));
+          printDetail("Fix it by removing those lockfiles, or add this to next.config:");
+          printCommand("turbopack: { root: __dirname }");
         } else {
-          console.log(chalk.dim("     Common Next.js causes:"));
-          console.log(chalk.dim("     • Missing src/app/page.tsx (App Router) or pages/index.tsx"));
-          console.log(chalk.dim("     • Middleware redirecting all routes to an auth provider"));
+          printDetail("Common Next.js causes:");
+          printDetail("- Missing src/app/page.tsx (App Router) or pages/index.tsx");
+          printDetail("- Middleware redirecting all routes to an auth provider");
         }
       } else if (detectedFramework === "Angular") {
-        console.log(chalk.dim("     Angular hint: ensure the base href matches the proxy path."));
+        printDetail("Angular hint: make sure the base href matches the proxy path.");
       } else if (detectedFramework === "Vite") {
-        console.log(chalk.dim("     Vite hint: check that index.html exists in the project root."));
+        printDetail("Vite hint: check that index.html exists in the project root.");
       } else {
-        console.log(chalk.dim("     Check your framework's routing configuration."));
+        printDetail("Check your framework's routing configuration.");
       }
 
-      console.log("");
-      console.log(chalk.dim("     The toolbar is still available — navigate to a working route."));
-      console.log("");
+      printDetail("The toolbar is still available — navigate to a working route.");
+      writeLine();
       return false;
     } else if (status >= 500) {
-      console.log(chalk.yellow(`  ⚠  Your app returned HTTP ${status} on the root path.`));
-      console.log(chalk.dim("     There may be a server-side error. Check your dev server output."));
-      console.log("");
+      printWarning(`Your app returned HTTP ${status} on the root path.`);
+      printDetail("There may be a server-side error. Check your dev server output.");
+      writeLine();
       // 5xx might be temporary during startup — retry
       if (attempt < 4) {
         await new Promise(r => setTimeout(r, 2000));
@@ -363,12 +483,9 @@ program
   .option("--no-open", "Don't auto-open browser")
   .option("--host <host>", "Dev server host", "localhost")
   .action(async (opts) => {
-    console.log("");
-    console.log(
-      "  🪄 " + chalk.bold.hex("#6c5ce7")("OpenMagic") + chalk.dim(` v${VERSION}`) + " ✨"
-    );
-    console.log(chalk.dim("  AI coding toolbar for any web app"));
-    console.log("");
+    writeLine();
+    writeLine(`${INDENT}${chalk.white("OpenMagic")} ${chalk.dim(`v${VERSION}`)}`);
+    writeLine();
 
     let targetPort: number;
     let targetHost = opts.host;
@@ -390,10 +507,13 @@ program
           const recheck = await detectDevServer();
           if (recheck) { targetPort = recheck.port; targetHost = recheck.host; }
         }
+
+        const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
+        printSuccess(`Found ${frameworkLabel} on port ${targetPort}`);
       }
     } else {
       // Auto-detect running dev server
-      console.log(chalk.dim("  Scanning for dev server..."));
+      startInlineStatus("Scanning for dev server...");
       const detected = await detectDevServer();
 
       if (detected && detected.fromScripts) {
@@ -404,9 +524,11 @@ program
         if (healthy) {
           targetPort = detected.port;
           targetHost = detected.host;
+          const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
+          finishInlineStatus(`Found ${frameworkLabel} on port ${detected.port}`);
         } else {
-          console.log(chalk.yellow(`  ⚠  Dev server on port ${detected.port} is not responding properly.`));
-          console.log(chalk.dim("     Cleaning up orphaned process..."));
+          warnInlineStatus(`Dev server on port ${detected.port} is not responding`);
+          printDetail("Cleaning up the orphaned process...");
           killPortProcess(detected.port);
           // Wait for the port to be freed
           const freed = await waitForPortClose(detected.port, 5000);
@@ -433,30 +555,37 @@ program
               targetPort = redetected.port;
               targetHost = redetected.host;
             } else {
-              console.log(chalk.red("  ✗  Could not detect the dev server after starting."));
-              console.log(chalk.dim("     Try specifying the port: npx openmagic --port 3000"));
+              printError("Could not detect the dev server after starting.");
+              printDetail("Try specifying the port manually:");
+              printCommand("npx openmagic --port 3000");
               process.exit(1);
             }
           }
+
+          const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
+          printSuccess(`Found ${frameworkLabel} on port ${targetPort}`);
         }
       } else if (detected && !detected.fromScripts) {
         // Found a port via generic scan — confirm with user
+        finishInlineStatus(`Found dev server on port ${detected.port}`);
         const answer = await ask(
-          chalk.yellow(`  Found a server on port ${detected.port}. Is this your project's dev server? `) +
-          chalk.dim("(y/n) ")
+          chalk.yellow(`${INDENT}▲  Found a server on port ${detected.port}. Is this your project's dev server? `) +
+          chalk.dim("(Y/n) ")
         );
         if (answer.toLowerCase() === "y" || answer.toLowerCase() === "yes" || answer === "") {
           targetPort = detected.port;
           targetHost = detected.host;
         } else {
-          console.log("");
-          console.log(chalk.dim("  Start your dev server, then run:"));
-          console.log(chalk.cyan("    npx openmagic --port <your-port>"));
-          console.log("");
+          writeLine(formatInfo("Cancelled dev server selection."));
+          writeLine();
+          printInfo("Start your dev server, then run:");
+          printCommand("npx openmagic --port <your-port>");
+          writeLine();
           process.exit(0);
         }
       } else {
         // No server running — try to detect and start from package.json
+        warnInlineStatus("No dev server found. Starting one...");
         const started = await offerToStartDevServer();
         if (!started) {
           process.exit(1);
@@ -467,14 +596,18 @@ program
         } else {
           const redetected = await detectDevServer();
           if (!redetected) {
-            console.log(chalk.red("  ✗  Could not detect the dev server after starting."));
-            console.log(chalk.dim("     Try specifying the port: npx openmagic --port 3000"));
-            console.log("");
+            printError("Could not detect the dev server after starting.");
+            printDetail("Try specifying the port manually:");
+            printCommand("npx openmagic --port 3000");
+            writeLine();
             process.exit(1);
           }
           targetPort = redetected.port;
           targetHost = redetected.host;
         }
+
+        const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
+        printSuccess(`Found ${frameworkLabel} on port ${targetPort}`);
       }
     }
 
@@ -484,22 +617,18 @@ program
       if (scripts.length > 0) detectedFramework = scripts[0].framework;
     }
 
-    console.log(
-      chalk.green(`  ✓  Dev server running at ${targetHost}:${targetPort}`)
-    );
-
     // Proactive warning: detect parent lockfiles that confuse Turbopack
     if (detectedFramework === "Next.js") {
       const strayLockfiles = scanParentLockfiles(process.cwd());
       if (strayLockfiles.length > 0) {
-        console.log("");
-        console.log(chalk.yellow("  ⚠  Lockfiles found in parent directories:"));
+        writeLine();
+        printWarning("Lockfiles found in parent directories.");
         for (const f of strayLockfiles) {
-          console.log(chalk.dim(`     • ${f}`));
+          printDetail(`- ${f}`);
         }
-        console.log(chalk.dim("     Next.js Turbopack may use the wrong workspace root, causing 404s."));
-        console.log(chalk.dim("     Fix: remove them, or add to next.config:"));
-        console.log(chalk.cyan("       turbopack: { root: __dirname }"));
+        printDetail("Next.js Turbopack may use the wrong workspace root and cause 404s.");
+        printDetail("Fix it by removing those lockfiles, or add this to next.config:");
+        printCommand("turbopack: { root: __dirname }");
       }
     }
 
@@ -516,13 +645,19 @@ program
     generateSessionToken();
 
     // Find available port (single port — proxy + toolbar + WS all on same origin)
-    let proxyPort = parseInt(opts.listen, 10);
+    const requestedProxyPort = parseInt(opts.listen, 10);
+    let proxyPort = requestedProxyPort;
     while (await isPortOpen(proxyPort)) {
       proxyPort++;
-      if (proxyPort > parseInt(opts.listen, 10) + 100) {
-        console.log(chalk.red("  Could not find an available port."));
+      if (proxyPort > requestedProxyPort + 100) {
+        printError("Could not find an available port for the OpenMagic proxy.");
         process.exit(1);
       }
+    }
+
+    if (proxyPort !== requestedProxyPort) {
+      writeLine();
+      printWarning(`Port ${requestedProxyPort} is in use — starting on ${proxyPort}`);
     }
 
     // Single server: proxy + toolbar + WebSocket all on one port
@@ -530,30 +665,33 @@ program
 
     proxyServer.listen(proxyPort, "localhost", async () => {
       const proxyUrl = `http://localhost:${proxyPort}`;
-      console.log("");
-      console.log(chalk.bold.green("  Ready!"));
-      console.log("");
-      console.log(
-        chalk.bold("  → ") + chalk.bold.underline.cyan(proxyUrl)
-      );
-      console.log("");
+      const proxyWarning = await healthCheck(proxyPort, targetPort!);
+      const frameworkLabel = getDetectedFrameworkLabel();
+      const targetLabel = frameworkLabel
+        ? `${targetHost}:${targetPort!} (${frameworkLabel})`
+        : `${targetHost}:${targetPort!}`;
 
-      await healthCheck(proxyPort, targetPort!);
+      printLocation("Local", proxyUrl, true);
+      printLocation("Target", targetLabel);
+      writeLine();
 
       // Wait for the upstream app to actually serve content before opening browser
       // (Next.js Turbopack can take 5-15s to compile after port opens)
-      console.log(chalk.dim("  Waiting for app to compile..."));
-      const appReady = await validateAppHealth(targetHost, targetPort!);
+      startInlineStatus("Waiting for app to compile...");
+      await validateAppHealth(targetHost, targetPort!);
+      finishInlineReady();
 
-      if (appReady) {
-        console.log(chalk.green("  ✓  App is ready."));
+      if (proxyWarning) {
+        writeLine();
+        printWarning(proxyWarning.message);
+        for (const detail of proxyWarning.details || []) {
+          printDetail(detail);
+        }
       }
 
-      console.log(chalk.dim("  Press Ctrl+C to stop."));
-      console.log(
-        chalk.dim("  Errors below are from your dev server, not OpenMagic.")
-      );
-      console.log("");
+      writeLine();
+      printInfo("Press Ctrl+C to stop");
+      writeLine();
 
       if (opts.open !== false) {
         open(`http://localhost:${proxyPort}`).catch(() => {});
@@ -574,8 +712,8 @@ program
     const shutdown = async () => {
       if (shuttingDown) return;
       shuttingDown = true;
-      console.log("");
-      console.log(chalk.dim("  Shutting down OpenMagic..."));
+      writeLine();
+      printInfo("Shutting down OpenMagic...");
       cleanupBackups();
       proxyServer.close();
 
@@ -596,7 +734,7 @@ program
         const freed = await waitForPortClose(targetPort, 4000);
         if (!freed) {
           // Step 4: Force-kill everything on the port
-          console.log(chalk.dim("  Force-killing remaining processes..."));
+          printInfo("Force-killing remaining processes...");
           if (targetPort) {
             try {
               const pids = execSync(`lsof -i :${targetPort} -sTCP:LISTEN -t 2>/dev/null`, {
@@ -650,12 +788,10 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     // Check for plain HTML project (index.html without package.json scripts)
     const htmlPath = join(process.cwd(), "index.html");
     if (existsSync(htmlPath)) {
-      console.log(
-        chalk.dim("  No dev scripts found, but index.html detected.")
-      );
-      console.log("");
+      printInfo("No dev scripts found, but index.html was detected.");
+      writeLine();
       const answer = await ask(
-        chalk.white("  Serve this directory as a static site? ") + chalk.dim("(Y/n) ")
+        chalk.dim(`${INDENT}Serve this directory as a static site? `) + chalk.dim("(Y/n) ")
       );
       if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
         return false;
@@ -663,7 +799,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
       // Start a built-in static file server using Node's http module
       const staticPort = expectedPort || 8080;
-      console.log(chalk.dim(`  Starting static server on port ${staticPort}...`));
+      startInlineStatus(`Starting static server on port ${staticPort}...`);
 
       const staticChild = spawn("node", ["-e", `
         const http = require("http");
@@ -679,7 +815,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
             res.writeHead(200, {"Content-Type": mimes[ext] || "application/octet-stream"});
             res.end(data);
           });
-        }).listen(${staticPort}, "localhost", () => console.log("Static server ready on port ${staticPort}"));
+        }).listen(${staticPort}, "localhost");
       `], {
         cwd: process.cwd(),
         stdio: ["ignore", "pipe", "pipe"],
@@ -689,7 +825,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       childProcesses.push(staticChild);
       staticChild.stdout?.on("data", (d: Buffer) => {
         for (const line of d.toString().trim().split("\n")) {
-          if (line.trim()) process.stdout.write(chalk.dim(`  │ ${line}\n`));
+          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
         }
       });
 
@@ -697,119 +833,111 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       const up = await waitForPort(staticPort, 5000);
       if (up) {
         lastDetectedPort = staticPort;
-        console.log(chalk.green(`  ✓  Static server running on port ${staticPort}`));
+        finishInlineStatus(`Static server running on port ${staticPort}`);
         return true;
       }
-      console.log(chalk.red("  ✗  Failed to start static server."));
+      failInlineStatus("Static server failed to start");
       return false;
     }
 
-    console.log(
-      chalk.yellow("  ⚠  No dev server detected and no dev scripts found.")
-    );
-    console.log("");
-    console.log(chalk.white("  Start your dev server manually, then run:"));
-    console.log(chalk.cyan("    npx openmagic --port <your-port>"));
-    console.log("");
+    printWarning("No dev server detected and no dev scripts were found.");
+    writeLine();
+    printInfo("Start your dev server manually, then run:");
+    printCommand("npx openmagic --port <your-port>");
+    writeLine();
     return false;
   }
 
   // Check if dependencies are installed
   const deps = checkDependenciesInstalled();
   if (!deps.installed) {
-    console.log(
-      chalk.yellow("  ⚠  node_modules/ not found. Dependencies need to be installed.")
-    );
-    console.log("");
+    printWarning("node_modules was not found. Dependencies need to be installed.");
+    writeLine();
 
     const answer = await ask(
-      chalk.white(`  Run `) +
+      chalk.white(`${INDENT}Run `) +
       chalk.cyan(deps.installCommand) +
       chalk.white("? ") +
       chalk.dim("(Y/n) ")
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
-      console.log("");
-      console.log(chalk.dim(`  Run ${deps.installCommand} manually, then try again.`));
-      console.log("");
+      writeLine();
+      printInfo(`Run ${deps.installCommand} manually, then try again.`);
+      writeLine();
       return false;
     }
 
-    console.log("");
-    console.log(chalk.dim(`  Installing dependencies with ${deps.packageManager}...`));
+    writeLine();
+    printInfo(`Installing dependencies with ${deps.packageManager}...`);
 
     const [installCmd, ...installArgs] = deps.installCommand.split(" ");
     const installed = await runCommand(installCmd, installArgs);
 
     if (!installed) {
-      console.log(chalk.red("  ✗  Dependency installation failed."));
-      console.log(chalk.dim(`     Try running ${deps.installCommand} manually.`));
-      console.log("");
+      printError("Dependency installation failed.");
+      printDetail(`Try running ${deps.installCommand} manually.`);
+      writeLine();
       return false;
     }
 
-    console.log(chalk.green("  ✓  Dependencies installed."));
-    console.log("");
+    printSuccess("Dependencies installed.");
+    writeLine();
   }
 
   // Pick the best script
   let chosen = scripts[0];
   if (scripts.length === 1) {
     // Only one option
-    console.log(
-      chalk.yellow("  ⚠  No dev server detected.")
-    );
-    console.log("");
-    console.log(
-      chalk.white(`  Found `) +
+    printWarning("No dev server detected.");
+    writeLine();
+    writeLine(
+      chalk.white(`${INDENT}Found `) +
       chalk.cyan(`npm run ${chosen.name}`) +
       chalk.white(` in ${projectName}`) +
       chalk.dim(` (${chosen.framework})`)
     );
-    console.log(chalk.dim(`     → ${chosen.command}`));
-    console.log("");
+    printDetail(`➜ ${chosen.command}`);
+    writeLine();
 
     const answer = await ask(
-      chalk.white(`  Start it now? `) + chalk.dim("(Y/n) ")
+      chalk.white(`${INDENT}Start it now? `) + chalk.dim("(Y/n) ")
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
-      console.log("");
-      console.log(chalk.dim("  Start your dev server first, then run openmagic again."));
-      console.log("");
+      writeLine();
+      printInfo("Start your dev server first, then run OpenMagic again.");
+      writeLine();
       return false;
     }
   } else {
     // Multiple scripts — let user pick
-    console.log(
-      chalk.yellow("  ⚠  No dev server detected.")
+    printWarning("No dev server detected.");
+    writeLine();
+    writeLine(
+      chalk.white(`${INDENT}Found ${scripts.length} dev scripts in ${projectName}:`)
     );
-    console.log("");
-    console.log(
-      chalk.white(`  Found ${scripts.length} dev scripts in ${projectName}:`)
-    );
-    console.log("");
+    writeLine();
 
     scripts.forEach((s, i) => {
-      console.log(
-        chalk.cyan(`    ${i + 1}) `) +
+      writeLine(
+        chalk.cyan(`${INDENT}${i + 1}. `) +
         chalk.white(`npm run ${s.name}`) +
-        chalk.dim(` — ${s.framework} (port ${s.defaultPort})`)
+        chalk.dim(` (${s.framework}, port ${s.defaultPort})`)
       );
-      console.log(chalk.dim(`       ${s.command}`));
+      printDetail(s.command);
     });
 
-    console.log("");
+    writeLine();
     const answer = await ask(
-      chalk.white(`  Which one to start? `) +
+      chalk.white(`${INDENT}Which one should OpenMagic start? `) +
       chalk.dim(`(1-${scripts.length}, or n to cancel) `)
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no" || answer === "") {
-      console.log("");
-      console.log(chalk.dim("  Start your dev server first, then run openmagic again."));
-      console.log("");
+      writeLine();
+      printInfo("Start your dev server first, then run OpenMagic again.");
+      writeLine();
       return false;
     }
 
@@ -828,12 +956,13 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   // Pre-flight: check Node.js version compatibility
   const compat = checkNodeCompatibility(chosen.framework);
   if (!compat.ok) {
-    console.log(chalk.red(`\n  ✗  ${compat.message}`));
-    console.log("");
-    console.log(chalk.white("  Switch Node.js version before running:"));
-    console.log(chalk.cyan("    nvm use 20"));
-    console.log(chalk.dim("    # then re-run: npx openmagic"));
-    console.log("");
+    writeLine();
+    printError(compat.message);
+    writeLine();
+    printInfo("Switch Node.js before running:");
+    printCommand("nvm use 20");
+    printDetail("Then re-run: npx openmagic");
+    writeLine();
     return false;
   }
 
@@ -846,26 +975,21 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     const owned = verifyPortOwnership(port, process.cwd());
     if (owned === true) {
       // Port is occupied by this project — already running
-      console.log(chalk.green(`  ✓  Dev server already running on port ${port}`));
+      printSuccess(`Dev server already running on port ${port}`);
       lastDetectedPort = port;
       return true;
     }
     // Port is taken by something else — find a free one
     const altPort = await findAvailablePort(port + 1);
-    console.log("");
-    console.log(
-      chalk.yellow(`  ⚠  Port ${port} is already in use by another process.`)
-    );
-    console.log(
-      chalk.dim(`     Starting on port ${altPort} instead.`)
-    );
+    writeLine();
+    printWarning(`Port ${port} is in use — starting on ${altPort}`);
     port = altPort;
     portChanged = true;
   }
 
-  console.log("");
-  console.log(
-    chalk.dim(`  Starting `) +
+  writeLine();
+  writeLine(
+    chalk.dim(`${INDENT}●  Starting `) +
     chalk.cyan(`npm run ${chosen.name}`) +
     (portChanged ? chalk.dim(` (port ${port})`) : "") +
     chalk.dim("...")
@@ -906,7 +1030,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       },
     });
   } catch (e: unknown) {
-    console.log(chalk.red(`  ✗  Failed to start: ${(e as Error).message}`));
+    printError(`Failed to start: ${(e as Error).message}`);
     return false;
   }
 
@@ -915,13 +1039,15 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   child.on("error", (err) => {
     childExited = true;
-    console.log(chalk.red(`\n  ✗  Failed to start: ${err.message}`));
+    writeLine();
+    printError(`Failed to start: ${err.message}`);
   });
 
   child.on("exit", (code) => {
     childExited = true;
     if (code !== null && code !== 0) {
-      console.log(chalk.red(`\n  ✗  Dev server exited with code ${code}`));
+      writeLine();
+      printError(`Dev server exited with code ${code}`);
     }
   });
 
@@ -935,15 +1061,13 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   });
 
   // Wait for the port to open via TCP polling
-  console.log(
-    chalk.dim(`  Waiting for dev server on port ${port}...`)
-  );
+  writeLine(formatPending(`Waiting for ${chosen.framework} on port ${port}...`));
 
   const isUp = await waitForPort(port, 60000, () => childExited);
 
   if (isUp) {
     lastDetectedPort = port;
-    console.log("");
+    printSuccess(`${chosen.framework} is listening on port ${port}`);
     return true;
   }
 
@@ -955,9 +1079,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       if (await isPortOpen(scanPort)) {
         const owned = verifyPortOwnership(scanPort, process.cwd());
         if (owned === false) continue;
-        console.log(
-          chalk.green(`\n  ✓  Dev server found on port ${scanPort}.`)
-        );
+        printSuccess(`Found ${chosen.framework} on port ${scanPort}`);
         lastDetectedPort = scanPort;
         return true;
       }
@@ -965,10 +1087,8 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   }
 
   if (childExited) {
-    console.log(
-      chalk.red(`  ✗  Dev server failed to start.`)
-    );
-    console.log("");
+    printError("Dev server failed to start");
+    writeLine();
 
     // Check for Node.js version mismatch
     try {
@@ -976,9 +1096,9 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       if (existsSync(pkgPath)) {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
         if (pkg.engines?.node) {
-          console.log(chalk.yellow(`  This project requires Node.js ${pkg.engines.node}`));
-          console.log(chalk.dim(`  You are running Node.js ${process.version}`));
-          console.log("");
+          printWarning(`This project requires Node.js ${pkg.engines.node}`);
+          printDetail(`You are running Node.js ${process.version}`);
+          writeLine();
         }
       }
     } catch {}
@@ -987,28 +1107,27 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     if (chosen?.framework) {
       const compat = checkNodeCompatibility(chosen.framework);
       if (!compat.ok) {
-        console.log(chalk.yellow(`  ${compat.message}`));
-        console.log(chalk.dim("  Switch with: nvm use 20"));
-        console.log("");
+        printWarning(compat.message);
+        printDetail("Switch with:");
+        printCommand("nvm use 20");
+        writeLine();
       }
     }
 
-    console.log(chalk.white("  Options:"));
-    console.log(chalk.dim("  1. Fix the error above and try again"));
-    console.log(chalk.dim("  2. Start the server manually, then run:"));
-    console.log(chalk.cyan("     npx openmagic --port <your-port>"));
-    console.log("");
+    writeLine(chalk.white(`${INDENT}Options:`));
+    printDetail("1. Fix the error above and try again");
+    printDetail("2. Start the server manually, then run:");
+    printCommand("npx openmagic --port <your-port>");
+    writeLine();
     return false;
   }
 
   // All detection methods exhausted
-  console.log(
-    chalk.yellow(`\n  ⚠  Could not find the dev server after 60s.`)
-  );
-  console.log(chalk.dim(`     Check the output above for errors.`));
-  console.log(chalk.dim(`     Or start the server manually, then run:`));
-  console.log(chalk.cyan(`     npx openmagic --port <your-port>`));
-  console.log("");
+  printWarning("Could not find the dev server after 60s");
+  printDetail("Check the output above for errors.");
+  printDetail("Or start the server manually, then run:");
+  printCommand("npx openmagic --port <your-port>");
+  writeLine();
   return false;
 }
 

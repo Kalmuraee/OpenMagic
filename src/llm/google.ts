@@ -34,13 +34,15 @@ export async function chatGoogle(
       ];
 
       if (context.screenshot) {
+        const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
+        const mimeType = mimeMatch?.[1] || "image/jpeg";
         const base64Data = context.screenshot.replace(
           /^data:image\/\w+;base64,/,
           ""
         );
         parts.push({
           inline_data: {
-            mime_type: "image/png",
+            mime_type: mimeType,
             data: base64Data,
           },
         });

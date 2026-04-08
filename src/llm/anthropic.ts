@@ -30,6 +30,8 @@ export async function chatAnthropic(
 
       // If screenshot available, use vision
       if (context.screenshot) {
+        const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
+        const mediaType = mimeMatch?.[1] || "image/jpeg";
         const base64Data = context.screenshot.replace(
           /^data:image\/\w+;base64,/,
           ""
@@ -42,7 +44,7 @@ export async function chatAnthropic(
               type: "image",
               source: {
                 type: "base64",
-                media_type: "image/png",
+                media_type: mediaType as any,
                 data: base64Data,
               },
             },

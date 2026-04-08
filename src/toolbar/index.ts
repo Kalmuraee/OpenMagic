@@ -97,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.40.0";
+const CURRENT_VERSION = "0.41.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -425,17 +425,16 @@ function attachGlobalEvents(root: HTMLElement) {
       }
       return;
     }
-    // Ctrl/Cmd + K: focus prompt input
-    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K") && !e.shiftKey) {
+    // Ctrl/Cmd + Shift + K: focus prompt input (Shift avoids stealing Cmd+K from host apps)
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       if (!state.panelOpen) openPanel("chat");
       $promptInput.focus();
       return;
     }
-    // Ctrl/Cmd + Z: undo last applied diff
+    // Ctrl/Cmd + Z: undo last applied diff (only when toolbar is focused)
     if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
-      // Only handle if the active element is in the toolbar shadow
-      if (shadow.activeElement || state.panelOpen) {
+      if (shadow.activeElement) {
         const undoBtn = shadow.querySelector('[data-action="undo-diff"]') as HTMLElement;
         if (undoBtn) { e.preventDefault(); undoDiff(undoBtn); return; }
       }
@@ -631,7 +630,7 @@ async function applyDiff(target: HTMLElement) {
     for (const tryPath of pathsToTry) {
       const r = await ws.request("fs.read", { path: tryPath }).catch(() => null);
       const c = r?.payload?.content;
-      if (c !== undefined && c !== null && String(c).length > 0) {
+      if (c !== undefined && c !== null) {
         content = String(c);
         resolvedPath = tryPath;
         break;
@@ -689,7 +688,10 @@ async function applyDiff(target: HTMLElement) {
 
   // Auto-reload page after 1.5s so user sees the change
   // (HMR-based dev servers handle this automatically, but static servers don't)
-  setTimeout(() => { window.location.reload(); }, 1500);
+  // Skip reload during batch apply-all (batchMode flag)
+  if (!(applyDiff as any)._batchMode) {
+    setTimeout(() => { window.location.reload(); }, 1500);
+  }
 }
 
 function rejectDiff(target: HTMLElement) {
@@ -795,7 +797,8 @@ async function handleAction(action: string, target: HTMLElement) {
           if (r?.payload?.content) snapshots.set(fp, String(r.payload.content));
         } catch {}
       }
-      // Apply diffs sequentially, track failures
+      // Apply diffs sequentially, suppress per-diff reload
+      (applyDiff as any)._batchMode = true;
       let failed = false;
       for (const btn of buttons) {
         try {
@@ -805,6 +808,7 @@ async function handleAction(action: string, target: HTMLElement) {
           break;
         }
       }
+      (applyDiff as any)._batchMode = false;
       // If any failed, rollback all
       if (failed && snapshots.size > 0) {
         for (const [fp, content] of snapshots) {
@@ -814,6 +818,8 @@ async function handleAction(action: string, target: HTMLElement) {
         refreshPanelContent();
       }
       hideApplyBar();
+      // Single reload after batch completes (not per-diff)
+      if (!failed) setTimeout(() => { window.location.reload(); }, 1500);
       break;
     }
     case "reject-all": {
@@ -1100,9 +1106,9 @@ function renderChatHTML(): string {
       ? `<button class="om-copy-btn" data-action="copy-msg" data-idx="${i}" title="Copy">${ICON.copy}</button>`
       : "";
     if (m.role === "assistant") {
-      return `<div class="om-msg om-msg-assistant">${renderMarkdown(m.content)}${copyBtn}</div>`;
+      return `<div class="om-msg om-msg-assistant" dir="auto">${renderMarkdown(m.content)}${copyBtn}</div>`;
     }
-    return `<div class="om-msg om-msg-${m.role}">${escapeHtml(m.content)}${copyBtn}</div>`;
+    return `<div class="om-msg om-msg-${m.role}" dir="auto">${escapeHtml(m.content)}${copyBtn}</div>`;
   }).join("");
 
   const streamHtml = state.streaming
@@ -2377,7 +2383,7 @@ async function collectDebugInfo(messageIdx?: number): Promise<string> {
 function checkForUpdates() {
   fetch("https://registry.npmjs.org/openmagic/latest", {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
   }).then(r => r.ok ? r.json() : null).then(d => {
     if (!d || typeof d.version !== "string" || !/^\d+\.\d+\.\d+/.test(d.version)) return;
     const l = d.version.split(".").map(Number), c = CURRENT_VERSION.split(".").map(Number);

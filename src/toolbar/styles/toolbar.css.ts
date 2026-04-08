@@ -1,10 +1,13 @@
 export const TOOLBAR_CSS = `
 :host {
   all: initial;
+  direction: ltr;
+  unicode-bidi: isolate;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
   color: #e0e0e0;
   line-height: 1.5;
+  text-align: left;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

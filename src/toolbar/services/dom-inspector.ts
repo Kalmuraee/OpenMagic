@@ -126,9 +126,10 @@ export function inspectElement(el: HTMLElement): SelectedElement {
     let gapToNext: { horizontal: number; vertical: number } | null = null;
     if (i < directChildren.length - 1) {
       const nextRect = (directChildren[i + 1] as HTMLElement).getBoundingClientRect();
+      // Use absolute gap value to handle both LTR and RTL layouts
       gapToNext = {
         vertical: Math.round(nextRect.top - cRect.bottom),
-        horizontal: Math.round(nextRect.left - cRect.right),
+        horizontal: Math.round(Math.abs(nextRect.left - cRect.right)),
       };
     }
     childrenLayout.push({

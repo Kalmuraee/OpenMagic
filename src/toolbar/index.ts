@@ -97,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.39.0";
+const CURRENT_VERSION = "0.40.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -1435,7 +1435,29 @@ async function sendPrompt() {
           }
         }
 
-        // Follow imports: extract local imports from the file and auto-read referenced components
+        // Follow imports: extract local imports and alias imports
+        // Parse tsconfig paths for alias resolution (e.g., @/ → src/)
+        let pathAliases: Record<string, string> = {};
+        const tsconfigFile = files.find((fl: {path: string}) => fl.path === "tsconfig.json" || fl.path === "tsconfig.app.json");
+        if (tsconfigFile) {
+          try {
+            const tsconfig = JSON.parse(tsconfigFile.content.replace(/\/\/.*$/gm, "").replace(/,\s*([}\]])/g, "$1"));
+            const paths = tsconfig?.compilerOptions?.paths || {};
+            const baseUrl = tsconfig?.compilerOptions?.baseUrl || ".";
+            for (const [alias, targets] of Object.entries(paths)) {
+              const target = (targets as string[])?.[0];
+              if (alias && target) {
+                // Convert @/* → src/* style aliases
+                const aliasPrefix = alias.replace(/\/\*$/, "/");
+                const targetPrefix = target.replace(/\/\*$/, "/");
+                const resolvedTarget = baseUrl === "." ? targetPrefix : `${baseUrl}/${targetPrefix}`;
+                pathAliases[aliasPrefix] = resolvedTarget;
+              }
+            }
+          } catch {}
+        }
+
+        // Follow relative imports
         const importMatches = content.matchAll(/(?:import|from)\s+['"]\.?\.\/([\w/.-]+)['"]/g);
         for (const im of importMatches) {
           if (totalChars >= MAX_GROUNDED_CHARS) break;
@@ -1467,6 +1489,43 @@ async function sendPrompt() {
                   totalChars += it.length;
                 }
               } catch {}
+              break;
+            }
+          }
+        }
+
+        // Follow alias imports (e.g., @/components/Button → src/components/Button)
+        if (Object.keys(pathAliases).length > 0) {
+          const aliasImports = content.matchAll(/(?:import|from)\s+['"]([^.'"]\S+)['"]/g);
+          for (const aim of aliasImports) {
+            if (totalChars >= MAX_GROUNDED_CHARS) break;
+            const rawImport = aim[1];
+            for (const [aliasPrefix, targetPrefix] of Object.entries(pathAliases)) {
+              if (!rawImport.startsWith(aliasPrefix)) continue;
+              const resolved = rawImport.replace(aliasPrefix, targetPrefix);
+              const aliasCandidates = [
+                resolved, `${resolved}.tsx`, `${resolved}.ts`, `${resolved}.jsx`, `${resolved}.js`,
+                `${resolved}/index.tsx`, `${resolved}/index.ts`,
+              ];
+              for (const ac of aliasCandidates) {
+                if (readPaths.has(ac)) break;
+                const found = textFiles.find((tf: { path: string }) => tf.path === ac);
+                if (found) {
+                  try {
+                    const ar = await ws.request("fs.read", { path: root ? `${root}/${ac}` : ac });
+                    const acContent = String(ar?.payload?.content || "");
+                    if (acContent) {
+                      const aMax = Math.min(8000, MAX_GROUNDED_CHARS - totalChars);
+                      let at = acContent.slice(0, aMax);
+                      if (acContent.length > aMax) at += `\n// [TRUNCATED]`;
+                      files.push({ path: ac, content: at });
+                      readPaths.add(ac);
+                      totalChars += at.length;
+                    }
+                  } catch {}
+                  break;
+                }
+              }
               break;
             }
           }

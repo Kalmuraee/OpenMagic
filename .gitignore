@@ -6,3 +6,5 @@ dist/
 .env.local
 test-app/
 *.openmagic-backup
+CLAUDE.md
+reddit-launch.md

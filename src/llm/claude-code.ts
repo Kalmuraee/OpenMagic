@@ -44,6 +44,7 @@ export async function chatClaudeCode(
     [
       "-p",
       "--output-format", "stream-json",
+      "--verbose",
       "--max-turns", "1", // Single turn — OpenMagic manages its own retry loop
     ],
     {

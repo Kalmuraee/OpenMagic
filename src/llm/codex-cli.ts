@@ -24,15 +24,10 @@ export async function chatCodexCli(
   const contextParts = buildContextParts(context);
   const fullPrompt = `${SYSTEM_PROMPT}\n\n${buildUserMessage(userPrompt, contextParts)}`;
 
-  const proc = spawn("codex", ["-q"], {
-    stdio: ["pipe", "pipe", "pipe"],
+  const proc = spawn("codex", ["--full-auto", fullPrompt], {
+    stdio: ["ignore", "pipe", "pipe"],
     cwd: process.cwd(),
-    env: { ...process.env, CODEX_QUIET_MODE: "1" },
   });
-
-  // Send prompt via stdin
-  proc.stdin.write(fullPrompt);
-  proc.stdin.end();
 
   let fullContent = "";
   let errOutput = "";

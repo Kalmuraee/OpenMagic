@@ -1,6 +1,6 @@
 {
   "name": "openmagic",
-  "version": "0.36.3",
+  "version": "0.36.4",
   "description": "AI-powered coding toolbar for any web application. Select elements, capture context, and let AI modify your codebase in real-time.",
   "type": "module",
   "bin": {

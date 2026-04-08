@@ -159,13 +159,24 @@ export function stream(
 ): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = generateId();
-    const timeout = setTimeout(() => {
+
+    // Idle timeout resets on every chunk — CLI agents (Claude Code, Codex, Gemini)
+    // may pause for minutes while reading files or thinking between turns.
+    // 5 min idle = generous enough for multi-turn agents.
+    const IDLE_MS = 300000;
+    let timeout = setTimeout(onTimeout, IDLE_MS);
+    function onTimeout() {
       handlers.delete(id);
       reject(new Error("Stream timeout"));
-    }, 120000);
+    }
+    function resetTimeout() {
+      clearTimeout(timeout);
+      timeout = setTimeout(onTimeout, IDLE_MS);
+    }
 
     handlers.set(id, (msg) => {
       if (msg.type === "llm.chunk") {
+        resetTimeout();
         onChunk(msg.payload?.delta || "");
       } else if (msg.type === "llm.done") {
         clearTimeout(timeout);

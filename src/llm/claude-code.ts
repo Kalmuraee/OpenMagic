@@ -6,6 +6,9 @@ import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js
  * Claude Code CLI adapter.
  * Spawns `claude -p` with the prompt and streams the response.
  * No API key needed — uses the user's existing Claude Code authentication.
+ *
+ * Docs: https://docs.anthropic.com/en/docs/claude-code
+ * Flags verified from official CLI reference.
  */
 
 /**
@@ -39,6 +42,7 @@ export async function chatClaudeCode(
   const fullPrompt = buildUserMessage(userPrompt, contextParts);
 
   // Spawn claude -p with stream-json for real-time streaming
+  // --verbose + --include-partial-messages: token-level streaming deltas
   // --max-turns 5: allows Claude to read files and produce a complete response
   const proc = spawn(
     "claude",
@@ -46,11 +50,18 @@ export async function chatClaudeCode(
       "-p",
       "--output-format", "stream-json",
       "--verbose",
+      "--include-partial-messages",
       "--max-turns", "5",
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
       cwd: process.cwd(),
+      env: {
+        ...process.env,
+        // Generous timeouts — Claude may read files and think between turns
+        CLAUDE_STREAM_IDLE_TIMEOUT_MS: "300000", // 5 min idle timeout between chunks
+        API_TIMEOUT_MS: "600000",                 // 10 min overall API timeout
+      },
     }
   );
 
@@ -131,7 +142,7 @@ export async function chatClaudeCode(
       // Parse common errors
       const err = errOutput.trim();
       if (err.includes("not authenticated") || err.includes("login")) {
-        onError("Claude CLI is not authenticated. Run `claude login` in your terminal.");
+        onError("Claude CLI is not authenticated. Run `claude` in your terminal to log in.");
       } else if (err.includes("ENOENT") || err.includes("not found")) {
         onError("Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code");
       } else {
@@ -143,7 +154,7 @@ export async function chatClaudeCode(
 
 /**
  * Extract text content from a stream-json event.
- * Handles multiple possible event formats robustly.
+ * Handles multiple possible event formats from Claude Code CLI.
  */
 function extractText(event: Record<string, unknown>): string | undefined {
   // Format: {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}

@@ -7,6 +7,11 @@ import { spawn, execSync, type ChildProcess } from "node:child_process";
 import http from "node:http";
 import { createInterface } from "node:readline";
 
+// Raise file descriptor limit — Turbopack/Webpack need thousands of watchers.
+// macOS launchctl defaults to 256 which causes EMFILE in large projects.
+// This only works if the hard limit allows it (user's shell may have already set it).
+try { execSync("ulimit -n 65536", { shell: true, stdio: "ignore" }); } catch {}
+
 // Suppress http-proxy deprecation warning noise
 const origEmitWarning = process.emitWarning;
 process.emitWarning = function (warning: any, ...args: any[]) {
@@ -25,6 +30,23 @@ process.on("uncaughtException", (err) => {
   console.error(chalk.dim("  Please report this at https://github.com/Kalmuraee/OpenMagic/issues"));
   process.exit(1);
 });
+
+// Check file descriptor limit — warn early if too low for dev servers
+try {
+  const fdLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: true }).trim(), 10);
+  if (fdLimit > 0 && fdLimit < 4096) {
+    // Try to raise it
+    try { execSync("ulimit -n 65536", { shell: true, stdio: "ignore" }); } catch {}
+    const newLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: true }).trim(), 10);
+    if (newLimit < 4096) {
+      console.log(chalk.yellow("\n  ⚠  File descriptor limit is " + fdLimit + " (need 4096+)."));
+      console.log(chalk.dim("     This causes EMFILE errors in large Next.js/Turbopack projects."));
+      console.log(chalk.dim("     Fix: add this to your ~/.zshrc (or ~/.bashrc):"));
+      console.log(chalk.cyan("       ulimit -n 65536"));
+      console.log(chalk.dim("     Then restart your terminal.\n"));
+    }
+  }
+} catch {}
 
 // Track child processes for cleanup
 const childProcesses: ChildProcess[] = [];
@@ -868,7 +890,12 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawn(runCmd, runArgs, {
+    // Wrap in shell with ulimit to prevent EMFILE on large projects.
+    // Turbopack/Webpack need thousands of file watchers; macOS default is 256.
+    const escapedArgs = runArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+    const shellCmd = `ulimit -n 65536 2>/dev/null; exec ${runCmd} ${escapedArgs}`;
+
+    child = spawn("sh", ["-c", shellCmd], {
       cwd: process.cwd(),
       stdio: "inherit",
       env: {

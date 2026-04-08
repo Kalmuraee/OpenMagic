@@ -1,11 +1,13 @@
 import { Command } from "commander";
-import chalk from "chalk";
+import pc from "picocolors";
 import open from "open";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import http from "node:http";
 import { createInterface, clearLine, cursorTo } from "node:readline";
+import { createSpinner } from "nanospinner";
+import terminalLink from "terminal-link";
 
 // Raise file descriptor limit — Turbopack/Webpack need thousands of watchers.
 // macOS launchctl defaults to 256 which causes EMFILE in large projects.
@@ -36,27 +38,27 @@ function writeLine(line: string = ""): void {
 }
 
 function formatInfo(message: string): string {
-  return chalk.dim(`${INDENT}${message}`);
+  return pc.dim(`${INDENT}${message}`);
 }
 
 function formatPending(message: string): string {
-  return chalk.dim(`${INDENT}●  ${message}`);
+  return pc.dim(`${INDENT}●  ${message}`);
 }
 
 function formatSuccess(message: string): string {
-  return chalk.greenBright(`${INDENT}✓  ${message}`);
+  return pc.green(`${INDENT}✓  ${message}`);
 }
 
 function formatReady(seconds: number = process.uptime()): string {
-  return chalk.greenBright(`${INDENT}✓ Ready in ${seconds.toFixed(1)}s`);
+  return pc.green(`${INDENT}✓ Ready in ${seconds.toFixed(1)}s`);
 }
 
 function formatWarning(message: string): string {
-  return chalk.yellow(`${INDENT}▲  ${message}`);
+  return pc.yellow(`${INDENT}▲  ${message}`);
 }
 
 function formatError(message: string): string {
-  return chalk.red(`${INDENT}✗  ${message}`);
+  return pc.red(`${INDENT}✗  ${message}`);
 }
 
 function printInfo(message: string): void {
@@ -79,56 +81,48 @@ function printError(message: string): void {
   writeLine(formatError(message));
 }
 
-function printDetail(message: string, formatter: (text: string) => string = chalk.dim): void {
+function printDetail(message: string, formatter: (text: string) => string = pc.dim): void {
   writeLine(formatter(`${INDENT}   ${message}`));
 }
 
 function printCommand(message: string): void {
-  printDetail(message, chalk.cyan);
+  printDetail(message, pc.cyan);
 }
 
 function printLocation(label: string, value: string, brightValue: boolean = false): void {
-  const prefix = chalk.dim(`${INDENT}➜  ${`${label}:`.padEnd(LABEL_WIDTH)}`);
-  const renderedValue = brightValue ? chalk.whiteBright(value) : chalk.dim(value);
+  const prefix = pc.dim(`${INDENT}➜  ${`${label}:`.padEnd(LABEL_WIDTH)}`);
+  const linked = value.startsWith("http") ? terminalLink(value, value) : value;
+  const renderedValue = brightValue ? pc.bold(pc.white(linked)) : pc.dim(linked);
   writeLine(`${prefix}${renderedValue}`);
 }
 
+// Spinner-based status (animated dots via nanospinner)
+let activeSpinner: ReturnType<typeof createSpinner> | null = null;
+
 function startInlineStatus(message: string): void {
   clearActiveStatus();
-  const line = formatPending(message);
-  if (!process.stdout.isTTY) {
-    writeLine(line);
-    return;
-  }
-  process.stdout.write(line);
-  activeStatusLine = true;
-}
-
-function replaceInlineStatus(line: string): void {
-  if (!process.stdout.isTTY) {
-    writeLine(line);
-    return;
-  }
-  clearLine(process.stdout, 0);
-  cursorTo(process.stdout, 0);
-  process.stdout.write(`${line}\n`);
-  activeStatusLine = false;
+  activeSpinner = createSpinner(message).start();
 }
 
 function finishInlineStatus(message: string): void {
-  replaceInlineStatus(formatSuccess(message));
+  if (activeSpinner) { activeSpinner.success({ text: message }); activeSpinner = null; }
+  else writeLine(formatSuccess(message));
 }
 
 function warnInlineStatus(message: string): void {
-  replaceInlineStatus(formatWarning(message));
+  if (activeSpinner) { activeSpinner.warn({ text: message }); activeSpinner = null; }
+  else writeLine(formatWarning(message));
 }
 
 function failInlineStatus(message: string): void {
-  replaceInlineStatus(formatError(message));
+  if (activeSpinner) { activeSpinner.error({ text: message }); activeSpinner = null; }
+  else writeLine(formatError(message));
 }
 
 function finishInlineReady(): void {
-  replaceInlineStatus(formatReady());
+  const msg = `Ready in ${process.uptime().toFixed(1)}s`;
+  if (activeSpinner) { activeSpinner.success({ text: msg }); activeSpinner = null; }
+  else writeLine(formatReady());
 }
 
 function getDetectedFrameworkLabel(): string | null {
@@ -308,14 +302,14 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
       child.stdout?.on("data", (data: Buffer) => {
         const lines = data.toString().trim().split("\n");
         for (const line of lines) {
-          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
+          if (line.trim()) writeLine(pc.dim(`${INDENT}│ ${line}`));
         }
       });
 
       child.stderr?.on("data", (data: Buffer) => {
         const lines = data.toString().trim().split("\n");
         for (const line of lines) {
-          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
+          if (line.trim()) writeLine(pc.dim(`${INDENT}│ ${line}`));
         }
       });
 
@@ -362,22 +356,22 @@ function formatDevServerLine(line: string): string {
 
   // Detect error patterns and add context
   if (trimmed.startsWith("Error:") || trimmed.includes("ModuleNotFoundError") || trimmed.includes("Can't resolve")) {
-    return chalk.red(`  │ ${trimmed}`);
+    return pc.red(`  │ ${trimmed}`);
   }
   if (trimmed.includes("EADDRINUSE") || trimmed.includes("address already in use")) {
-    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
-      chalk.yellow(`${INDENT}│ ➜ Port is already in use. Stop the other process or use --port <different-port>`);
+    return pc.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      pc.yellow(`${INDENT}│ ➜ Port is already in use. Stop the other process or use --port <different-port>`);
   }
   if (trimmed.includes("EACCES") || trimmed.includes("permission denied")) {
-    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
-      chalk.yellow(`${INDENT}│ ➜ Permission denied. Try a different port or check file permissions.`);
+    return pc.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      pc.yellow(`${INDENT}│ ➜ Permission denied. Try a different port or check file permissions.`);
   }
   if (trimmed.includes("Cannot find module") || trimmed.includes("MODULE_NOT_FOUND")) {
-    return chalk.red(`${INDENT}│ ${trimmed}`) + "\n" +
-      chalk.yellow(`${INDENT}│ ➜ Missing dependency. Try running npm install.`);
+    return pc.red(`${INDENT}│ ${trimmed}`) + "\n" +
+      pc.yellow(`${INDENT}│ ➜ Missing dependency. Try running npm install.`);
   }
 
-  return chalk.dim(`${INDENT}│ ${trimmed}`);
+  return pc.dim(`${INDENT}│ ${trimmed}`);
 }
 
 // Track which framework was detected (for diagnostic hints)
@@ -484,7 +478,7 @@ program
   .option("--host <host>", "Dev server host", "localhost")
   .action(async (opts) => {
     writeLine();
-    writeLine(`${INDENT}${chalk.white("OpenMagic")} ${chalk.dim(`v${VERSION}`)}`);
+    writeLine(`${INDENT}${pc.white("OpenMagic")} ${pc.dim(`v${VERSION}`)}`);
     writeLine();
 
     let targetPort: number;
@@ -569,8 +563,8 @@ program
         // Found a port via generic scan — confirm with user
         finishInlineStatus(`Found dev server on port ${detected.port}`);
         const answer = await ask(
-          chalk.yellow(`${INDENT}▲  Found a server on port ${detected.port}. Is this your project's dev server? `) +
-          chalk.dim("(Y/n) ")
+          pc.yellow(`${INDENT}▲  Found a server on port ${detected.port}. Is this your project's dev server? `) +
+          pc.dim("(Y/n) ")
         );
         if (answer.toLowerCase() === "y" || answer.toLowerCase() === "yes" || answer === "") {
           targetPort = detected.port;
@@ -791,7 +785,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       printInfo("No dev scripts found, but index.html was detected.");
       writeLine();
       const answer = await ask(
-        chalk.dim(`${INDENT}Serve this directory as a static site? `) + chalk.dim("(Y/n) ")
+        pc.dim(`${INDENT}Serve this directory as a static site? `) + pc.dim("(Y/n) ")
       );
       if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
         return false;
@@ -825,7 +819,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       childProcesses.push(staticChild);
       staticChild.stdout?.on("data", (d: Buffer) => {
         for (const line of d.toString().trim().split("\n")) {
-          if (line.trim()) writeLine(chalk.dim(`${INDENT}│ ${line}`));
+          if (line.trim()) writeLine(pc.dim(`${INDENT}│ ${line}`));
         }
       });
 
@@ -855,10 +849,10 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     writeLine();
 
     const answer = await ask(
-      chalk.white(`${INDENT}Run `) +
-      chalk.cyan(deps.installCommand) +
-      chalk.white("? ") +
-      chalk.dim("(Y/n) ")
+      pc.white(`${INDENT}Run `) +
+      pc.cyan(deps.installCommand) +
+      pc.white("? ") +
+      pc.dim("(Y/n) ")
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
@@ -892,16 +886,16 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     printWarning("No dev server detected.");
     writeLine();
     writeLine(
-      chalk.white(`${INDENT}Found `) +
-      chalk.cyan(`npm run ${chosen.name}`) +
-      chalk.white(` in ${projectName}`) +
-      chalk.dim(` (${chosen.framework})`)
+      pc.white(`${INDENT}Found `) +
+      pc.cyan(`npm run ${chosen.name}`) +
+      pc.white(` in ${projectName}`) +
+      pc.dim(` (${chosen.framework})`)
     );
     printDetail(`➜ ${chosen.command}`);
     writeLine();
 
     const answer = await ask(
-      chalk.white(`${INDENT}Start it now? `) + chalk.dim("(Y/n) ")
+      pc.white(`${INDENT}Start it now? `) + pc.dim("(Y/n) ")
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no") {
@@ -915,23 +909,23 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     printWarning("No dev server detected.");
     writeLine();
     writeLine(
-      chalk.white(`${INDENT}Found ${scripts.length} dev scripts in ${projectName}:`)
+      pc.white(`${INDENT}Found ${scripts.length} dev scripts in ${projectName}:`)
     );
     writeLine();
 
     scripts.forEach((s, i) => {
       writeLine(
-        chalk.cyan(`${INDENT}${i + 1}. `) +
-        chalk.white(`npm run ${s.name}`) +
-        chalk.dim(` (${s.framework}, port ${s.defaultPort})`)
+        pc.cyan(`${INDENT}${i + 1}. `) +
+        pc.white(`npm run ${s.name}`) +
+        pc.dim(` (${s.framework}, port ${s.defaultPort})`)
       );
       printDetail(s.command);
     });
 
     writeLine();
     const answer = await ask(
-      chalk.white(`${INDENT}Which one should OpenMagic start? `) +
-      chalk.dim(`(1-${scripts.length}, or n to cancel) `)
+      pc.white(`${INDENT}Which one should OpenMagic start? `) +
+      pc.dim(`(1-${scripts.length}, or n to cancel) `)
     );
 
     if (answer.toLowerCase() === "n" || answer.toLowerCase() === "no" || answer === "") {
@@ -989,10 +983,10 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   writeLine();
   writeLine(
-    chalk.dim(`${INDENT}●  Starting `) +
-    chalk.cyan(`npm run ${chosen.name}`) +
-    (portChanged ? chalk.dim(` (port ${port})`) : "") +
-    chalk.dim("...")
+    pc.dim(`${INDENT}●  Starting `) +
+    pc.cyan(`npm run ${chosen.name}`) +
+    (portChanged ? pc.dim(` (port ${port})`) : "") +
+    pc.dim("...")
   );
 
   // Use the correct package manager run command
@@ -1114,7 +1108,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       }
     }
 
-    writeLine(chalk.white(`${INDENT}Options:`));
+    writeLine(pc.white(`${INDENT}Options:`));
     printDetail("1. Fix the error above and try again");
     printDetail("2. Start the server manually, then run:");
     printCommand("npx openmagic --port <your-port>");

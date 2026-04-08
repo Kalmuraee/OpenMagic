@@ -141,6 +141,7 @@ export const TOOLBAR_CSS = `
   font-size: 11px; line-height: 1; padding: 0 1px; opacity: 0.5;
 }
 .om-prompt-chip-x:hover { opacity: 1; }
+.om-prompt-chip-tokens { color: #888; background: transparent; border: 1px solid rgba(255,255,255,0.06); font-size: 9px; }
 
 .om-prompt-input {
   flex: 1;
@@ -174,6 +175,14 @@ export const TOOLBAR_CSS = `
   cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s;
 }
 .om-prompt-attach:hover { color: #a29bfe; background: rgba(108, 92, 231, 0.1); }
+
+.om-model-switcher {
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  color: #888; font-size: 10px; padding: 2px 4px; border-radius: 4px;
+  max-width: 90px; flex-shrink: 0; cursor: pointer; outline: none;
+}
+.om-model-switcher:hover { border-color: rgba(108, 92, 231, 0.3); color: #a29bfe; }
+.om-model-switcher:focus { border-color: #6c5ce7; }
 
 /* ── Attachments ──────────────────────────────────────── */
 .om-prompt-attachments {
@@ -315,6 +324,15 @@ export const TOOLBAR_CSS = `
 .om-diff-file { color: #a29bfe; font-size: 11px; font-weight: 600; margin-bottom: 6px; font-family: 'SF Mono', Consolas, monospace; }
 .om-diff-removed { background: rgba(233,69,96,0.08); color: #fab1a0; padding: 4px 8px; border-radius: 4px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin-bottom: 4px; }
 .om-diff-added { background: rgba(0,184,148,0.08); color: #55efc4; padding: 4px 8px; border-radius: 4px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin-bottom: 6px; }
+.om-diff-lines { max-height: 300px; overflow-y: auto; border-radius: 6px; background: rgba(0,0,0,0.2); margin-bottom: 6px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; line-height: 1.5; }
+.om-diff-line { display: flex; white-space: pre; padding: 0 8px; }
+.om-diff-ln { color: #555; min-width: 28px; text-align: right; padding-right: 8px; user-select: none; flex-shrink: 0; }
+.om-diff-sign { min-width: 14px; flex-shrink: 0; font-weight: bold; user-select: none; }
+.om-diff-ctx { color: #888; }
+.om-diff-del { background: rgba(233,69,96,0.12); color: #fab1a0; }
+.om-diff-del .om-diff-sign { color: #e94560; }
+.om-diff-ins { background: rgba(0,184,148,0.12); color: #55efc4; }
+.om-diff-ins .om-diff-sign { color: #00b894; }
 .om-diff-actions { display: flex; gap: 6px; }
 .om-btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
 .om-btn-secondary { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: #888; cursor: pointer; font-family: inherit; }

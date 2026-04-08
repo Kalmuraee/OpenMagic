@@ -97,7 +97,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.38.0";
+const CURRENT_VERSION = "0.39.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -259,6 +259,7 @@ function init() {
           openPanel("settings");
         }
         updatePillButtons();
+        updateModelSwitcher();
       })
       .catch(() => {
         state.connected = false;
@@ -305,6 +306,7 @@ function buildStaticDOM(): string {
       <div class="om-prompt-attachments"></div>
       <div class="om-prompt-row">
         <div class="om-prompt-context"></div>
+        <select class="om-model-switcher" data-field="quick-model" title="Switch model"></select>
         <button class="om-prompt-attach" data-action="attach-image" title="Attach image">${ICON.paperclip}</button>
         <input class="om-prompt-input" type="text" placeholder="Describe what to change..." autocomplete="off" />
         <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
@@ -339,6 +341,9 @@ function attachGlobalEvents(root: HTMLElement) {
       refreshPanelContent();
     } else if (field === "model") {
       state.model = target.value;
+    } else if (field === "quick-model") {
+      state.model = target.value;
+      saveState(); // persist model switch
     }
   });
 
@@ -892,6 +897,17 @@ function updatePillButtons() {
   });
 }
 
+function updateModelSwitcher() {
+  const sel = shadow.querySelector(".om-model-switcher") as HTMLSelectElement | null;
+  if (!sel) return;
+  const prov = MODEL_REGISTRY[state.provider];
+  if (!prov) { sel.innerHTML = ""; return; }
+  const opts = prov.models.map(m =>
+    `<option value="${m.id}" ${state.model === m.id ? "selected" : ""}>${m.name}</option>`
+  ).join("");
+  sel.innerHTML = opts;
+}
+
 function updatePromptContext() {
   const chips: string[] = [];
   if (state.selectedElement) {
@@ -905,6 +921,15 @@ function updatePromptContext() {
   }
   if (state.groundedFiles.length) {
     chips.push(`<span class="om-prompt-chip">${state.groundedFiles.length} files grounded</span>`);
+  }
+  // Estimate tokens from context (rough: ~4 chars per token)
+  const contextChars = (state.selectedElement?.outerHTML?.length || 0)
+    + (state.screenshot ? 1000 : 0)
+    + state.groundedFiles.length * 4000; // average file size
+  if (contextChars > 2000) {
+    const estTokens = Math.round(contextChars / 4);
+    const label = estTokens > 10000 ? `~${Math.round(estTokens / 1000)}K tokens` : `~${estTokens} tokens`;
+    chips.push(`<span class="om-prompt-chip om-prompt-chip-tokens">${label}</span>`);
   }
   $promptCtx.innerHTML = chips.join("");
 }
@@ -1053,10 +1078,10 @@ function renderChatHTML(): string {
         const searchB64 = encodeBase64Utf8(diff.search || "");
         const replaceB64 = encodeBase64Utf8(diff.replace || "");
         const label = isCreate ? "Create new file" : "Edit";
+        const diffHtml = renderLineDiff(diff.search || "", diff.replace || "");
         return `<div class="om-diff-card" data-diff-idx="${i}">
           <div class="om-diff-file">${escapeHtml(label)}: ${escapeHtml(diff.file)}</div>
-          ${diff.search ? `<div class="om-diff-removed">${escapeHtml(diff.search.slice(0, 200))}</div>` : ""}
-          <div class="om-diff-added">${escapeHtml((diff.replace || "").slice(0, 300))}</div>
+          <div class="om-diff-lines">${diffHtml}</div>
           <div class="om-diff-actions">
             <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
             <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
@@ -1140,6 +1165,7 @@ async function saveSettings() {
     updateSaveButton();
 
     // Auto-transition to chat after 1.2s
+    updateModelSwitcher();
     setTimeout(() => {
       state.saveStatus = "";
       if (state.activePanel === "settings") {
@@ -1945,6 +1971,48 @@ function escapeHtml(text: string): string {
   const d = document.createElement("div");
   d.textContent = text;
   return d.innerHTML;
+}
+
+function renderLineDiff(search: string, replace: string): string {
+  const searchLines = search.split("\n");
+  const replaceLines = replace.split("\n");
+  const lines: string[] = [];
+  const maxLines = 30; // cap display
+
+  // Simple LCS-based line diff
+  const sLen = Math.min(searchLines.length, maxLines);
+  const rLen = Math.min(replaceLines.length, maxLines);
+
+  // Find common prefix and suffix
+  let commonPrefix = 0;
+  while (commonPrefix < sLen && commonPrefix < rLen && searchLines[commonPrefix] === replaceLines[commonPrefix]) commonPrefix++;
+  let commonSuffix = 0;
+  while (commonSuffix < sLen - commonPrefix && commonSuffix < rLen - commonPrefix
+    && searchLines[sLen - 1 - commonSuffix] === replaceLines[rLen - 1 - commonSuffix]) commonSuffix++;
+
+  // Render context (unchanged), removed, added
+  for (let i = 0; i < commonPrefix; i++) {
+    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
+  }
+
+  // Removed lines (from search)
+  for (let i = commonPrefix; i < sLen - commonSuffix; i++) {
+    lines.push(`<div class="om-diff-line om-diff-del"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign">-</span>${escapeHtml(searchLines[i])}</div>`);
+  }
+
+  // Added lines (from replace)
+  for (let i = commonPrefix; i < rLen - commonSuffix; i++) {
+    lines.push(`<div class="om-diff-line om-diff-ins"><span class="om-diff-ln"> </span><span class="om-diff-sign">+</span>${escapeHtml(replaceLines[i])}</div>`);
+  }
+
+  // Common suffix
+  for (let i = sLen - commonSuffix; i < sLen; i++) {
+    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
+  }
+
+  if (searchLines.length > maxLines) lines.push(`<div class="om-diff-line om-diff-ctx">... ${searchLines.length - maxLines} more lines</div>`);
+
+  return lines.join("") || `<div class="om-diff-line om-diff-ins">${escapeHtml(replace.slice(0, 500))}</div>`;
 }
 
 function renderMarkdown(text: string): string {

@@ -94,9 +94,13 @@ export function verifyPortOwnership(port: number, expectedDir: string): boolean 
 }
 
 export async function detectDevServer(cwd: string = process.cwd()): Promise<DetectedServer | null> {
-  // First: check ports hinted by the project's dev scripts (most reliable)
+  // First: check ports hinted by the project's dev scripts + .env (most reliable)
   const scripts = detectDevScripts(cwd);
-  const scriptPorts = scripts.map((s) => s.defaultPort).filter((p, i, a) => a.indexOf(p) === i);
+  const envPort = checkEnvPort(cwd);
+  const scriptPorts = [
+    ...(envPort ? [envPort] : []),
+    ...scripts.map((s) => s.defaultPort),
+  ].filter((p, i, a) => a.indexOf(p) === i);
 
   if (scriptPorts.length > 0) {
     for (const port of scriptPorts) {
@@ -227,6 +231,72 @@ export function detectDevScripts(cwd: string = process.cwd()): DevScript[] {
 
   return scripts;
 }
+
+// --- Node.js Version Compatibility ---
+
+// Minimum Node.js versions for modern frameworks (conservative — covers latest majors)
+const FRAMEWORK_NODE_REQUIREMENTS: Record<string, { minNode: string; label: string }> = {
+  "Next.js":          { minNode: "18.17.0", label: "Next.js 14+" },
+  "Vite":             { minNode: "18.0.0",  label: "Vite 5+" },
+  "Angular":          { minNode: "18.13.0", label: "Angular 17+" },
+  "SvelteKit":        { minNode: "18.13.0", label: "SvelteKit 2+" },
+  "Nuxt":             { minNode: "18.0.0",  label: "Nuxt 3+" },
+  "Astro":            { minNode: "18.14.1", label: "Astro 4+" },
+  "Remix":            { minNode: "18.0.0",  label: "Remix 2+" },
+  "Create React App": { minNode: "14.0.0",  label: "Create React App" },
+  "Gatsby":           { minNode: "18.0.0",  label: "Gatsby 5+" },
+  "Vue CLI":          { minNode: "14.0.0",  label: "Vue CLI" },
+  "Webpack":          { minNode: "14.0.0",  label: "Webpack 5+" },
+  "Parcel":           { minNode: "16.0.0",  label: "Parcel 2+" },
+};
+
+function semverGte(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+  }
+  return true; // equal
+}
+
+export function checkNodeCompatibility(framework: string): { ok: boolean; message?: string } {
+  const req = FRAMEWORK_NODE_REQUIREMENTS[framework];
+  if (!req) return { ok: true };
+
+  const current = process.versions.node;
+  if (!semverGte(current, req.minNode)) {
+    return {
+      ok: false,
+      message: `${req.label} requires Node.js >= ${req.minNode}, but you are running v${current}`,
+    };
+  }
+  return { ok: true };
+}
+
+// --- .env PORT detection ---
+
+/**
+ * Check .env files for a PORT variable. Helps detect when the dev server
+ * is configured to run on a non-default port via environment.
+ */
+export function checkEnvPort(cwd: string = process.cwd()): number | null {
+  const envFiles = [".env.local", ".env.development.local", ".env.development", ".env"];
+  for (const envFile of envFiles) {
+    const envPath = join(cwd, envFile);
+    if (!existsSync(envPath)) continue;
+    try {
+      const content = readFileSync(envPath, "utf-8");
+      const match = content.match(/^PORT\s*=\s*(\d+)/m);
+      if (match) return parseInt(match[1], 10);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// --- Project name ---
 
 export function getProjectName(cwd: string = process.cwd()): string {
   const pkgPath = join(cwd, "package.json");

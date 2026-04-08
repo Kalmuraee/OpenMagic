@@ -17,6 +17,7 @@ export function createProxyServer(
   const proxy = httpProxy.createProxyServer({
     target: `http://${targetHost}:${targetPort}`,
     selfHandleResponse: true,
+    changeOrigin: true, // Rewrite Host header to match upstream — required by Vite 5.4+ and some Next.js setups
     // ws: false — we handle WebSocket upgrades manually in server.on("upgrade")
   });
 

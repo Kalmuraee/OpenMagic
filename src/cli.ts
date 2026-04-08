@@ -38,6 +38,7 @@ import {
   getProjectName,
   checkDependenciesInstalled,
   verifyPortOwnership,
+  checkNodeCompatibility,
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { cleanupBackups } from "./filesystem.js";
@@ -168,6 +169,64 @@ function formatDevServerLine(line: string): string {
   return chalk.dim(`  │ ${trimmed}`);
 }
 
+// Track which framework was detected (for diagnostic hints)
+let detectedFramework: string | null = null;
+
+/**
+ * After the proxy starts, check if the upstream app actually serves content.
+ * If it returns 404, warn with framework-specific troubleshooting hints.
+ */
+async function validateAppHealth(targetHost: string, targetPort: number): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(`http://${targetHost}:${targetPort}/`, {
+      signal: controller.signal,
+      redirect: "manual",
+      headers: { Accept: "text/html" },
+    });
+    clearTimeout(timeout);
+
+    const status = res.status;
+
+    // 2xx or redirect → app is healthy
+    if (status >= 200 && status < 400) return;
+
+    if (status === 404) {
+      console.log(chalk.yellow("  ⚠  Your app returned 404 for the root path (\"/\")."));
+      console.log(chalk.dim("     The dev server is running, but no page matched."));
+      console.log("");
+
+      if (detectedFramework === "Next.js") {
+        console.log(chalk.dim("     Common Next.js causes:"));
+        console.log(chalk.dim("     • A stray package-lock.json in a parent directory confuses"));
+        console.log(chalk.dim("       Turbopack's workspace root detection."));
+        console.log(chalk.dim("       → Check for ~/package-lock.json and remove if unneeded"));
+        console.log(chalk.dim("       → Or set turbopack.root in next.config (Next.js 15+)"));
+        console.log(chalk.dim("     • Missing src/app/page.tsx (App Router) or pages/index.tsx"));
+        console.log(chalk.dim("     • Middleware redirecting all routes to an auth provider"));
+      } else if (detectedFramework === "Angular") {
+        console.log(chalk.dim("     Angular hint: ensure the base href matches the proxy path."));
+      } else if (detectedFramework === "Vite") {
+        console.log(chalk.dim("     Vite hint: check that index.html exists in the project root."));
+      } else {
+        console.log(chalk.dim("     Check your framework's routing configuration."));
+      }
+
+      console.log("");
+      console.log(chalk.dim("     The toolbar is still available — navigate to a working route."));
+      console.log("");
+    } else if (status >= 500) {
+      console.log(chalk.yellow(`  ⚠  Your app returned HTTP ${status} on the root path.`));
+      console.log(chalk.dim("     There may be a server-side error. Check your dev server output."));
+      console.log("");
+    }
+  } catch {
+    // Connection failed or timeout — don't warn here, proxy error page handles it
+  }
+}
+
 const program = new Command();
 
 program
@@ -263,6 +322,12 @@ program
       }
     }
 
+    // Detect framework for diagnostic hints (even if server was already running)
+    if (!detectedFramework) {
+      const scripts = detectDevScripts();
+      if (scripts.length > 0) detectedFramework = scripts[0].framework;
+    }
+
     console.log(
       chalk.green(`  ✓  Dev server running at ${targetHost}:${targetPort}`)
     );
@@ -303,6 +368,9 @@ program
       console.log("");
 
       await healthCheck(proxyPort, targetPort!);
+
+      // Validate the upstream app actually serves content
+      await validateAppHealth(targetHost, targetPort!);
 
       console.log(chalk.dim("  Press Ctrl+C to stop."));
       console.log(
@@ -510,6 +578,21 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     }
   }
 
+  // Track framework for diagnostic hints later
+  detectedFramework = chosen.framework;
+
+  // Pre-flight: check Node.js version compatibility
+  const compat = checkNodeCompatibility(chosen.framework);
+  if (!compat.ok) {
+    console.log(chalk.red(`\n  ✗  ${compat.message}`));
+    console.log("");
+    console.log(chalk.white("  Switch Node.js version before running:"));
+    console.log(chalk.cyan("    nvm use 20"));
+    console.log(chalk.dim("    # then re-run: npx openmagic"));
+    console.log("");
+    return false;
+  }
+
   // Start the dev server
   let port = expectedPort || chosen.defaultPort;
 
@@ -656,6 +739,16 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
         }
       }
     } catch {}
+
+    // Also check framework-specific requirements
+    if (chosen?.framework) {
+      const compat = checkNodeCompatibility(chosen.framework);
+      if (!compat.ok) {
+        console.log(chalk.yellow(`  ${compat.message}`));
+        console.log(chalk.dim("  Switch with: nvm use 20"));
+        console.log("");
+      }
+    }
 
     console.log(chalk.white("  Options:"));
     console.log(chalk.dim("  1. Fix the error above and try again"));

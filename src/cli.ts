@@ -406,13 +406,46 @@ program
       }
     });
 
-    // Graceful shutdown
+    // Graceful shutdown — kill child processes before exiting
+    let shuttingDown = false;
     const shutdown = () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       console.log("");
       console.log(chalk.dim("  Shutting down OpenMagic..."));
       cleanupBackups();
       proxyServer.close();
-      process.exit(0);
+
+      // Kill all child processes (dev server, static server, etc.)
+      for (const cp of childProcesses) {
+        try { cp.kill("SIGTERM"); } catch {}
+      }
+
+      // Force-kill after 2s, then exit
+      const forceExit = setTimeout(() => {
+        for (const cp of childProcesses) {
+          try { cp.kill("SIGKILL"); } catch {}
+        }
+        process.exit(0);
+      }, 2000);
+      forceExit.unref();
+
+      // If all children are already dead, exit immediately
+      const allDead = childProcesses.every((cp) => cp.killed || cp.exitCode !== null);
+      if (allDead) {
+        clearTimeout(forceExit);
+        process.exit(0);
+      }
+
+      // Wait for children to exit
+      let remaining = childProcesses.filter((cp) => !cp.killed && cp.exitCode === null).length;
+      if (remaining === 0) { clearTimeout(forceExit); process.exit(0); }
+      for (const cp of childProcesses) {
+        cp.once("exit", () => {
+          remaining--;
+          if (remaining <= 0) { clearTimeout(forceExit); process.exit(0); }
+        });
+      }
     };
 
     process.on("SIGINT", shutdown);

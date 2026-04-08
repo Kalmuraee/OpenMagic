@@ -39,13 +39,14 @@ export async function chatClaudeCode(
   const fullPrompt = buildUserMessage(userPrompt, contextParts);
 
   // Spawn claude -p with stream-json for real-time streaming
+  // --max-turns 5: allows Claude to read files and produce a complete response
   const proc = spawn(
     "claude",
     [
       "-p",
       "--output-format", "stream-json",
       "--verbose",
-      "--max-turns", "1", // Single turn — OpenMagic manages its own retry loop
+      "--max-turns", "5",
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
@@ -58,6 +59,7 @@ export async function chatClaudeCode(
   proc.stdin.end();
 
   let fullContent = "";
+  let resultContent = ""; // From the final result event
   let buffer = "";
   let errOutput = "";
 
@@ -70,6 +72,15 @@ export async function chatClaudeCode(
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
+
+        // Final result event — this is the authoritative response
+        if (event.type === "result") {
+          if (typeof event.result === "string") {
+            resultContent = event.result;
+          }
+          continue;
+        }
+
         const text = extractText(event);
         if (text) {
           fullContent += text;
@@ -100,19 +111,22 @@ export async function chatClaudeCode(
     if (buffer.trim()) {
       try {
         const event = JSON.parse(buffer);
-        const text = extractText(event);
-        if (text) fullContent += text;
-        // Check for final result event
-        if (event.result && typeof event.result === "string") {
-          fullContent = event.result;
+        if (event.type === "result" && typeof event.result === "string") {
+          resultContent = event.result;
+        } else {
+          const text = extractText(event);
+          if (text) fullContent += text;
         }
       } catch {
         // ignore
       }
     }
 
-    if (code === 0 || fullContent) {
-      onDone({ content: fullContent });
+    // Prefer the result event content (complete final answer) over streamed chunks
+    const finalContent = resultContent || fullContent;
+
+    if (code === 0 || finalContent) {
+      onDone({ content: finalContent });
     } else {
       // Parse common errors
       const err = errOutput.trim();

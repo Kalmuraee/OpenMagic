@@ -12,7 +12,7 @@ import terminalLink from "terminal-link";
 // Raise file descriptor limit — Turbopack/Webpack need thousands of watchers.
 // macOS launchctl defaults to 256 which causes EMFILE in large projects.
 // This only works if the hard limit allows it (user's shell may have already set it).
-try { execSync("ulimit -n 65536", { shell: true, stdio: "ignore" }); } catch {}
+try { execSync("ulimit -n 65536", { shell: "/bin/sh", stdio: "ignore" }); } catch {}
 
 // Suppress http-proxy deprecation warning noise
 const origEmitWarning = process.emitWarning;
@@ -147,11 +147,11 @@ process.on("uncaughtException", (err) => {
 
 // Check file descriptor limit — warn early if too low for dev servers
 try {
-  const fdLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: true }).trim(), 10);
+  const fdLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: "/bin/sh" }).trim(), 10);
   if (fdLimit > 0 && fdLimit < 4096) {
     // Try to raise it
-    try { execSync("ulimit -n 65536", { shell: true, stdio: "ignore" }); } catch {}
-    const newLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: true }).trim(), 10);
+    try { execSync("ulimit -n 65536", { shell: "/bin/sh", stdio: "ignore" }); } catch {}
+    const newLimit = parseInt(execSync("ulimit -n", { encoding: "utf-8", shell: "/bin/sh" }).trim(), 10);
     if (newLimit < 4096) {
       writeLine();
       printWarning(`File descriptor limit is ${fdLimit} (need 4096+).`);
@@ -296,7 +296,7 @@ function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): P
       const child = spawn(cmd, args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: true,
+        shell: "/bin/sh",
       });
 
       child.stdout?.on("data", (data: Buffer) => {
@@ -951,7 +951,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   const compat = checkNodeCompatibility(chosen.framework);
   if (!compat.ok) {
     writeLine();
-    printError(compat.message);
+    printError(compat.message || "Node.js version incompatible");
     writeLine();
     printInfo("Switch Node.js before running:");
     printCommand("nvm use 20");
@@ -1101,7 +1101,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
     if (chosen?.framework) {
       const compat = checkNodeCompatibility(chosen.framework);
       if (!compat.ok) {
-        printWarning(compat.message);
+        printWarning(compat.message || "Node.js version may be incompatible");
         printDetail("Switch with:");
         printCommand("nvm use 20");
         writeLine();

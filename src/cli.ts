@@ -799,10 +799,28 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
         const http = require("http");
         const fs = require("fs");
         const path = require("path");
-        const mimes = {".html":"text/html",".css":"text/css",".js":"application/javascript",".json":"application/json",".png":"image/png",".jpg":"image/jpeg",".svg":"image/svg+xml",".ico":"image/x-icon",".gif":"image/gif",".woff2":"font/woff2",".woff":"font/woff"};
+        const root = path.resolve(${JSON.stringify(process.cwd())});
+        const mimes = {".html":"text/html",".css":"text/css",".js":"application/javascript",".json":"application/json",".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".svg":"image/svg+xml",".ico":"image/x-icon",".gif":"image/gif",".webp":"image/webp",".woff2":"font/woff2",".woff":"font/woff"};
+        function resolveRequestPath(reqUrl) {
+          let pathname;
+          try {
+            const rawPath = (reqUrl || "/").split(/[?#]/, 1)[0];
+            const decodedRawPath = decodeURIComponent(rawPath);
+            if (decodedRawPath.split(/[\\\\/]+/).includes("..")) return null;
+            pathname = new URL(reqUrl || "/", "http://localhost").pathname;
+            pathname = decodeURIComponent(pathname);
+          } catch {
+            return null;
+          }
+          if (pathname === "/") pathname = "/index.html";
+          const candidate = path.resolve(root, "." + pathname);
+          const rel = path.relative(root, candidate);
+          if (rel === ".." || rel.startsWith("../") || rel.startsWith("..\\\\") || path.isAbsolute(rel)) return null;
+          return candidate;
+        }
         http.createServer((req, res) => {
-          let p = path.join(${JSON.stringify(process.cwd())}, req.url === "/" ? "/index.html" : req.url);
-          try { p = decodeURIComponent(p); } catch {}
+          const p = resolveRequestPath(req.url);
+          if (!p) { res.writeHead(403); res.end("Forbidden"); return; }
           fs.readFile(p, (err, data) => {
             if (err) { res.writeHead(404); res.end("Not found"); return; }
             const ext = path.extname(p).toLowerCase();

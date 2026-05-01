@@ -3,10 +3,10 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { validateToken } from "./security.js";
+import { getSessionToken, validateToken } from "./security.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { detectAvailableClis, invalidateCliCache } from "./llm/cli-detect.js";
-import { readFileSafe, writeFileSafe, listFiles, getProjectTree, grepFiles, getBackupForFile, cleanupBackups } from "./filesystem.js";
+import { readFileSafe, writeFileSafe, deleteFileSafe, listFiles, getProjectTree, grepFiles, getBackupForFile, cleanupBackups } from "./filesystem.js";
 import type {
   WsMessage,
   HandshakePayload,
@@ -71,7 +71,7 @@ export function attachOpenMagic(
     const urlPath = req.url.split("?")[0];
 
     if (urlPath === "/__openmagic__/toolbar.js") {
-      serveToolbarBundle(res);
+      serveToolbarBundle(res, getSessionToken());
       return true;
     }
 
@@ -94,7 +94,7 @@ export function attachOpenMagic(
 
   wss.on("connection", (ws, req) => {
     const origin = req.headers.origin || "";
-    if (origin && !origin.startsWith("http://localhost") && !origin.startsWith("http://127.0.0.1")) {
+    if (!isAllowedWsOrigin(origin)) {
       ws.close(4003, "Forbidden origin");
       return;
     }
@@ -213,6 +213,25 @@ async function handleMessage(
         send(ws, {
           id: msg.id,
           type: "fs.written",
+          payload: { path: payload.path, ok: true },
+        });
+      }
+      break;
+    }
+
+    case "fs.delete": {
+      const payload = msg.payload as { path: string };
+      if (!payload?.path) {
+        sendError(ws, "invalid_payload", "Missing path", msg.id);
+        break;
+      }
+      const deleteResult = deleteFileSafe(payload.path, roots);
+      if (!deleteResult.ok) {
+        sendError(ws, "fs_error", deleteResult.error || "Delete failed", msg.id);
+      } else {
+        send(ws, {
+          id: msg.id,
+          type: "fs.deleted",
           payload: { path: payload.path, ok: true },
         });
       }
@@ -382,6 +401,20 @@ async function handleMessage(
   }
 }
 
+export function isAllowedWsOrigin(origin: string): boolean {
+  if (!origin) return true;
+
+  try {
+    const parsed = new URL(origin);
+    return parsed.hostname === "localhost" ||
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "::1" ||
+      parsed.hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 function send(ws: WebSocket, msg: WsMessage): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
@@ -392,7 +425,7 @@ function sendError(ws: WebSocket, code: string, message: string, id?: string): v
   send(ws, { id: id || "error", type: "error", payload: { code, message } });
 }
 
-function serveToolbarBundle(res: http.ServerResponse): void {
+function serveToolbarBundle(res: http.ServerResponse, token: string): void {
   const bundlePaths = [
     join(__dirname, "toolbar", "index.global.js"),
     join(__dirname, "..", "dist", "toolbar", "index.global.js"),
@@ -407,7 +440,7 @@ function serveToolbarBundle(res: http.ServerResponse): void {
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "no-cache",
         });
-        res.end(content);
+        res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n${content}`);
         return;
       }
     } catch {
@@ -419,5 +452,5 @@ function serveToolbarBundle(res: http.ServerResponse): void {
     "Content-Type": "application/javascript",
     "Access-Control-Allow-Origin": "*",
   });
-  res.end(`(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`);
+  res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`);
 }

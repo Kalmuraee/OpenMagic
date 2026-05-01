@@ -15,7 +15,7 @@ import {
   closeSync,
   renameSync,
 } from "node:fs";
-import { join, resolve, relative, dirname, extname } from "node:path";
+import { join, resolve, relative, dirname, extname, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import type { FileEntry } from "./shared-types.js";
@@ -56,24 +56,52 @@ const IGNORED_EXTENSIONS = new Set([
 export function isPathSafe(filePath: string, roots: string[]): boolean {
   const resolved = resolve(filePath);
 
-  // Also check realpath to prevent symlink escape
-  let real: string;
-  try {
-    real = realpathSync(resolved);
-  } catch {
-    // File doesn't exist yet (for writes) — use resolved path
-    real = resolved;
-  }
-
   return roots.some((root) => {
     const resolvedRoot = resolve(root);
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(resolvedRoot);
+    } catch {
+      return false;
+    }
+
     const rel = relative(resolvedRoot, resolved);
-    const realRel = relative(resolvedRoot, real);
-    return (
-      (!rel.startsWith("..") && !rel.startsWith("/") && !rel.startsWith("\\")) &&
-      (!realRel.startsWith("..") && !realRel.startsWith("/") && !realRel.startsWith("\\"))
-    );
+    if (isOutsideRelative(rel)) return false;
+
+    const existingPath = nearestExistingPath(resolved);
+    if (!existingPath) return false;
+
+    let real: string;
+    try {
+      real = realpathSync(existingPath);
+    } catch {
+      return false;
+    }
+
+    const realRel = relative(realRoot, real);
+    return !isOutsideRelative(realRel);
   });
+}
+
+function isOutsideRelative(relPath: string): boolean {
+  return relPath === ".." ||
+    relPath.startsWith(`..${"/"}`) ||
+    relPath.startsWith(`..${"\\"}`) ||
+    relPath.startsWith("/") ||
+    relPath.startsWith("\\");
+}
+
+function nearestExistingPath(filePath: string): string | null {
+  let current = resolve(filePath);
+  const root = parse(current).root;
+
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current || current === root) return null;
+    current = parent;
+  }
+
+  return current;
 }
 
 // Track line endings and BOM per file so writeFileSafe can restore them
@@ -179,6 +207,31 @@ export function writeFileSafe(
     return { ok: true, backupPath };
   } catch (e: unknown) {
     return { ok: false, error: `Failed to write file: ${(e as Error).message}` };
+  }
+}
+
+export function deleteFileSafe(
+  filePath: string,
+  roots: string[]
+): { ok: boolean; error?: string } {
+  if (!isPathSafe(filePath, roots)) {
+    return { ok: false, error: "Path is outside allowed roots" };
+  }
+
+  try {
+    if (!existsSync(filePath)) {
+      return { ok: true };
+    }
+
+    const stat = lstatSync(filePath);
+    if (!stat.isFile()) {
+      return { ok: false, error: "Can only delete regular files" };
+    }
+
+    unlinkSync(filePath);
+    return { ok: true };
+  } catch (e: unknown) {
+    return { ok: false, error: `Failed to delete file: ${(e as Error).message}` };
   }
 }
 

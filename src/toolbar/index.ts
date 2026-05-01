@@ -4,6 +4,8 @@ import { inspectElement, showHighlight, hideHighlight, type SelectedElement } fr
 import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 
+declare const __OPENMAGIC_TOKEN__: string | undefined;
+
 // ── SVG Icons (Lucide-style) ─────────────────────────────────────
 const ICON = {
   sparkle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .962L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>`,
@@ -97,7 +99,7 @@ function decodeBase64Utf8(value: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-const CURRENT_VERSION = "0.43.1";
+const CURRENT_VERSION = "0.43.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -146,7 +148,7 @@ function saveState() {
       if (m.content.startsWith("__DIFF__") && m.content.length > 500) {
         try {
           const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
-          return { ...m, content: `Applied ${diff.type || "edit"} to ${diff.file || "file"}` };
+          return { ...m, content: `Pending ${diff.type || "edit"} for ${diff.file || "file"} was not restored after reload.` };
         } catch { return m; }
       }
       return m;
@@ -221,7 +223,9 @@ function init() {
 
   // Connect to server — same origin (single port)
   const currentScript = document.querySelector('script[data-openmagic-token]') as HTMLScriptElement | null;
-  const token = currentScript?.dataset.openmagicToken || (window as any).__OPENMAGIC_TOKEN__;
+  const token = (typeof __OPENMAGIC_TOKEN__ !== "undefined" ? __OPENMAGIC_TOKEN__ : "") ||
+    currentScript?.dataset.openmagicToken ||
+    (window as any).__OPENMAGIC_TOKEN__;
   const wsPort = parseInt(window.location.port, 10) || (window.location.protocol === "https:" ? 443 : 80);
   if (token) {
     ws.connect(wsPort, token)
@@ -566,11 +570,15 @@ function similarity(a: string, b: string): number {
   return intersection / (trigramsA.size + trigramsB.size - intersection);
 }
 
-async function applyDiff(target: HTMLElement) {
+type ApplyDiffResult = { ok: boolean; file?: string; error?: string };
+
+async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
   const file = target.dataset.file;
   const searchB64 = target.dataset.search;
   const replaceB64 = target.dataset.replace;
-  if (!file || !searchB64 || !replaceB64) return;
+  if (!file || searchB64 === undefined || replaceB64 === undefined) {
+    return { ok: false, file, error: "Missing diff data" };
+  }
 
   // Instant visual feedback — disable button and show spinner BEFORE any async work
   (target as HTMLButtonElement).disabled = true;
@@ -594,93 +602,102 @@ async function applyDiff(target: HTMLElement) {
   } catch {
     state.messages.push({ role: "system", content: `Failed to decode diff data for ${file}` });
     refreshPanelContent();
-    return;
+    return { ok: false, file, error: "Failed to decode diff data" };
   }
 
   const filePath = resolveFilePath(file);
+  let applyOk = false;
+  let applyError = "";
 
   try {
     // Handle create (empty search = write entire file)
     if (!search && replace) {
       const writeResult = await ws.request("fs.write", { path: filePath, content: replace });
       if (writeResult?.payload?.ok === false) {
-        state.messages.push({ role: "system", content: `Write failed: ${file}` });
+        applyError = `Write failed: ${file}`;
+        state.messages.push({ role: "system", content: applyError });
       } else {
+        applyOk = true;
         const idx = card?.dataset.diffIdx;
         if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: `Created ${file}` };
         else state.messages.push({ role: "system", content: `Created ${file}` });
       }
-      refreshPanelContent();
-      scrollChatToBottom();
-      return;
-    }
-
-    // Try primary path, then fallbacks if it fails
-    let content: string | undefined;
-    let resolvedPath = filePath;
-
-    // Try reading from multiple paths
-    const pathsToTry = [filePath];
-    if (file !== filePath) pathsToTry.push(file);
-    const basename = file.split("/").pop() || file;
-    const root = state.roots[0] || "";
-    const baseInRoot = root ? `${root}/${basename}` : basename;
-    if (baseInRoot !== filePath && baseInRoot !== file) pathsToTry.push(baseInRoot);
-
-    for (const tryPath of pathsToTry) {
-      const r = await ws.request("fs.read", { path: tryPath }).catch(() => null);
-      const c = r?.payload?.content;
-      if (c !== undefined && c !== null) {
-        content = String(c);
-        resolvedPath = tryPath;
-        break;
-      }
-    }
-
-    if (!content) {
-      state.messages.push({ role: "system", content: `Could not read ${file} — tried: ${pathsToTry.join(", ")}` });
     } else {
-      // Try exact match first
-      const exactCount = content.split(search).length - 1;
+      // Try primary path, then fallbacks if it fails
+      let content: string | undefined;
+      let resolvedPath = filePath;
 
-      if (exactCount === 1) {
-        // Exact match — apply directly
-        const writeResult = await ws.request("fs.write", { path: resolvedPath, content: content.replace(search, replace) });
-        if (writeResult?.payload?.ok === false) {
-          state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
-        } else {
-          const idx = card?.dataset.diffIdx;
-          if (idx !== undefined) {
-            state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Reloading...` };
-          } else {
-            state.messages.push({ role: "system", content: `Applied change to ${file}. Reloading...` });
-          }
+      // Try reading from multiple paths
+      const pathsToTry = [filePath];
+      if (file !== filePath) pathsToTry.push(file);
+      const basename = file.split("/").pop() || file;
+      const root = state.roots[0] || "";
+      const baseInRoot = root ? `${root}/${basename}` : basename;
+      if (baseInRoot !== filePath && baseInRoot !== file) pathsToTry.push(baseInRoot);
+
+      for (const tryPath of pathsToTry) {
+        const r = await ws.request("fs.read", { path: tryPath }).catch(() => null);
+        const c = r?.payload?.content;
+        if (c !== undefined && c !== null) {
+          content = String(c);
+          resolvedPath = tryPath;
+          break;
         }
-      } else if (exactCount > 1) {
-        state.messages.push({ role: "system", content: `Found ${exactCount} exact matches in ${file} — expected 1. Edit not applied.` });
+      }
+
+      if (content === undefined) {
+        applyError = `Could not read ${file} — tried: ${pathsToTry.join(", ")}`;
+        state.messages.push({ role: "system", content: applyError });
       } else {
-        // No exact match — try fuzzy line-based matching
-        const fuzzyResult = fuzzyLineMatch(content, search);
-        if (fuzzyResult) {
-          const newContent = content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
-          const writeResult = await ws.request("fs.write", { path: resolvedPath, content: newContent });
+        // Try exact match first
+        const exactCount = content.split(search).length - 1;
+
+        if (exactCount === 1) {
+          // Exact match — apply directly
+          const writeResult = await ws.request("fs.write", { path: resolvedPath, content: content.replace(search, replace) });
           if (writeResult?.payload?.ok === false) {
-            state.messages.push({ role: "system", content: `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}` });
+            applyError = `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}`;
+            state.messages.push({ role: "system", content: applyError });
           } else {
+            applyOk = true;
             const idx = card?.dataset.diffIdx;
             if (idx !== undefined) {
-              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` };
+              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Reloading...` };
             } else {
-              state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` });
+              state.messages.push({ role: "system", content: `Applied change to ${file}. Reloading...` });
             }
           }
+        } else if (exactCount > 1) {
+          applyError = `Found ${exactCount} exact matches in ${file} — expected 1. Edit not applied.`;
+          state.messages.push({ role: "system", content: applyError });
         } else {
-          state.messages.push({ role: "system", content: `No matching code found in ${file}. The file may have changed since the suggestion.` });
+          // No exact match — try fuzzy line-based matching
+          const fuzzyResult = fuzzyLineMatch(content, search);
+          if (fuzzyResult) {
+            const newContent = content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
+            const writeResult = await ws.request("fs.write", { path: resolvedPath, content: newContent });
+            if (writeResult?.payload?.ok === false) {
+              applyError = `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}`;
+              state.messages.push({ role: "system", content: applyError });
+            } else {
+              applyOk = true;
+              const idx = card?.dataset.diffIdx;
+              if (idx !== undefined) {
+                state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` };
+              } else {
+                state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` });
+              }
+            }
+          } else {
+            applyError = `No matching code found in ${file}. The file may have changed since the suggestion.`;
+            state.messages.push({ role: "system", content: applyError });
+          }
         }
       }
     }
   } catch (e: any) {
-    state.messages.push({ role: "system", content: `Failed to apply: ${file} — ${e.message}` });
+    applyError = `Failed to apply: ${file} — ${e.message}`;
+    state.messages.push({ role: "system", content: applyError });
   }
 
   refreshPanelContent();
@@ -689,9 +706,11 @@ async function applyDiff(target: HTMLElement) {
   // Auto-reload page after 1.5s so user sees the change
   // (HMR-based dev servers handle this automatically, but static servers don't)
   // Skip reload during batch apply-all (batchMode flag)
-  if (!(applyDiff as any)._batchMode) {
+  if (applyOk && !(applyDiff as any)._batchMode) {
     setTimeout(() => { window.location.reload(); }, 1500);
   }
+
+  return { ok: applyOk, file, error: applyError || undefined };
 }
 
 function rejectDiff(target: HTMLElement) {
@@ -790,31 +809,42 @@ async function handleAction(action: string, target: HTMLElement) {
         const file = (btn as HTMLElement).dataset.file;
         if (file) filesToSnapshot.add(resolveFilePath(file));
       }
-      const snapshots = new Map<string, string>();
+      const snapshots = new Map<string, { exists: boolean; content: string }>();
       for (const fp of filesToSnapshot) {
         try {
           const r = await ws.request("fs.read", { path: fp }).catch(() => null);
-          if (r?.payload?.content) snapshots.set(fp, String(r.payload.content));
+          if (r?.payload && r.payload.content !== undefined && r.payload.content !== null) {
+            snapshots.set(fp, { exists: true, content: String(r.payload.content) });
+          } else {
+            snapshots.set(fp, { exists: false, content: "" });
+          }
         } catch {}
       }
       // Apply diffs sequentially, suppress per-diff reload
       (applyDiff as any)._batchMode = true;
       let failed = false;
+      let failureMessage = "";
       for (const btn of buttons) {
-        try {
-          await applyDiff(btn as HTMLElement);
-        } catch {
+        const result = await applyDiff(btn as HTMLElement);
+        if (!result.ok) {
           failed = true;
+          failureMessage = result.error || `Failed to apply ${result.file || "change"}`;
           break;
         }
       }
       (applyDiff as any)._batchMode = false;
       // If any failed, rollback all
       if (failed && snapshots.size > 0) {
-        for (const [fp, content] of snapshots) {
-          try { await ws.request("fs.write", { path: fp, content }); } catch {}
+        for (const [fp, snapshot] of snapshots) {
+          try {
+            if (snapshot.exists) {
+              await ws.request("fs.write", { path: fp, content: snapshot.content });
+            } else {
+              await ws.request("fs.delete", { path: fp });
+            }
+          } catch {}
         }
-        state.messages.push({ role: "system", content: "Batch apply failed — all changes reverted." });
+        state.messages.push({ role: "system", content: `Batch apply failed — all changes reverted. ${failureMessage}`.trim() });
         refreshPanelContent();
       }
       hideApplyBar();
@@ -917,7 +947,8 @@ function updateModelSwitcher() {
 function updatePromptContext() {
   const chips: string[] = [];
   if (state.selectedElement) {
-    chips.push(`<span class="om-prompt-chip">${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+    const selectedLabel = `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
+    chips.push(`<span class="om-prompt-chip">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
   }
   if (state.screenshot) {
     chips.push(`<span class="om-prompt-chip">Screenshot <button class="om-prompt-chip-x" data-action="clear-screenshot">${ICON.x}</button></span>`);
@@ -1593,7 +1624,7 @@ async function sendPrompt() {
       context.files = files;
       // Show grounded files in status
       const fileNames = files.map((f: {path: string}) => f.path.split("/").pop()).join(", ");
-      if (statusEl) statusEl.innerHTML = `<span class="om-spinner"></span> Thinking... (${files.length} files: ${fileNames})`;
+      if (statusEl) statusEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Thinking... (${files.length} files: ${fileNames})`)}`;
     }
     state.groundedFiles = files.map((f: {path: string}) => f.path);
   } catch { /* grounding is best-effort */ }
@@ -1658,7 +1689,7 @@ async function sendPrompt() {
 
         // Show transient status (update the spinner, don't add permanent messages)
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
-        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> Reading ${neededFile}...`;
+        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Reading ${neededFile}...`)}`;
 
         // Read the requested file — try primary path, then fallbacks
         try {
@@ -1715,7 +1746,7 @@ async function sendPrompt() {
         retryCount++;
 
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
-        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> Searching: "${pattern}"...`;
+        if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Searching: "${pattern}"...`)}`;
 
         try {
           const grepResult = await Promise.race([
@@ -1912,7 +1943,8 @@ let selectHandler: ((e: MouseEvent) => void) | null = null;
 let hoverHandler: ((e: MouseEvent) => void) | null = null;
 
 function toggleSelectMode() {
-  state.selecting ? exitSelectMode() : enterSelectMode();
+  if (state.selecting) exitSelectMode();
+  else enterSelectMode();
 }
 
 function enterSelectMode() {

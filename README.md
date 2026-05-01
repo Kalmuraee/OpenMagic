@@ -184,6 +184,7 @@ npx openmagic --port 3000
 
 - **Origin change** -- Your app runs on `:3000` but you access it via `:4567`. This can break OAuth redirect URIs, `localStorage` isolation, and Service Worker scope. Most dev setups work fine, but if your app checks `window.location.origin`, you may need to adjust your dev config.
 - **CSP via meta tags** -- OpenMagic strips CSP response headers so the toolbar script can load, but `<meta>` tag CSP can't be modified at the proxy level and may still block it.
+- **Same-page trust boundary** -- The toolbar runs inside your proxied development page so it can inspect selected DOM elements. Do not use OpenMagic with untrusted third-party scripts running in that page.
 - **Not for production** -- This is a dev tool. Don't deploy the proxy to production.
 
 ---

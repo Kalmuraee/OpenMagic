@@ -49,6 +49,22 @@ jobs:
         if: steps.version-check.outputs.changed == 'true'
         run: npm run build
 
+      - name: Type check
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm run typecheck
+
+      - name: Lint
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm run lint
+
+      - name: Test
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm test
+
+      - name: Audit production dependencies
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm audit --omit=dev
+
       - name: Publish to npm
         if: steps.version-check.outputs.changed == 'true'
         run: npm publish --provenance --access public

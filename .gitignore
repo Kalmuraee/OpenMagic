@@ -8,3 +8,4 @@ test-app/
 *.openmagic-backup
 CLAUDE.md
 reddit-launch.md
+.openmagic-project-memory.md

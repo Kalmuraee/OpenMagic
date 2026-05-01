@@ -3,7 +3,7 @@ type MessageHandler = (msg: any) => void;
 let ws: WebSocket | null = null;
 let handlers: Map<string, MessageHandler> = new Map();
 let globalHandlers: ((msg: any) => void)[] = [];
-let messageQueue: string[] = [];
+let messageQueue: { id: string; data: string; type: string }[] = [];
 let connected = false;
 let shouldReconnect = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,7 +45,7 @@ export function connect(port: number, token: string): Promise<void> {
             reconnectAttempt = 0;
             // Flush queued messages
             for (const queued of messageQueue) {
-              ws?.send(queued);
+              ws?.send(queued.data);
             }
             messageQueue = [];
             if (!settled) { settled = true; resolve(); }
@@ -127,7 +127,7 @@ export function send(msg: { id: string; type: string; payload?: any }): void {
   if (ws && ws.readyState === WebSocket.OPEN && connected) {
     ws.send(data);
   } else {
-    messageQueue.push(data);
+    messageQueue.push({ id: msg.id, type: msg.type, data });
   }
 }
 
@@ -136,6 +136,7 @@ export function request(type: string, payload?: any): Promise<any> {
     const id = generateId();
     const timeout = setTimeout(() => {
       handlers.delete(id);
+      messageQueue = messageQueue.filter((queued) => queued.id !== id);
       reject(new Error("Request timeout"));
     }, 30000);
 
@@ -167,6 +168,7 @@ export function stream(
     let timeout = setTimeout(onTimeout, IDLE_MS);
     function onTimeout() {
       handlers.delete(id);
+      messageQueue = messageQueue.filter((queued) => queued.id !== id);
       reject(new Error("Stream timeout"));
     }
     function resetTimeout() {

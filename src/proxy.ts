@@ -133,5 +133,6 @@ ${toolbarScript}
 
 // Same-origin injection — toolbar.js and WS served from THIS server
 function buildInjectionScript(token: string): string {
-  return `<script src="/__openmagic__/toolbar.js?v=${Date.now()}" data-openmagic="true" data-openmagic-token="${token}" defer></script>`;
+  void token;
+  return `<script src="/__openmagic__/toolbar.js?v=${Date.now()}" data-openmagic="true" defer></script>`;
 }

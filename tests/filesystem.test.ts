@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { isPathSafe, readFileSafe, writeFileSafe } from "../src/filesystem.js";
+import { deleteFileSafe, isPathSafe, readFileSafe, writeFileSafe } from "../src/filesystem.js";
 
 const TEST_DIR = join(process.cwd(), ".test-sandbox");
 const OUTSIDE_DIR = join(process.cwd(), ".test-outside");
@@ -58,8 +58,39 @@ describe("writeFileSafe", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("writes nested new files inside a real parent", () => {
+    const filePath = join(TEST_DIR, "nested", "safe", "new.ts");
+    const result = writeFileSafe(filePath, "nested content", [TEST_DIR]);
+    expect(result.ok).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe("nested content");
+  });
+
   it("rejects write outside root", () => {
     const result = writeFileSafe(join(OUTSIDE_DIR, "hack.txt"), "hacked", [TEST_DIR]);
     expect(result.ok).toBe(false);
+  });
+
+  it("rejects creating a new file through a symlinked parent", () => {
+    const outsideTarget = join(OUTSIDE_DIR, "created-through-link.ts");
+    const result = writeFileSafe(join(TEST_DIR, "escape-link", "created-through-link.ts"), "escaped", [TEST_DIR]);
+    expect(result.ok).toBe(false);
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
+});
+
+describe("deleteFileSafe", () => {
+  it("deletes regular files inside root", () => {
+    const filePath = join(TEST_DIR, "delete-me.ts");
+    writeFileSync(filePath, "delete me");
+    const result = deleteFileSafe(filePath, [TEST_DIR]);
+    expect(result.ok).toBe(true);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("rejects delete outside root", () => {
+    const filePath = join(OUTSIDE_DIR, "secret.txt");
+    const result = deleteFileSafe(filePath, [TEST_DIR]);
+    expect(result.ok).toBe(false);
+    expect(existsSync(filePath)).toBe(true);
   });
 });

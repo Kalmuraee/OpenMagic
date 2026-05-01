@@ -61,6 +61,14 @@ jobs:
         if: steps.version-check.outputs.changed == 'true'
         run: npm test
 
+      - name: Smoke test
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm run test:smoke
+
+      - name: Check package contents
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm run check:pack
+
       - name: Audit production dependencies
         if: steps.version-check.outputs.changed == 'true'
         run: npm audit --omit=dev

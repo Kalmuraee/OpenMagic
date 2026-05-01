@@ -28,8 +28,9 @@ const ICON = {
   minus: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
 };
 
-// ── Model Registry (inline for browser bundle) ───────────────────
-const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean; keyUrl?: string }> = {
+// ── Model Registry fallback (server replaces this on config load) ─
+type ToolbarProviderInfo = { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean; keyUrl?: string };
+let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   "claude-code": { name: "Claude Code (CLI)", keyPlaceholder: "not required", local: true, models: [
     { id: "claude-code", name: "Claude Code" },
   ]},
@@ -40,7 +41,7 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
     { id: "gemini-cli", name: "Gemini CLI" },
   ]},
   openai: { name: "OpenAI", keyUrl: "https://platform.openai.com/api-keys", keyPlaceholder: "sk-...", models: [
-    { id: "gpt-5.4", name: "GPT-5.4" }, { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+    { id: "gpt-5.5", name: "GPT-5.5" }, { id: "gpt-5.4", name: "GPT-5.4" }, { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { id: "gpt-5.2", name: "GPT-5.2 Thinking" }, { id: "o3", name: "o3" }, { id: "o4-mini", name: "o4-mini" },
     { id: "gpt-4.1", name: "GPT-4.1" }, { id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
   ]},
@@ -56,7 +57,8 @@ const MODEL_REGISTRY: Record<string, { name: string; models: { id: string; name:
     { id: "grok-4.20-0309-reasoning", name: "Grok 4.20 Reasoning" }, { id: "grok-4-1-fast-non-reasoning", name: "Grok 4.1 Fast" },
   ]},
   deepseek: { name: "DeepSeek", keyUrl: "https://platform.deepseek.com/api_keys", keyPlaceholder: "sk-...", models: [
-    { id: "deepseek-chat", name: "DeepSeek V3.2" }, { id: "deepseek-reasoner", name: "DeepSeek R1" },
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }, { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    { id: "deepseek-chat", name: "DeepSeek Chat (V4 Flash alias)" }, { id: "deepseek-reasoner", name: "DeepSeek Reasoner (V4 Flash thinking alias)" },
   ]},
   mistral: { name: "Mistral", keyUrl: "https://console.mistral.ai/api-keys", keyPlaceholder: "...", models: [
     { id: "mistral-large-3-25-12", name: "Mistral Large 3" }, { id: "codestral-2508", name: "Codestral" }, { id: "devstral-2-25-12", name: "Devstral 2" },
@@ -121,6 +123,9 @@ const state = {
   updateAvailable: false,
   latestVersion: "",
   saveStatus: "" as "" | "saving" | "saved" | "error",
+  modelRefreshStatus: "" as "" | "loading" | "live" | "cache" | "static" | "error",
+  modelRefreshMessage: "",
+  modelRefreshProvider: "",
   networkCapture: false,       // whether network panel is showing
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
@@ -222,10 +227,7 @@ function init() {
   checkForUpdates();
 
   // Connect to server — same origin (single port)
-  const currentScript = document.querySelector('script[data-openmagic-token]') as HTMLScriptElement | null;
-  const token = (typeof __OPENMAGIC_TOKEN__ !== "undefined" ? __OPENMAGIC_TOKEN__ : "") ||
-    currentScript?.dataset.openmagicToken ||
-    (window as any).__OPENMAGIC_TOKEN__;
+  const token = typeof __OPENMAGIC_TOKEN__ !== "undefined" ? __OPENMAGIC_TOKEN__ : "";
   const wsPort = parseInt(window.location.port, 10) || (window.location.protocol === "https:" ? 443 : 80);
   if (token) {
     ws.connect(wsPort, token)
@@ -235,6 +237,10 @@ function init() {
         return ws.request("config.get");
       })
       .then((msg: any) => {
+        if (msg.payload?.providers) {
+          MODEL_REGISTRY = { ...MODEL_REGISTRY, ...msg.payload.providers };
+        }
+
         // Store detected CLI agents from server
         state.detectedClis = msg.payload?.detectedClis || [];
 
@@ -253,7 +259,8 @@ function init() {
           }
         }
         const provMeta = MODEL_REGISTRY[state.provider];
-        state.hasApiKey = !!(state.configuredProviders[state.provider] || provMeta?.local);
+        ensureSelectedModel();
+        state.hasApiKey = providerIsConfigured(state.provider);
         state.roots = msg.payload?.roots || [];
 
         // Restore panel state if we had it open before refresh
@@ -264,6 +271,7 @@ function init() {
         }
         updatePillButtons();
         updateModelSwitcher();
+        void refreshProviderModels(state.provider);
       })
       .catch(() => {
         state.connected = false;
@@ -340,9 +348,12 @@ function attachGlobalEvents(root: HTMLElement) {
     if (field === "provider") {
       state.provider = target.value;
       state.model = MODEL_REGISTRY[state.provider]?.models[0]?.id || "";
-      state.hasApiKey = state.configuredProviders[state.provider] || MODEL_REGISTRY[state.provider]?.local || false;
+      state.hasApiKey = providerIsConfigured(state.provider);
       state.saveStatus = "";
+      state.modelRefreshStatus = "";
+      state.modelRefreshMessage = "";
       refreshPanelContent();
+      void refreshProviderModels(state.provider);
     } else if (field === "model") {
       state.model = target.value;
     } else if (field === "quick-model") {
@@ -938,10 +949,60 @@ function updateModelSwitcher() {
   if (!sel) return;
   const prov = MODEL_REGISTRY[state.provider];
   if (!prov) { sel.innerHTML = ""; return; }
+  ensureSelectedModel();
   const opts = prov.models.map(m =>
-    `<option value="${m.id}" ${state.model === m.id ? "selected" : ""}>${m.name}</option>`
+    `<option value="${escapeHtml(m.id)}" ${state.model === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`
   ).join("");
   sel.innerHTML = opts;
+}
+
+function providerIsConfigured(provider: string): boolean {
+  const prov = MODEL_REGISTRY[provider];
+  return !!(provider && (state.configuredProviders[provider] || prov?.local));
+}
+
+function ensureSelectedModel() {
+  const prov = MODEL_REGISTRY[state.provider];
+  if (!prov?.models.length) return;
+  if (!prov.models.some((m) => m.id === state.model)) {
+    state.model = prov.models[0].id;
+  }
+}
+
+async function refreshProviderModels(provider: string) {
+  if (!provider || !ws.isConnected()) return;
+
+  state.modelRefreshStatus = "loading";
+  state.modelRefreshMessage = "Refreshing model list...";
+  state.modelRefreshProvider = provider;
+  if (state.activePanel === "settings") refreshPanelContent();
+
+  try {
+    const msg = await ws.request("provider.models", { provider });
+    if (state.modelRefreshProvider !== provider) return;
+
+    const payload = msg.payload || {};
+    const models = Array.isArray(payload.models) ? payload.models : [];
+    if (models.length && MODEL_REGISTRY[provider]) {
+      MODEL_REGISTRY[provider] = { ...MODEL_REGISTRY[provider], models };
+    }
+
+    ensureSelectedModel();
+    state.modelRefreshStatus = payload.source === "live" || payload.source === "cache" ? payload.source : "static";
+    state.modelRefreshMessage = payload.source === "live"
+      ? "Live model list loaded"
+      : payload.source === "cache"
+        ? "Cached model list loaded"
+        : payload.error || "Using bundled model list";
+    state.hasApiKey = providerIsConfigured(state.provider);
+    updateModelSwitcher();
+    if (state.activePanel === "settings") refreshPanelContent();
+  } catch (e: any) {
+    if (state.modelRefreshProvider !== provider) return;
+    state.modelRefreshStatus = "error";
+    state.modelRefreshMessage = e?.message || "Could not refresh model list";
+    if (state.activePanel === "settings") refreshPanelContent();
+  }
 }
 
 function updatePromptContext() {
@@ -1024,12 +1085,12 @@ function renderSettingsHTML(): string {
         const configured = state.configuredProviders[k] || p.local;
         indicator = configured ? " \u2713" : "";
       }
-      return `<option value="${k}" ${state.provider === k ? "selected" : ""}>${p.name}${indicator}</option>`;
+      return `<option value="${escapeHtml(k)}" ${state.provider === k ? "selected" : ""}>${escapeHtml(`${p.name}${indicator}`)}</option>`;
     }).join("");
 
   const prov = MODEL_REGISTRY[state.provider];
   const modelOpts = prov
-    ? prov.models.map(m => `<option value="${m.id}" ${state.model === m.id ? "selected" : ""}>${m.name}</option>`).join("")
+    ? prov.models.map(m => `<option value="${escapeHtml(m.id)}" ${state.model === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")
     : '<option value="">Select provider first</option>';
 
   const isLocal = prov?.local || false;
@@ -1043,6 +1104,16 @@ function renderSettingsHTML(): string {
   // Show connected status if current provider has a key
   const statusHtml = (providerHasKey || isLocal)
     ? `<div class="om-status om-status-success">${ICON.check} ${prov?.name || "Provider"} connected</div>` : "";
+
+  const modelStatusHtml = state.provider && state.modelRefreshProvider === state.provider && state.modelRefreshStatus
+    ? `<div class="om-model-refresh om-status ${
+        state.modelRefreshStatus === "error" ? "om-status-error" :
+        state.modelRefreshStatus === "live" ? "om-status-success" : "om-status-info"
+      }">${
+        state.modelRefreshStatus === "loading" ? '<span class="om-spinner"></span>' :
+        state.modelRefreshStatus === "live" ? ICON.check : ""
+      } ${escapeHtml(state.modelRefreshMessage)}</div>`
+    : "";
 
   const saveBtnText = state.saveStatus === "saving" ? '<span class="om-spinner"></span> Saving...'
     : state.saveStatus === "saved" ? `${ICON.check} Saved` : "Save";
@@ -1091,6 +1162,7 @@ function renderSettingsHTML(): string {
       <div class="om-field">
         <label class="om-label">Model</label>
         <select class="om-select" data-field="model"><option value="">Select Model...</option>${modelOpts}</select>
+        ${modelStatusHtml}
       </div>
       ${keySection}
       <button class="${saveBtnClass}" data-action="save-settings" ${saveBtnDisabled}>${saveBtnText}</button>
@@ -1197,7 +1269,8 @@ async function saveSettings() {
     if (apiKey && state.provider) {
       state.configuredProviders[state.provider] = true;
     }
-    state.hasApiKey = !!(apiKey || state.configuredProviders[state.provider]);
+    state.hasApiKey = providerIsConfigured(state.provider);
+    await refreshProviderModels(state.provider);
     state.saveStatus = "saved";
     updateSaveButton();
 

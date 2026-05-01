@@ -274,6 +274,7 @@ export const TOOLBAR_CSS = `
 .om-status { font-size: 11px; padding: 5px 8px; border-radius: 6px; text-align: center; display: flex; align-items: center; justify-content: center; gap: 4px; }
 .om-status-success { background: rgba(0, 184, 148, 0.06); color: #00b894; }
 .om-status-error { background: rgba(233, 69, 96, 0.06); color: #e94560; }
+.om-status-info { background: rgba(9, 132, 227, 0.06); color: #0984e3; }
 
 .om-key-hint { font-size: 10px; color: #444; margin-top: 3px; }
 .om-key-hint a { color: #7c6cf7; cursor: pointer; text-decoration: none; }

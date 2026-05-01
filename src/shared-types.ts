@@ -16,10 +16,14 @@ export type ClientMessageType =
   | "fs.read"
   | "fs.write"
   | "fs.delete"
+  | "fs.undo"
   | "fs.list"
+  | "fs.grep"
   | "llm.chat"
+  | "provider.models"
   | "config.get"
-  | "config.set";
+  | "config.set"
+  | "debug.logs";
 
 export interface HandshakePayload {
   token: string;
@@ -59,7 +63,11 @@ export type ServerMessageType =
   | "fs.content"
   | "fs.written"
   | "fs.deleted"
+  | "fs.undone"
   | "fs.tree"
+  | "fs.grep.result"
+  | "provider.models.result"
+  | "debug.logs"
   | "llm.chunk"
   | "llm.done"
   | "llm.error"
@@ -186,6 +194,7 @@ export interface ProviderInfo {
   keyPrefix: string;
   keyPlaceholder: string;
   local?: boolean;
+  keyUrl?: string;
 }
 
 export type ProviderRegistry = Record<string, ProviderInfo>;

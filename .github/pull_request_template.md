@@ -9,6 +9,7 @@
 - [ ] Refactor / cleanup
 - [ ] Documentation
 - [ ] New LLM provider
+- [ ] Security-sensitive change
 
 ## Changes
 
@@ -18,8 +19,17 @@
 
 - [ ] `npm run build` passes
 - [ ] `npm test` passes
-- [ ] `npx tsc --noEmit` passes
+- [ ] `npm run typecheck` passes
+- [ ] `npm run lint` passes
+- [ ] `npm run test:smoke` passes
+- [ ] `npm run check:pack` passes
 - [ ] Tested manually with a dev server (if applicable)
+
+## Impact Checklist
+
+- [ ] Security boundary reviewed (tokens, filesystem, proxy, WebSocket, API keys)
+- [ ] Provider/model behavior reviewed (catalog, request payload, streaming, key handling)
+- [ ] Toolbar/browser behavior reviewed manually when UI injection or panel behavior changed
 
 ## Notes
 

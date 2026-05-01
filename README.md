@@ -97,15 +97,15 @@ Stop with `Ctrl+C`. Nothing stays behind.
 
 ## Supported Providers
 
-14 providers, 70+ models. All pre-configured — select a provider, pick a model, paste your key.
+14 providers, 70+ models. Providers ship with a static fallback list, and OpenMagic fetches live model lists from the local server when the provider supports it. API keys stay server-side and are never sent to the toolbar.
 
 | Provider | Notable Models | Vision | Thinking / Reasoning |
 |----------|---------------|--------|---------------------|
-| **OpenAI** | GPT-5.4, GPT-5.4 Pro/Mini/Nano, o3, o4-mini, Codex Mini | Yes | reasoning_effort |
+| **OpenAI** | GPT-5.5, GPT-5.4 Pro/Mini/Nano, o3, o4-mini, Codex Mini | Yes | reasoning_effort |
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | Yes | Extended thinking (budget_tokens) |
 | **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Pro, 2.5 Flash | Yes | thinking_level |
 | **xAI (Grok)** | Grok 4.20, Grok 4.20 Reasoning, Grok 4.1 Fast | Yes | reasoning_effort |
-| **DeepSeek** | DeepSeek V3.2, DeepSeek R1 | -- | R1: reasoning_effort |
+| **DeepSeek** | DeepSeek V4 Flash/Pro, DeepSeek V3.2, DeepSeek R1 | -- | V4 Pro/R1: reasoning_effort |
 | **Mistral** | Large 3, Small 4, Codestral, Devstral 2, Magistral | Yes | Magistral: reasoning_effort |
 | **MiniMax** | MiniMax models | Varies | -- |
 | **Kimi** | Kimi models | Varies | -- |
@@ -115,6 +115,8 @@ Stop with `Ctrl+C`. Nothing stays behind.
 | **Groq** | Llama 4 Scout, Llama 3.3 70B, Qwen 3 32B | Llama 4 | -- |
 | **Ollama** | Any local model (free, private) | Varies | -- |
 | **OpenRouter** | 200+ models from all providers | Varies | Varies |
+
+Model lists are labeled internally as live, cached, or static. Cloud provider live lists are cached for 12 hours; local providers such as Ollama use a short cache so newly pulled models appear quickly.
 
 ---
 

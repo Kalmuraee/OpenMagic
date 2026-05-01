@@ -19,6 +19,7 @@ import type {
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
+import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -47,6 +48,32 @@ console.info = (...a: any[]) => { captureServerLog("info", ...a); _origInfo(...a
 
 interface ClientState {
   authenticated: boolean;
+}
+
+export type OperationCategory = "auth" | "read" | "write" | "delete" | "config" | "llm" | "debug" | "models";
+
+const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
+  handshake: "auth",
+  "fs.read": "read",
+  "fs.list": "read",
+  "fs.grep": "read",
+  "fs.write": "write",
+  "fs.undo": "write",
+  "fs.delete": "delete",
+  "config.get": "config",
+  "config.set": "config",
+  "llm.chat": "llm",
+  "provider.models": "models",
+  "debug.logs": "debug",
+};
+
+export function getOperationCategory(type: string): OperationCategory | null {
+  return OPERATION_CATEGORIES[type] || null;
+}
+
+export function authorizeOperation(type: string, authenticated: boolean): boolean {
+  if (type === "handshake") return true;
+  return authenticated && !!getOperationCategory(type);
 }
 
 /**
@@ -111,8 +138,13 @@ export function attachOpenMagic(
 
       const state = clientStates.get(ws)!;
 
-      if (!state.authenticated && msg.type !== "handshake") {
-        sendError(ws, "auth_required", "Handshake required");
+      if (!authorizeOperation(msg.type, state.authenticated)) {
+        const category = getOperationCategory(msg.type);
+        if (!state.authenticated && category) {
+          sendError(ws, "auth_required", "Handshake required", msg.id);
+        } else {
+          sendError(ws, "unknown_type", `Unknown message type: ${msg.type}`, msg.id);
+        }
         return;
       }
 
@@ -336,8 +368,28 @@ async function handleMessage(
           apiKeys: Object.fromEntries(
             Object.entries(config.apiKeys || {}).map(([k]) => [k, true])
           ),
+          providers: getToolbarRegistry(),
           detectedClis: cliStatuses,
         },
+      });
+      break;
+    }
+
+    case "provider.models": {
+      const payload = msg.payload as { provider?: string; refresh?: boolean } | undefined;
+      const provider = payload?.provider;
+      if (!provider) {
+        sendError(ws, "invalid_payload", "Missing provider", msg.id);
+        break;
+      }
+
+      const config = loadConfig();
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const result = await fetchProviderModels(provider, apiKey, { refresh: payload?.refresh });
+      send(ws, {
+        id: msg.id,
+        type: "provider.models.result",
+        payload: result,
       });
       break;
     }
@@ -440,7 +492,7 @@ function serveToolbarBundle(res: http.ServerResponse, token: string): void {
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "no-cache",
         });
-        res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n${content}`);
+        res.end(wrapToolbarBundle(content, token));
         return;
       }
     } catch {
@@ -452,5 +504,9 @@ function serveToolbarBundle(res: http.ServerResponse, token: string): void {
     "Content-Type": "application/javascript",
     "Access-Control-Allow-Origin": "*",
   });
-  res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`);
+  res.end(wrapToolbarBundle(`(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`, token));
+}
+
+export function wrapToolbarBundle(content: string, token: string): string {
+  return `(function(__OPENMAGIC_TOKEN__){\n${content}\n})(${JSON.stringify(token)});`;
 }

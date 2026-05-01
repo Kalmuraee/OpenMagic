@@ -1,0 +1,37 @@
+name: Toolbar Injection Bug
+description: Report a toolbar, proxy injection, or browser loading issue
+title: "[Toolbar]: "
+labels: ["bug", "toolbar"]
+body:
+  - type: input
+    id: framework
+    attributes:
+      label: Framework
+      placeholder: Vite + React, Next.js App Router, SvelteKit, plain HTML, etc.
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Local URL
+      placeholder: http://localhost:4567/
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe missing toolbar, broken panel behavior, console errors, or injection issues.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser Console Output
+      render: text
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.

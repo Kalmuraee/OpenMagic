@@ -1,0 +1,35 @@
+name: Provider Bug
+description: Report a provider, model catalog, or LLM request issue
+title: "[Provider]: "
+labels: ["bug", "provider"]
+body:
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: OpenAI, Anthropic, Gemini, DeepSeek, Ollama, OpenRouter, etc.
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: gpt-5.5, deepseek-v4-flash, claude-sonnet-4.6, etc.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include whether the issue is model listing, auth, streaming, tool use, vision, or response quality.
+    validations:
+      required: true
+  - type: textarea
+    id: debug-info
+    attributes:
+      label: Debug Info
+      description: Paste toolbar debug info with secrets removed.
+      render: text
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should OpenMagic have done?

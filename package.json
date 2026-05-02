@@ -59,7 +59,7 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@types/http-proxy": "^1.17.15",
-    "@types/node": "^22.10.0",
+    "@types/node": "^25.6.0",
     "@types/ws": "^8.5.13",
     "eslint": "^10.3.0",
     "tsup": "^8.3.5",

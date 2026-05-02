@@ -1,4 +1,4 @@
-import { decodeBase64Utf8 } from "./render-utils.js";
+import { decodeBase64Utf8, encodeBase64Utf8 } from "./render-utils.js";
 
 export interface PersistedToolbarState {
   messages?: Array<{ role: "system" | "user" | "assistant"; content: string }>;
@@ -30,6 +30,18 @@ export function saveToolbarState(state: {
         } catch {
           return message;
         }
+      }
+      if (message.content.startsWith("__APPLIED__") && message.content.length > 500) {
+        try {
+          const applied = JSON.parse(decodeBase64Utf8(message.content.slice(11)));
+          delete applied.patches;
+          return { ...message, content: `__APPLIED__${encodeBase64Utf8(JSON.stringify(applied))}` };
+        } catch {
+          return { ...message, content: "Applied patch group." };
+        }
+      }
+      if (message.content.startsWith("__REDO__")) {
+        return { ...message, content: "Patch group rolled back." };
       }
       return message;
     });

@@ -1,54 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-// Test the JSON extraction logic directly
-// We inline the function here since it's not exported
-
-function extractJsonFromResponse(content: string): string | null {
-  try { JSON.parse(content); return content; } catch {}
-
-  const mdMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (mdMatch?.[1]) {
-    const candidate = mdMatch[1].trim();
-    try { JSON.parse(candidate); return candidate; } catch {}
-  }
-
-  const start = content.indexOf('{');
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-
-  for (let i = start; i < content.length; i++) {
-    const ch = content[i];
-    if (escape) { escape = false; continue; }
-    if (ch === '\\' && inString) { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        const candidate = content.substring(start, i + 1);
-        try { JSON.parse(candidate); return candidate; } catch { break; }
-      }
-    }
-  }
-
-  if (depth > 0) {
-    let repaired = content.substring(start);
-    if (inString) repaired += '"';
-    while (depth > 0) { repaired += '}'; depth--; }
-    try { JSON.parse(repaired); return repaired; } catch {}
-  }
-
-  const explMatch = content.match(/"explanation"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (explMatch) {
-    return JSON.stringify({ modifications: [], explanation: JSON.parse('"' + explMatch[1] + '"') });
-  }
-
-  return null;
-}
+import { extractJsonFromResponse } from "../src/llm/proxy.js";
 
 describe("JSON extraction from LLM responses", () => {
   it("parses clean JSON", () => {

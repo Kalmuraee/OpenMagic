@@ -142,7 +142,7 @@ async function captureSimple(target?: HTMLElement): Promise<string | null> {
   ctx.font = "11px system-ui";
   ctx.fillText("(Full screenshot unavailable — context sent as metadata)", 20, 130);
 
-  return canvas.toDataURL("image/png");
+  return canvas.toDataURL("image/jpeg", 0.8);
 }
 
 function cloneWithStyles(source: HTMLElement, depth: number, maxDepth: number): HTMLElement | null {

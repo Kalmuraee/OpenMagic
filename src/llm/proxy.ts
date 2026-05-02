@@ -10,7 +10,7 @@ interface LlmChatParams {
   context: LlmContext;
 }
 
-function extractJsonFromResponse(content: string): string | null {
+export function extractJsonFromResponse(content: string): string | null {
   // 1. Try direct JSON.parse (clean response)
   try { JSON.parse(content); return content; } catch {}
 

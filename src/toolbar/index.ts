@@ -36,8 +36,20 @@ type ToolbarModelInfo = {
   name: string;
   source?: "live" | "static" | "cache";
   capabilities?: { vision?: boolean };
+  limits?: { contextTokens?: number; maxOutputTokens?: number };
+  pricing?: { inputPerMTok?: number; outputPerMTok?: number; cachedInputPerMTok?: number };
 };
 type ToolbarProviderInfo = { name: string; models: ToolbarModelInfo[]; keyPlaceholder: string; local?: boolean; keyUrl?: string };
+type RetryPromptRequest = {
+  text: string;
+  context: any;
+  provider: string;
+  model: string;
+};
+type RedoPatchRequest = {
+  patches: FilePatch[];
+  files: string[];
+};
 let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   "claude-code": { name: "Claude Code (CLI)", keyPlaceholder: "not required", local: true, models: [
     { id: "claude-code", name: "Claude Code" },
@@ -126,6 +138,9 @@ const state = {
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
   groundedFileReasons: {} as Record<string, string[]>,
+  lastPromptRetry: null as RetryPromptRequest | null,
+  lastRedoPatch: null as RedoPatchRequest | null,
+  sessionEstimatedCost: 0,
   minimized: false,
 };
 
@@ -384,6 +399,7 @@ function attachGlobalEvents(root: HTMLElement) {
       sendPrompt();
     }
   });
+  $promptInput.addEventListener("input", updatePromptContext);
 
   // File input change handler
   const fileInput = root.querySelector(".om-file-input") as HTMLInputElement;
@@ -455,12 +471,17 @@ function attachGlobalEvents(root: HTMLElement) {
       }
       return;
     }
-    // Ctrl/Cmd + Shift + K: focus prompt input (Shift avoids stealing Cmd+K from host apps)
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "k" || e.key === "K")) {
+    // Ctrl/Cmd + K: focus prompt input. Shift+K is kept as a compatibility shortcut.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       if (!state.panelOpen) openPanel("chat");
       $promptInput.focus();
       return;
+    }
+    // Ctrl/Cmd + Shift + Z: redo the last rolled-back patch group when available.
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "z" || e.key === "Z")) {
+      const redoBtn = shadow.querySelector('[data-action="redo-patch"]') as HTMLElement;
+      if (redoBtn) { e.preventDefault(); redoPatch(redoBtn); return; }
     }
     // Ctrl/Cmd + Z: undo last applied diff (only when toolbar is focused)
     if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
@@ -575,7 +596,7 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
 
     const groupId = result.payload.groupId || "";
     const idx = card?.dataset.diffIdx;
-    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file] }));
+    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file], patches: [patch] }));
     const message = `__APPLIED__${appliedPayload}`;
     if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: message };
     else state.messages.push({ role: "system", content: message });
@@ -663,13 +684,30 @@ async function undoDiff(target: HTMLElement) {
   refreshPanelContent();
 }
 
+function findAppliedPatchPayload(groupId: string): { patches?: FilePatch[]; files?: string[] } | null {
+  for (const message of state.messages) {
+    if (!message.content.startsWith("__APPLIED__")) continue;
+    try {
+      const payload = JSON.parse(decodeBase64Utf8(message.content.slice(11)));
+      if (payload.groupId === groupId) return payload;
+    } catch {}
+  }
+  return null;
+}
+
 async function rollbackPatch(target: HTMLElement) {
   const groupId = target.dataset.groupId;
   if (!groupId) return;
   try {
+    const applied = findAppliedPatchPayload(groupId);
     const result = await ws.request("fs.patch.rollback", { groupId });
     if (result?.payload?.ok) {
-      state.messages.push({ role: "system", content: "Patch group rolled back. Reloading..." });
+      if (Array.isArray(applied?.patches) && applied.patches.length) {
+        state.lastRedoPatch = { patches: applied.patches, files: applied.files || applied.patches.map((patch) => patch.file) };
+        state.messages.push({ role: "system", content: `__REDO__${encodeBase64Utf8(JSON.stringify(state.lastRedoPatch))}` });
+      } else {
+        state.messages.push({ role: "system", content: "Patch group rolled back. Reloading..." });
+      }
       refreshPanelContent();
       setTimeout(() => { window.location.reload(); }, 1000);
     } else {
@@ -678,6 +716,37 @@ async function rollbackPatch(target: HTMLElement) {
     }
   } catch (e: any) {
     state.messages.push({ role: "system", content: `Could not rollback patch group - ${e.message}` });
+    refreshPanelContent();
+  }
+}
+
+async function redoPatch(target: HTMLElement) {
+  let redo = state.lastRedoPatch;
+  if (target.dataset.redo) {
+    try { redo = JSON.parse(decodeBase64Utf8(target.dataset.redo)); } catch {}
+  }
+  if (!redo?.patches?.length) return;
+  try {
+    const preview = await ws.request("fs.patch.preview", { patches: redo.patches });
+    if (!preview?.payload?.ok) {
+      state.messages.push({ role: "system", content: `Redo failed before writing. ${patchFailureMessage(preview?.payload, "Could not preview patch group")}` });
+      refreshPanelContent();
+      return;
+    }
+    const result = await ws.request("fs.patch.apply", { patches: redo.patches });
+    if (!result?.payload?.ok || !result.payload.applied) {
+      state.messages.push({ role: "system", content: `Redo failed before writing. ${patchFailureMessage(result?.payload, "Could not reapply patch group")}` });
+      refreshPanelContent();
+      return;
+    }
+    const files = redo.files || redo.patches.map((patch) => patch.file);
+    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId: result.payload.groupId, files, patches: redo.patches }));
+    state.messages.push({ role: "system", content: `__APPLIED__${appliedPayload}` });
+    state.lastRedoPatch = null;
+    refreshPanelContent();
+    setTimeout(() => { window.location.reload(); }, 1000);
+  } catch (e: any) {
+    state.messages.push({ role: "system", content: `Redo failed - ${e.message}` });
     refreshPanelContent();
   }
 }
@@ -774,7 +843,7 @@ async function handleAction(action: string, target: HTMLElement) {
         }
 
         const files = patches.map((patch) => patch.file);
-        const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId: result.payload.groupId, files }));
+        const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId: result.payload.groupId, files, patches }));
         const message = `__APPLIED__${appliedPayload}`;
         const [firstIdx, ...rest] = diffIndexes;
         if (Number.isInteger(firstIdx)) state.messages[firstIdx] = { role: "system", content: message };
@@ -809,8 +878,13 @@ async function handleAction(action: string, target: HTMLElement) {
     }
     case "undo-diff": undoDiff(target); break;
     case "rollback-patch": rollbackPatch(target); break;
+    case "redo-patch": redoPatch(target); break;
+    case "retry-prompt": retryPrompt(target); break;
     case "clear-chat": {
       state.messages = [];
+      state.sessionEstimatedCost = 0;
+      state.lastPromptRetry = null;
+      state.lastRedoPatch = null;
       clearToolbarState();
       refreshPanelContent();
       break;
@@ -900,6 +974,28 @@ function selectedModelInfo(): ToolbarModelInfo | undefined {
   return MODEL_REGISTRY[state.provider]?.models.find((model) => model.id === state.model);
 }
 
+function fallbackInputPricePerMTok(provider: string): number | undefined {
+  if (!provider || MODEL_REGISTRY[provider]?.local) return 0;
+  if (provider === "deepseek" || provider === "groq" || provider === "mistral") return 0.3;
+  if (provider === "google") return 1;
+  if (provider === "openai" || provider === "anthropic") return 3;
+  return 1;
+}
+
+function estimatePromptUsage(promptText = $promptInput?.value || ""): { tokens: number; cost: number | null; warning: boolean } {
+  const contextChars = (state.selectedElement?.outerHTML?.length || 0)
+    + (state.screenshot ? 1000 : 0)
+    + state.attachments.length * 1000
+    + state.groundedFiles.length * 4000
+    + promptText.length;
+  const tokens = Math.max(0, Math.round(contextChars / 4));
+  if (tokens === 0) return { tokens: 0, cost: null, warning: false };
+  const model = selectedModelInfo();
+  const inputPerMTok = model?.pricing?.inputPerMTok ?? fallbackInputPricePerMTok(state.provider);
+  const cost = inputPerMTok === undefined ? null : (tokens / 1_000_000) * inputPerMTok;
+  return { tokens, cost, warning: cost !== null && cost > 0.5 };
+}
+
 function selectedModelSupportsVision(): boolean {
   const model = selectedModelInfo();
   if (!model?.capabilities) return true;
@@ -984,14 +1080,13 @@ function updatePromptContext() {
       .join("\n");
     chips.push(`<span class="om-prompt-chip" title="${escapeHtml(reasonText)}">${state.groundedFiles.length} files grounded</span>`);
   }
-  // Estimate tokens from context (rough: ~4 chars per token)
-  const contextChars = (state.selectedElement?.outerHTML?.length || 0)
-    + (state.screenshot ? 1000 : 0)
-    + state.groundedFiles.length * 4000; // average file size
-  if (contextChars > 2000) {
-    const estTokens = Math.round(contextChars / 4);
+  const usage = estimatePromptUsage();
+  if (usage.tokens > 500) {
+    const estTokens = usage.tokens;
     const label = estTokens > 10000 ? `~${Math.round(estTokens / 1000)}K tokens` : `~${estTokens} tokens`;
-    chips.push(`<span class="om-prompt-chip om-prompt-chip-tokens">${label}</span>`);
+    const costLabel = usage.cost === null ? "" : `, ~$${usage.cost < 0.01 ? usage.cost.toFixed(4) : usage.cost.toFixed(2)} est.`;
+    const sessionLabel = state.sessionEstimatedCost > 0 ? ` Session: ~$${state.sessionEstimatedCost.toFixed(2)}` : "";
+    chips.push(`<span class="om-prompt-chip om-prompt-chip-tokens${usage.warning ? " om-prompt-chip-warn" : ""}" title="${escapeHtml(`${label}${costLabel}.${sessionLabel}`)}">${escapeHtml(`${label}${costLabel}`)}</span>`);
   }
   $promptCtx.innerHTML = chips.join("");
 }
@@ -1211,9 +1306,17 @@ function renderChatHTML(): string {
         return `<div class="om-msg om-msg-system">Applied patch group</div>`;
       }
     }
+    if (m.content.startsWith("__REDO__")) {
+      const redoB64 = m.content.slice(8);
+      return `<div class="om-msg om-msg-system">Patch group rolled back. <button class="om-undo-btn" data-action="redo-patch" data-redo="${redoB64}">Redo</button></div>`;
+    }
     if (m.content.startsWith("__PLAN_CONFIRM__")) {
       const promptB64 = m.content.slice(16);
       return `<div class="om-msg om-msg-system">Plan ready. <button class="om-btn om-btn-sm" data-action="confirm-plan" data-prompt="${promptB64}">Generate changes</button></div>`;
+    }
+    if (m.content.startsWith("__RETRY__")) {
+      const promptB64 = m.content.slice(9);
+      return `<div class="om-msg om-msg-system">Response was interrupted. <button class="om-btn om-btn-sm" data-action="retry-prompt" data-prompt="${promptB64}">Retry</button></div>`;
     }
     if (m.content.startsWith("Applied change to ")) {
       const file = m.content.replace("Applied change to ", "").replace(/ \(fuzzy match.*?\)/g, "").replace(". Reloading...", "");
@@ -1354,7 +1457,22 @@ function updateSaveButton() {
 
 // ── Send Prompt ──────────────────────────────────────────────────
 
-async function sendPrompt(overrideText?: string, skipPlan = false) {
+async function retryPrompt(target: HTMLElement) {
+  let text = "";
+  try { text = decodeBase64Utf8(target.dataset.prompt || ""); } catch {}
+  const retry = state.lastPromptRetry && (!text || state.lastPromptRetry.text === text)
+    ? state.lastPromptRetry
+    : null;
+  if (retry) {
+    state.provider = retry.provider;
+    state.model = retry.model;
+    await sendPrompt(retry.text, true, retry.context);
+  } else if (text) {
+    await sendPrompt(text, true);
+  }
+}
+
+async function sendPrompt(overrideText?: string, skipPlan = false, contextOverride?: any) {
   const text = (overrideText ?? $promptInput.value).trim();
   if (!text || state.streaming) return;
 
@@ -1368,6 +1486,8 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
     return;
   }
 
+  const usageBeforeSend = estimatePromptUsage(text);
+
   // Add user message
   state.messages.push({ role: "user", content: text });
   state.streaming = true;
@@ -1378,9 +1498,9 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
   openPanel("chat");
 
   // Build context — includes page info, selected element, screenshot, network/console logs
-  const context: any = buildContext(state.selectedElement, state.screenshot);
-  context.pageUrl = window.location.href;
-  context.pageTitle = document.title;
+  const context: any = contextOverride || buildContext(state.selectedElement, state.screenshot);
+  context.pageUrl = context.pageUrl || window.location.href;
+  context.pageTitle = context.pageTitle || document.title;
 
   // Include image attachments (for vision-capable models)
   if (state.attachments.length > 0) {
@@ -1392,6 +1512,11 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
     context.attachments = [...state.attachments];
   }
 
+  if (usageBeforeSend.cost !== null) {
+    state.sessionEstimatedCost += usageBeforeSend.cost;
+    updatePromptContext();
+  }
+
   // Grounding: read project tree + score and read relevant source files
   const MAX_GROUNDED_FILES = 8;
   const MAX_GROUNDED_CHARS = 48000;
@@ -1401,7 +1526,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
   const statusEl = $panelBody.querySelector(".om-msg-assistant:last-child");
   if (statusEl) statusEl.innerHTML = '<span class="om-spinner"></span> Reading project files...';
 
-  try {
+  if (!contextOverride) try {
     const grounded = await ws.request("project.ground", {
       pageUrl: window.location.href,
       promptText: text,
@@ -1417,7 +1542,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
     }
   } catch { /* server grounding is best-effort */ }
 
-  if (!context.files) {
+  if (!contextOverride && !context.files) {
   try {
     const treeResult = await ws.request("fs.list", {});
     if (treeResult?.payload?.projectTree) {
@@ -1760,6 +1885,13 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
   } catch { /* grounding is best-effort */ }
   }
 
+  state.lastPromptRetry = {
+    text,
+    context: JSON.parse(JSON.stringify(context)),
+    provider: state.provider,
+    model: state.model,
+  };
+
   // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry
   const MAX_RETRIES = 4;
   let retryCount = 0;
@@ -1943,8 +2075,8 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
   } catch (e: any) {
     // Stream disconnect recovery: if we have partial content, show it
     if (state.streamContent.trim().length > 20) {
-      state.messages.push({ role: "assistant", content: state.streamContent.trim() });
-      state.messages.push({ role: "system", content: `Response interrupted: ${e.message}. Partial response shown above.` });
+      state.messages.push({ role: "assistant", content: `Response was interrupted. Partial content:\n\n${state.streamContent.trim()}` });
+      state.messages.push({ role: "system", content: `__RETRY__${encodeBase64Utf8(text)}` });
     } else {
       state.messages.push({ role: "system", content: `Error: ${e.message}` });
     }

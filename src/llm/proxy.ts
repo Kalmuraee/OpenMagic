@@ -1,27 +1,6 @@
 import type { ChatMessage, LlmContext, LlmResponse } from "../shared-types.js";
-import { chatOpenAICompatible } from "./openai.js";
-import { chatAnthropic } from "./anthropic.js";
-import { chatGoogle } from "./google.js";
-import { chatClaudeCode } from "./claude-code.js";
-import { chatCodexCli } from "./codex-cli.js";
-import { chatGeminiCli } from "./gemini-cli.js";
 import { invalidateCliCache } from "./cli-detect.js";
-
-// Providers that use OpenAI-compatible API format
-const OPENAI_COMPATIBLE_PROVIDERS = new Set([
-  "openai",
-  "deepseek",
-  "groq",
-  "mistral",
-  "xai",
-  "ollama",
-  "openrouter",
-  "minimax",
-  "moonshot",
-  "qwen",
-  "zhipu",
-  "doubao",
-]);
+import { getExecutionAdapter } from "./execution-adapters.js";
 
 interface LlmChatParams {
   provider: string;
@@ -116,30 +95,13 @@ export async function handleLlmChat(
   };
 
   try {
-    if (provider === "claude-code") {
-      await chatClaudeCode(messages, context, onChunk, wrappedOnDone, cliOnError);
-    } else if (provider === "codex-cli") {
-      await chatCodexCli(messages, context, onChunk, wrappedOnDone, cliOnError);
-    } else if (provider === "gemini-cli") {
-      await chatGeminiCli(messages, context, onChunk, wrappedOnDone, cliOnError);
-    } else if (provider === "anthropic") {
-      await chatAnthropic(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
-    } else if (provider === "google") {
-      await chatGoogle(model, apiKey, messages, context, onChunk, wrappedOnDone, onError);
-    } else if (OPENAI_COMPATIBLE_PROVIDERS.has(provider)) {
-      await chatOpenAICompatible(
-        provider,
-        model,
-        apiKey,
-        messages,
-        context,
-        onChunk,
-        wrappedOnDone,
-        onError
-      );
-    } else {
+    const adapter = getExecutionAdapter(provider);
+    if (!adapter) {
       onError(`Unsupported provider: ${provider}. Check your Settings.`);
+      return;
     }
+    const adapterOnError = adapter.id.endsWith("-cli") ? cliOnError : onError;
+    await adapter.chat(model, apiKey, messages, context, onChunk, wrappedOnDone, adapterOnError);
   } catch (e: unknown) {
     const msg = (e as Error).message || "Unknown error";
     if (msg.includes("fetch") || msg.includes("ECONNREFUSED") || msg.includes("network")) {

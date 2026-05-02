@@ -1,10 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { clearModelCache, fetchProviderModels, getToolbarRegistry } from "../src/llm/models.js";
 
 describe("model registry", () => {
+  let cacheDir: string;
+
+  beforeEach(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), "openmagic-model-cache-"));
+    vi.stubEnv("OPENMAGIC_MODEL_CACHE_FILE", join(cacheDir, "model-cache.json"));
+  });
+
   afterEach(() => {
     clearModelCache();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    rmSync(cacheDir, { recursive: true, force: true });
   });
 
   it("exposes the server registry in toolbar-safe shape", () => {
@@ -60,6 +72,23 @@ describe("model registry", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(cached.models).toContainEqual(expect.objectContaining({ id: "provider-model-1", source: "cache" }));
     expect(refreshed.models).toContainEqual(expect.objectContaining({ id: "provider-model-2", source: "live" }));
+  });
+
+  it("persists live model cache to disk and reads it after memory cache is cleared", async () => {
+    const cacheFile = join(cacheDir, "model-cache.json");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      data: [{ id: "persisted-model" }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await fetchProviderModels("openai", "sk-test", { now: 1000 });
+    clearModelCache();
+    const second = await fetchProviderModels("openai", "sk-test", { now: 2000 });
+
+    expect(first.source).toBe("live");
+    expect(second.source).toBe("cache");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(cacheFile, "utf-8")).providers.openai.models).toContainEqual(expect.objectContaining({ id: "persisted-model" }));
   });
 
   it("maps DeepSeek V4 aliases in the static catalog", () => {

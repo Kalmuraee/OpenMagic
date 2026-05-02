@@ -335,6 +335,8 @@ export const TOOLBAR_CSS = `
 /* ── Diff Cards ──────────────────────────────────────── */
 .om-diff-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 10px; margin: 4px 0; font-size: 12px; }
 .om-diff-file { color: #a29bfe; font-size: 11px; font-weight: 600; margin-bottom: 6px; font-family: 'SF Mono', Consolas, monospace; }
+.om-diff-select { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+.om-diff-select input { flex: 0 0 auto; margin: 0; accent-color: #6c5ce7; }
 .om-diff-removed { background: rgba(233,69,96,0.08); color: #fab1a0; padding: 4px 8px; border-radius: 4px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin-bottom: 4px; }
 .om-diff-added { background: rgba(0,184,148,0.08); color: #55efc4; padding: 4px 8px; border-radius: 4px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin-bottom: 6px; }
 .om-diff-lines { max-height: 300px; overflow-y: auto; border-radius: 6px; background: rgba(0,0,0,0.2); margin-bottom: 6px; font-family: 'SF Mono', Consolas, monospace; font-size: 11px; line-height: 1.5; }

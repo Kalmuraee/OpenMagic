@@ -4,6 +4,7 @@ import { inspectElement, showHighlight, hideHighlight, type SelectedElement } fr
 import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
+import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
 
@@ -124,11 +125,13 @@ const state = {
   networkCapture: false,       // whether network panel is showing
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
+  groundedFileReasons: {} as Record<string, string[]>,
   minimized: false,
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
 let shadow: ShadowRoot;
+let $host: HTMLElement;
 let $toolbar: HTMLDivElement;
 let $promptInput: HTMLInputElement;
 let $promptCtx: HTMLDivElement;
@@ -138,39 +141,18 @@ let $panelBody: HTMLDivElement;
 // ── Initialize ───────────────────────────────────────────────────
 // ── State Persistence (survives HMR page reloads) ────────────────
 function saveState() {
-  try {
-    // Prune messages for storage: keep first 5 + last 45, strip large diff payloads
-    let msgs = state.messages;
-    if (msgs.length > 50) {
-      msgs = [...msgs.slice(0, 5), ...msgs.slice(-45)];
-    }
-    const prunedMsgs = msgs.map(m => {
-      if (m.content.startsWith("__DIFF__") && m.content.length > 500) {
-        try {
-          const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
-          return { ...m, content: `Pending ${diff.type || "edit"} for ${diff.file || "file"} was not restored after reload.` };
-        } catch { return m; }
-      }
-      return m;
-    });
-    sessionStorage.setItem("__om_state__", JSON.stringify({
-      messages: prunedMsgs,
-      provider: state.provider,
-      model: state.model,
-      panelOpen: state.panelOpen,
-      activePanel: state.activePanel,
-    }));
-  } catch { /* quota exceeded or unavailable */ }
+  saveToolbarState(state);
 }
 
 function restoreState() {
-  try {
-    const saved = JSON.parse(sessionStorage.getItem("__om_state__") || "{}");
-    if (saved.messages?.length) state.messages = saved.messages;
-    if (saved.provider) state.provider = saved.provider;
-    if (saved.model) state.model = saved.model;
-    if (saved.panelOpen) { state.panelOpen = saved.panelOpen; state.activePanel = saved.activePanel || ""; }
-  } catch { /* parse error or unavailable */ }
+  const saved = restoreToolbarState();
+  if (saved.messages?.length) state.messages = saved.messages;
+  if (saved.provider) state.provider = saved.provider;
+  if (saved.model) state.model = saved.model;
+  if (saved.panelOpen) {
+    state.panelOpen = saved.panelOpen;
+    state.activePanel = saved.activePanel === "chat" || saved.activePanel === "settings" ? saved.activePanel : "";
+  }
 }
 
 function init() {
@@ -180,6 +162,7 @@ function init() {
   restoreState();
 
   const host = document.createElement("openmagic-toolbar");
+  $host = host;
   host.dataset.openmagic = "true";
   shadow = host.attachShadow({ mode: "closed" });
 
@@ -200,6 +183,8 @@ function init() {
   $panel = root.querySelector(".om-panel")!;
   $panelBody = root.querySelector(".om-panel-body")!;
 
+  host.setAttribute("data-openmagic-ready", "true");
+  host.addEventListener("openmagic:test-open-settings", () => openPanel("settings"));
   document.body.appendChild(host);
 
   // Attach event delegation ONCE
@@ -307,7 +292,9 @@ function buildStaticDOM(): string {
       <div class="om-apply-bar om-hidden">
         <span class="om-apply-bar-text"></span>
         <div class="om-diff-actions">
+          <button class="om-btn om-btn-sm" data-action="apply-selected">Apply Selected</button>
           <button class="om-btn om-btn-sm" data-action="apply-all">Apply All</button>
+          <button class="om-btn-secondary om-btn-sm" data-action="reject-selected">Reject Selected</button>
           <button class="om-btn-secondary om-btn-sm" data-action="reject-all">Reject All</button>
         </div>
       </div>
@@ -635,6 +622,13 @@ function rejectDiff(target: HTMLElement) {
   scrollChatToBottom();
 }
 
+function getSelectedDiffActionButtons(action: "apply-diff" | "reject-diff"): HTMLElement[] {
+  return Array.from(shadow.querySelectorAll(".om-diff-card"))
+    .filter((card) => card.querySelector("[data-patch-select]:checked"))
+    .map((card) => card.querySelector(`[data-action="${action}"]`))
+    .filter((button): button is HTMLElement => button instanceof HTMLElement);
+}
+
 function updateApplyBar(count: number) {
   const bar = shadow.querySelector(".om-apply-bar") as HTMLElement;
   if (!bar) return;
@@ -743,8 +737,11 @@ async function handleAction(action: string, target: HTMLElement) {
     }
     case "apply-diff": applyDiff(target); break;
     case "reject-diff": rejectDiff(target); break;
+    case "apply-selected":
     case "apply-all": {
-      const buttons = Array.from(shadow.querySelectorAll(`[data-action="apply-diff"]`));
+      const buttons = action === "apply-selected"
+        ? getSelectedDiffActionButtons("apply-diff")
+        : Array.from(shadow.querySelectorAll(`[data-action="apply-diff"]`));
       if (buttons.length === 0) break;
 
       const patches: FilePatch[] = [];
@@ -794,6 +791,14 @@ async function handleAction(action: string, target: HTMLElement) {
       }
       break;
     }
+    case "reject-selected": {
+      const buttons = getSelectedDiffActionButtons("reject-diff");
+      for (const btn of buttons) {
+        rejectDiff(btn);
+      }
+      hideApplyBar();
+      break;
+    }
     case "reject-all": {
       const buttons = shadow.querySelectorAll(`[data-action="reject-diff"]`);
       for (const btn of Array.from(buttons)) {
@@ -806,7 +811,7 @@ async function handleAction(action: string, target: HTMLElement) {
     case "rollback-patch": rollbackPatch(target); break;
     case "clear-chat": {
       state.messages = [];
-      try { sessionStorage.removeItem("__om_state__"); } catch {}
+      clearToolbarState();
       refreshPanelContent();
       break;
     }
@@ -886,6 +891,9 @@ function updateModelSwitcher() {
     `<option value="${escapeHtml(m.id)}" ${state.model === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`
   ).join("");
   sel.innerHTML = opts;
+  $host?.setAttribute("data-openmagic-provider", state.provider || "");
+  $host?.setAttribute("data-openmagic-model-count", String(prov.models.length));
+  $host?.setAttribute("data-openmagic-model-ids", prov.models.map((model) => model.id).join(","));
 }
 
 function selectedModelInfo(): ToolbarModelInfo | undefined {
@@ -970,7 +978,11 @@ function updatePromptContext() {
     chips.push(`<span class="om-prompt-chip">${state.attachments.length} image${state.attachments.length > 1 ? "s" : ""}</span>`);
   }
   if (state.groundedFiles.length) {
-    chips.push(`<span class="om-prompt-chip">${state.groundedFiles.length} files grounded</span>`);
+    const reasonText = state.groundedFiles
+      .slice(0, 6)
+      .map((file) => `${file}: ${(state.groundedFileReasons[file] || ["selected"]).join(", ")}`)
+      .join("\n");
+    chips.push(`<span class="om-prompt-chip" title="${escapeHtml(reasonText)}">${state.groundedFiles.length} files grounded</span>`);
   }
   // Estimate tokens from context (rough: ~4 chars per token)
   const contextChars = (state.selectedElement?.outerHTML?.length || 0)
@@ -989,6 +1001,7 @@ function updatePromptContext() {
 function openPanel(panel: "chat" | "settings") {
   state.panelOpen = true;
   state.activePanel = panel;
+  $host?.setAttribute("data-openmagic-panel", panel);
   $panel.classList.remove("om-hidden");
   const title = shadow.querySelector(".om-panel-title");
   if (title) title.textContent = panel === "settings" ? "Settings" : "Chat";
@@ -999,6 +1012,7 @@ function openPanel(panel: "chat" | "settings") {
 function closePanel() {
   state.panelOpen = false;
   state.activePanel = "";
+  $host?.setAttribute("data-openmagic-panel", "");
   $panel.classList.add("om-hidden");
   updatePillButtons();
 }
@@ -1176,7 +1190,7 @@ function renderChatHTML(): string {
           ? `<div class="om-diff-line removed">- ${escapeHtml(diff.file)}</div>`
           : renderLineDiff(diff.search || "", diff.replace || "");
         return `<div class="om-diff-card" data-diff-idx="${i}">
-          <div class="om-diff-file">${escapeHtml(label)}: ${escapeHtml(diff.file)}</div>
+          <div class="om-diff-file"><label class="om-diff-select"><input type="checkbox" data-patch-select checked /> ${escapeHtml(label)}: ${escapeHtml(diff.file)}</label></div>
           <div class="om-diff-lines">${diffHtml}</div>
           <div class="om-diff-actions">
             <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-patch-type="${escapeHtml(diff.type || (isCreate ? "create" : "replace"))}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
@@ -1397,6 +1411,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
     if (Array.isArray(files) && files.length) {
       context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
       state.groundedFiles = files.map((file: any) => file.path);
+      state.groundedFileReasons = Object.fromEntries(files.map((file: any) => [file.path, Array.isArray(file.reasons) ? file.reasons : []]));
       const fileNames = state.groundedFiles.map((file) => file.split("/").pop()).join(", ");
       if (statusEl) statusEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Thinking... (${files.length} files: ${fileNames})`)}`;
     }
@@ -1740,6 +1755,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
       if (statusEl) statusEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Thinking... (${files.length} files: ${fileNames})`)}`;
     }
     state.groundedFiles = files.map((f: {path: string}) => f.path);
+    state.groundedFileReasons = Object.fromEntries(state.groundedFiles.map((file) => [file, ["fallback heuristic"]]));
   } catch { /* grounding is best-effort */ }
   }
 
@@ -1961,6 +1977,7 @@ async function runPlanBeforeEdit(text: string) {
     if (Array.isArray(files) && files.length) {
       context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
       state.groundedFiles = files.map((file: any) => file.path);
+      state.groundedFileReasons = Object.fromEntries(files.map((file: any) => [file.path, Array.isArray(file.reasons) ? file.reasons : []]));
     }
   } catch {}
 

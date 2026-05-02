@@ -42,3 +42,8 @@ export function saveConfig(updates: Partial<OpenMagicConfig>): { ok: boolean; er
 export function getConfigPath(): string {
   return CONFIG_FILE;
 }
+
+export function getConfigDir(): string {
+  ensureConfigDir();
+  return CONFIG_DIR;
+}

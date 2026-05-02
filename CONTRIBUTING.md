@@ -133,10 +133,11 @@ npm run build      # build CLI + toolbar
 npm run typecheck  # type check
 npm run lint       # eslint
 npm run test:smoke # proxy and toolbar injection smoke test
+npm run test:browser # Playwright toolbar smoke test
 npm run check:pack # npm package dry run
 ```
 
-Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection, provider catalogs). The smoke test covers the built proxy, toolbar injection, and toolbar bundle syntax; still test toolbar UX manually when changing UI behavior.
+Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection, provider catalogs). The smoke tests cover the built proxy, toolbar injection, toolbar bundle syntax, and the browser-injected settings/model selector path; still test complex toolbar UX manually when changing UI behavior.
 
 ---
 
@@ -151,6 +152,7 @@ Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for serve
    npm run typecheck
    npm run lint
    npm run test:smoke
+   npm run test:browser
    ```
 4. If you changed proxy, toolbar, or LLM logic, test manually with a dev server
 5. Fill out the PR template and submit against `main`

@@ -65,6 +65,14 @@ jobs:
         if: steps.version-check.outputs.changed == 'true'
         run: npm run test:smoke
 
+      - name: Install browser
+        if: steps.version-check.outputs.changed == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm run test:browser
+
       - name: Check package contents
         if: steps.version-check.outputs.changed == 'true'
         run: npm run check:pack

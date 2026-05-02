@@ -40,6 +40,14 @@ jobs:
       - name: Smoke test
         run: npm run test:smoke
 
+      - name: Install browser
+        if: matrix.node-version == 22
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        if: matrix.node-version == 22
+        run: npm run test:browser
+
       - name: Check package contents
         run: npm run check:pack
 

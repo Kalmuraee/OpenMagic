@@ -31,11 +31,16 @@ describe("operation authorization", () => {
       "fs.grep",
       "fs.write",
       "fs.undo",
+      "fs.patch.preview",
+      "fs.patch.apply",
+      "fs.patch.rollback",
       "fs.delete",
       "config.get",
       "config.set",
       "llm.chat",
       "provider.models",
+      "provider.testModel",
+      "project.ground",
       "debug.logs",
     ];
 

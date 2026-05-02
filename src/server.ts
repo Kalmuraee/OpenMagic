@@ -20,6 +20,9 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
+import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
+import { groundProject, type ProjectGroundRequest } from "./project-grounding.js";
+import { testProviderModel } from "./llm/provider-test.js";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -59,11 +62,16 @@ const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
   "fs.grep": "read",
   "fs.write": "write",
   "fs.undo": "write",
+  "fs.patch.preview": "write",
+  "fs.patch.apply": "write",
+  "fs.patch.rollback": "write",
   "fs.delete": "delete",
   "config.get": "config",
   "config.set": "config",
   "llm.chat": "llm",
   "provider.models": "models",
+  "provider.testModel": "models",
+  "project.ground": "read",
   "debug.logs": "debug",
 };
 
@@ -286,6 +294,43 @@ async function handleMessage(
       break;
     }
 
+    case "fs.patch.preview": {
+      const payload = msg.payload as PatchGroupRequest | undefined;
+      if (!payload?.patches?.length) {
+        sendError(ws, "invalid_payload", "Missing patches", msg.id);
+        break;
+      }
+      const result = previewPatchGroup(roots[0] || process.cwd(), payload);
+      send(ws, { id: msg.id, type: "fs.patch.previewed", payload: result });
+      break;
+    }
+
+    case "fs.patch.apply": {
+      const payload = msg.payload as PatchGroupRequest | undefined;
+      if (!payload?.patches?.length) {
+        sendError(ws, "invalid_payload", "Missing patches", msg.id);
+        break;
+      }
+      const result = applyPatchGroup(roots[0] || process.cwd(), payload);
+      send(ws, { id: msg.id, type: "fs.patch.applied", payload: result });
+      break;
+    }
+
+    case "fs.patch.rollback": {
+      const payload = msg.payload as { groupId?: string } | undefined;
+      if (!payload?.groupId) {
+        sendError(ws, "invalid_payload", "Missing groupId", msg.id);
+        break;
+      }
+      const result = rollbackPatchGroup(roots[0] || process.cwd(), payload.groupId);
+      if (!result.ok) {
+        sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
+      } else {
+        send(ws, { id: msg.id, type: "fs.patch.rolledback", payload: result });
+      }
+      break;
+    }
+
     case "fs.list": {
       const payload = msg.payload as FsListPayload | undefined;
       const root = payload?.root || roots[0];
@@ -363,6 +408,7 @@ async function handleMessage(
         payload: {
           provider,
           model,
+          planBeforeEdit: !!config.planBeforeEdit,
           hasApiKey: !!(config.apiKeys?.[provider] || config.apiKey),
           roots: config.roots || roots,
           apiKeys: Object.fromEntries(
@@ -394,11 +440,43 @@ async function handleMessage(
       break;
     }
 
+    case "provider.testModel": {
+      const payload = msg.payload as { provider?: string; model?: string } | undefined;
+      const provider = payload?.provider;
+      const model = payload?.model;
+      if (!provider || !model) {
+        sendError(ws, "invalid_payload", "Missing provider or model", msg.id);
+        break;
+      }
+
+      const config = loadConfig();
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const result = await testProviderModel(provider, model, apiKey);
+      send(ws, {
+        id: msg.id,
+        type: "provider.testModel.result",
+        payload: result,
+      });
+      break;
+    }
+
+    case "project.ground": {
+      const payload = msg.payload as ProjectGroundRequest | undefined;
+      const result = groundProject(roots[0] || process.cwd(), payload || {});
+      send(ws, {
+        id: msg.id,
+        type: "project.ground.result",
+        payload: result,
+      });
+      break;
+    }
+
     case "config.set": {
       const payload = msg.payload as ConfigSetPayload;
       const updates: Partial<OpenMagicConfig> = {};
       if (payload.provider !== undefined) updates.provider = payload.provider;
       if (payload.model !== undefined) updates.model = payload.model;
+      if (payload.planBeforeEdit !== undefined) updates.planBeforeEdit = payload.planBeforeEdit;
       // Per-provider key storage
       if (payload.apiKey !== undefined && payload.provider) {
         const existing = loadConfig();

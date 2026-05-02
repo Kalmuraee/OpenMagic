@@ -134,5 +134,5 @@ ${toolbarScript}
 // Same-origin injection — toolbar.js and WS served from THIS server
 function buildInjectionScript(token: string): string {
   void token;
-  return `<script src="/__openmagic__/toolbar.js?v=${Date.now()}" data-openmagic="true" defer></script>`;
+  return `<script data-openmagic-warning="true">(function(){queueMicrotask(function(){try{var scripts=[].slice.call(document.scripts||[]);var third=scripts.filter(function(s){if(!s.src)return false;var u=new URL(s.src,location.href);return u.origin!==location.origin&&!u.pathname.startsWith("/__openmagic__/");});if(third.length){console.warn("OpenMagic runs inside this local page. Avoid using it with untrusted third-party scripts.");}}catch(e){}});})();</script><script src="/__openmagic__/toolbar.js?v=${Date.now()}" data-openmagic="true" defer></script>`;
 }

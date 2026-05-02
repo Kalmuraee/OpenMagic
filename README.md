@@ -53,13 +53,14 @@ Run this from your project folder so OpenMagic can find your source files and de
 | | Feature | Description |
 |---|---------|-------------|
 | **Select** | Element Selection | Click any element to capture its DOM, computed styles, parent layout, siblings, React props, and component name |
-| **Ground** | Smart File Grounding | Reads project files, follows import chains, auto-reads co-located stylesheets and `package.json` deps |
-| **Diff** | Diff Preview | Approve or reject each change. Undo to revert. Fuzzy line matching handles indentation differences |
+| **Ground** | Smart File Grounding | Server-side route, component, import, and stylesheet matching sends the most relevant files first |
+| **Diff** | Atomic Patch Preview | Approve or reject each change. Patch groups apply server-side with rollback support |
 | **Retry** | Auto-Retry | If the LLM requests more files, OpenMagic reads them transparently and retries — no manual intervention |
 | **Chat** | Markdown Chat | Streaming responses, copy buttons, session persistence across HMR reloads |
 | **Net** | Network Profiling | Captures page load timing, TTFB, FCP, and flags slow resources |
 | **Img** | Image Attachments | Drag-drop, paste from clipboard, or use the file picker — vision models analyze screenshots |
 | **Keys** | Per-Provider Keys | Store a key for each provider. Switch models without re-entering credentials |
+| **Plan** | Plan Before Editing | Review an implementation plan before asking the model to generate patches |
 | **KB** | Keyboard Shortcuts | Toggle, send, close, minimize — all from the keyboard |
 | **Min** | Minimize to Icon | Collapse the toolbar to a small floating button when you do not need it |
 
@@ -117,6 +118,10 @@ Stop with `Ctrl+C`. Nothing stays behind.
 | **OpenRouter** | 200+ models from all providers | Varies | Varies |
 
 Model lists are labeled internally as live, cached, or static. Cloud provider live lists are cached for 12 hours; local providers such as Ollama use a short cache so newly pulled models appear quickly.
+
+Use **Test model** in Settings to verify a provider key/model combination before sending a real request. OpenMagic classifies common failures such as invalid keys, unavailable models, quota/rate limits, and provider errors.
+
+Enable **Plan before editing** when you want the model to produce an implementation plan first. After reviewing the plan, choose **Generate changes** to ask for patches.
 
 ---
 

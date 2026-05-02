@@ -17,10 +17,15 @@ export type ClientMessageType =
   | "fs.write"
   | "fs.delete"
   | "fs.undo"
+  | "fs.patch.preview"
+  | "fs.patch.apply"
+  | "fs.patch.rollback"
   | "fs.list"
   | "fs.grep"
   | "llm.chat"
   | "provider.models"
+  | "provider.testModel"
+  | "project.ground"
   | "config.get"
   | "config.set"
   | "debug.logs";
@@ -55,6 +60,7 @@ export interface ConfigSetPayload {
   model?: string;
   apiKey?: string;
   roots?: string[];
+  planBeforeEdit?: boolean;
 }
 
 // Server → Toolbar
@@ -64,9 +70,14 @@ export type ServerMessageType =
   | "fs.written"
   | "fs.deleted"
   | "fs.undone"
+  | "fs.patch.previewed"
+  | "fs.patch.applied"
+  | "fs.patch.rolledback"
   | "fs.tree"
   | "fs.grep.result"
   | "provider.models.result"
+  | "provider.testModel.result"
+  | "project.ground.result"
   | "debug.logs"
   | "llm.chunk"
   | "llm.done"
@@ -151,6 +162,9 @@ export interface OpenMagicConfig {
   model?: string;
   apiKey?: string;
   apiKeys?: Record<string, string>; // per-provider key storage
+  planBeforeEdit?: boolean;
+  customModels?: Record<string, string[]>;
+  preferredThinkingMode?: Record<string, string>;
   roots: string[];
   proxyPort: number;
   targetPort: number;

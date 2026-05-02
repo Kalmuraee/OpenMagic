@@ -33,6 +33,8 @@ src/
 ├── proxy.ts            # http-proxy reverse proxy, streaming HTML injection
 ├── server.ts           # WebSocket server, file I/O, LLM routing, debug endpoint
 ├── filesystem.ts       # Sandboxed file read/write, path traversal protection
+├── patch.ts            # Server-side atomic patch preview/apply/rollback
+├── project-grounding.ts # Server-side route/component/import grounding
 ├── config.ts           # Atomic config persistence (~/.openmagic/config.json)
 ├── security.ts         # Session token generation
 ├── detect.ts           # Dev server auto-detection (script parsing, port scanning)
@@ -40,6 +42,7 @@ src/
 ├── llm/
 │   ├── registry.ts     # 14 providers, 70+ models, all pre-configured
 │   ├── models.ts       # Server-side model catalog, live fetches, static fallback
+│   ├── provider-test.ts # Provider/model health checks and error classification
 │   ├── proxy.ts        # Routes LLM calls to the right adapter
 │   ├── prompts.ts      # System prompt and context builder
 │   ├── openai.ts       # OpenAI-compatible adapter (also handles Groq, Mistral, etc.)
@@ -71,7 +74,9 @@ All click/change handlers use event delegation attached once to the root via `da
 
 HTML responses are streamed through, not buffered. The toolbar script tag gets appended at the end of the stream.
 
-When applying LLM edits, OpenMagic tries exact string match first, then falls back to fuzzy line-by-line matching to handle indentation differences.
+When applying LLM edits, the toolbar sends typed patches to the server. The server previews all patches, rejects ambiguous or unsafe matches, applies patch groups atomically, and stores a rollback manifest for applied groups.
+
+Project grounding is server-side first. The toolbar calls `project.ground`, which detects common frameworks, maps routes to files, follows local imports, includes co-located styles, and respects a context budget. The older toolbar heuristic remains as a fallback.
 
 ---
 
@@ -95,6 +100,8 @@ When applying LLM edits, OpenMagic tries exact string match first, then falls ba
 4. If the chat API is different, create `src/llm/newprovider.ts` with a `chat()` function matching the same signature as `openai.ts`, then add routing in `src/llm/proxy.ts`.
 
 5. Add tests for static fallback and live model normalization in `tests/models.test.ts`.
+
+6. If request payloads or streaming behavior differ, update the execution path and add request-construction tests in `tests/provider-execution.test.ts`.
 
 ---
 

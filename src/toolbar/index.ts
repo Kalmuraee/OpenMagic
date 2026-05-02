@@ -3,6 +3,7 @@ import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
+import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
 
@@ -29,7 +30,13 @@ const ICON = {
 };
 
 // ── Model Registry fallback (server replaces this on config load) ─
-type ToolbarProviderInfo = { name: string; models: { id: string; name: string }[]; keyPlaceholder: string; local?: boolean; keyUrl?: string };
+type ToolbarModelInfo = {
+  id: string;
+  name: string;
+  source?: "live" | "static" | "cache";
+  capabilities?: { vision?: boolean };
+};
+type ToolbarProviderInfo = { name: string; models: ToolbarModelInfo[]; keyPlaceholder: string; local?: boolean; keyUrl?: string };
 let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   "claude-code": { name: "Claude Code (CLI)", keyPlaceholder: "not required", local: true, models: [
     { id: "claude-code", name: "Claude Code" },
@@ -85,22 +92,6 @@ let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-function encodeBase64Utf8(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function decodeBase64Utf8(value: string): string {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
-
 const CURRENT_VERSION = "0.43.2";
 
 // ── State ────────────────────────────────────────────────────────
@@ -126,6 +117,10 @@ const state = {
   modelRefreshStatus: "" as "" | "loading" | "live" | "cache" | "static" | "error",
   modelRefreshMessage: "",
   modelRefreshProvider: "",
+  modelSearch: "",
+  modelTestStatus: "" as "" | "testing" | "success" | "error",
+  modelTestMessage: "",
+  planBeforeEdit: false,
   networkCapture: false,       // whether network panel is showing
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
@@ -240,6 +235,7 @@ function init() {
         if (msg.payload?.providers) {
           MODEL_REGISTRY = { ...MODEL_REGISTRY, ...msg.payload.providers };
         }
+        state.planBeforeEdit = !!msg.payload?.planBeforeEdit;
 
         // Store detected CLI agents from server
         state.detectedClis = msg.payload?.detectedClis || [];
@@ -316,6 +312,12 @@ function buildStaticDOM(): string {
         </div>
       </div>
       <div class="om-prompt-attachments"></div>
+      <div class="om-prompt-presets">
+        <button data-action="prompt-preset" data-preset="Fix the visual bug in the selected element">Fix visual bug</button>
+        <button data-action="prompt-preset" data-preset="Make the selected component responsive">Responsive</button>
+        <button data-action="prompt-preset" data-preset="Add a loading state for this UI">Loading state</button>
+        <button data-action="prompt-preset" data-preset="Debug the current console or network error">Debug error</button>
+      </div>
       <div class="om-prompt-row">
         <div class="om-prompt-context"></div>
         <select class="om-model-switcher" data-field="quick-model" title="Switch model"></select>
@@ -348,17 +350,43 @@ function attachGlobalEvents(root: HTMLElement) {
     if (field === "provider") {
       state.provider = target.value;
       state.model = MODEL_REGISTRY[state.provider]?.models[0]?.id || "";
+      state.modelSearch = "";
       state.hasApiKey = providerIsConfigured(state.provider);
       state.saveStatus = "";
       state.modelRefreshStatus = "";
       state.modelRefreshMessage = "";
+      state.modelTestStatus = "";
+      state.modelTestMessage = "";
       refreshPanelContent();
       void refreshProviderModels(state.provider);
     } else if (field === "model") {
       state.model = target.value;
+      state.modelTestStatus = "";
+      state.modelTestMessage = "";
+      updateAttachmentAvailability();
     } else if (field === "quick-model") {
       state.model = target.value;
+      state.modelTestStatus = "";
+      state.modelTestMessage = "";
       saveState(); // persist model switch
+      updateAttachmentAvailability();
+    } else if (field === "planBeforeEdit") {
+      state.planBeforeEdit = (target as unknown as HTMLInputElement).checked;
+    }
+  });
+
+  root.addEventListener("input", (e) => {
+    const target = e.target as HTMLInputElement;
+    const field = target.dataset.field;
+    if (field === "model-search") {
+      state.modelSearch = target.value;
+      refreshPanelContent();
+    } else if (field === "custom-model") {
+      state.model = target.value.trim();
+      state.modelTestStatus = "";
+      state.modelTestMessage = "";
+      updateModelSwitcher();
+      updateAttachmentAvailability();
     }
   });
 
@@ -487,109 +515,42 @@ function resolveFilePath(rel: string): string {
   return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
 }
 
-// ── 4-Layer Diff Matching (Aider-style) ──────────────────────────
-// Layer 1: Exact trimmed-line match (current behavior)
-// Layer 2: Indentation-adjusted match (handles LLM indentation errors)
-// Layer 3: Similarity-based fuzzy match (0.8 threshold)
+type FilePatch =
+  | { type: "replace"; file: string; search: string; replace: string }
+  | { type: "create"; file: string; content: string }
+  | { type: "delete"; file: string };
 
-function fuzzyLineMatch(content: string, search: string): { start: number; end: number; replace?: string } | null {
-  const searchLines = search.split('\n');
-  const nonEmptySearch = searchLines.map(l => l.trim()).filter(l => l.length > 0);
-  if (nonEmptySearch.length === 0) return null;
-  const contentLines = content.split('\n');
+type ApplyDiffResult = { ok: boolean; file?: string; error?: string; groupId?: string };
 
-  // Layer 1: Trimmed line-by-line exact match
-  for (let i = 0; i <= contentLines.length - nonEmptySearch.length; i++) {
-    let allMatch = true;
-    let matchLen = 0;
-    let si = 0;
-    for (let ci = i; ci < contentLines.length && si < nonEmptySearch.length; ci++) {
-      if (contentLines[ci].trim() === "") { matchLen++; continue; } // skip blank lines in content
-      if (contentLines[ci].trim() !== nonEmptySearch[si]) { allMatch = false; break; }
-      si++; matchLen++;
-    }
-    if (allMatch && si === nonEmptySearch.length) {
-      return lineRangeToOffsets(content, contentLines, i, matchLen);
-    }
-  }
-
-  // Layer 2: Indentation-adjusted match
-  // Strip leading whitespace from search lines, find match, compute indent delta
-  const strippedSearch = searchLines.map(l => l.trimStart());
-  for (let i = 0; i <= contentLines.length - strippedSearch.length; i++) {
-    let allMatch = true;
-    for (let j = 0; j < strippedSearch.length; j++) {
-      if (strippedSearch[j] === "") continue; // skip blank search lines
-      if (contentLines[i + j].trimStart() !== strippedSearch[j].trimEnd()) {
-        allMatch = false; break;
-      }
-    }
-    if (allMatch) {
-      return lineRangeToOffsets(content, contentLines, i, strippedSearch.length);
-    }
-  }
-
-  // Layer 3: Similarity-based fuzzy match (sliding window)
-  const searchStr = nonEmptySearch.join("\n").toLowerCase();
-  const searchLen = nonEmptySearch.length;
-  let bestScore = 0;
-  let bestStart = -1;
-  let bestLen = 0;
-
-  // Try windows of size searchLen ± 20%
-  const minWin = Math.max(1, Math.floor(searchLen * 0.8));
-  const maxWin = Math.min(contentLines.length, Math.ceil(searchLen * 1.2));
-
-  for (let winSize = minWin; winSize <= maxWin; winSize++) {
-    for (let i = 0; i <= contentLines.length - winSize; i++) {
-      const windowStr = contentLines.slice(i, i + winSize)
-        .map(l => l.trim()).filter(l => l).join("\n").toLowerCase();
-      const score = similarity(searchStr, windowStr);
-      if (score > bestScore) {
-        bestScore = score; bestStart = i; bestLen = winSize;
-      }
-    }
-  }
-
-  if (bestScore >= 0.8 && bestStart >= 0) {
-    return lineRangeToOffsets(content, contentLines, bestStart, bestLen);
-  }
-
-  return null;
-}
-
-function lineRangeToOffsets(content: string, lines: string[], start: number, count: number): { start: number; end: number } {
-  let startOffset = 0;
-  for (let k = 0; k < start; k++) startOffset += lines[k].length + 1;
-  let endOffset = startOffset;
-  for (let k = start; k < start + count; k++) endOffset += lines[k].length + 1;
-  if (endOffset > 0 && endOffset <= content.length && content[endOffset - 1] === '\n') endOffset--;
-  return { start: startOffset, end: endOffset };
-}
-
-// Jaccard-ish similarity on character trigrams (fast, good enough for code)
-function similarity(a: string, b: string): number {
-  if (a === b) return 1;
-  if (!a || !b) return 0;
-  const trigramsA = new Set<string>();
-  const trigramsB = new Set<string>();
-  for (let i = 0; i <= a.length - 3; i++) trigramsA.add(a.slice(i, i + 3));
-  for (let i = 0; i <= b.length - 3; i++) trigramsB.add(b.slice(i, i + 3));
-  if (trigramsA.size === 0 || trigramsB.size === 0) return 0;
-  let intersection = 0;
-  for (const t of trigramsA) { if (trigramsB.has(t)) intersection++; }
-  return intersection / (trigramsA.size + trigramsB.size - intersection);
-}
-
-type ApplyDiffResult = { ok: boolean; file?: string; error?: string };
-
-async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
+function patchFromButton(target: HTMLElement): FilePatch | null {
   const file = target.dataset.file;
+  const patchType = target.dataset.patchType || "replace";
+  if (!file) return null;
+  if (patchType === "delete") return { type: "delete", file };
+
   const searchB64 = target.dataset.search;
   const replaceB64 = target.dataset.replace;
-  if (!file || searchB64 === undefined || replaceB64 === undefined) {
-    return { ok: false, file, error: "Missing diff data" };
+  if (searchB64 === undefined || replaceB64 === undefined) return null;
+
+  const search = decodeBase64Utf8(searchB64);
+  const replace = decodeBase64Utf8(replaceB64);
+  if (patchType === "create" || (!search && replace)) return { type: "create", file, content: replace };
+  return { type: "replace", file, search, replace };
+}
+
+function patchFailureMessage(payload: any, fallback: string): string {
+  const failed = Array.isArray(payload?.changes) ? payload.changes.find((change: any) => !change.ok) : null;
+  return failed?.reason ? `${failed.file || "Patch"}: ${failed.reason}` : fallback;
+}
+
+async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
+  let patch: FilePatch | null = null;
+  try {
+    patch = patchFromButton(target);
+  } catch {
+    return { ok: false, file: target.dataset.file, error: "Failed to decode diff data" };
   }
+  if (!patch) return { ok: false, file: target.dataset.file, error: "Missing diff data" };
 
   // Instant visual feedback — disable button and show spinner BEFORE any async work
   (target as HTMLButtonElement).disabled = true;
@@ -606,122 +567,50 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
   // Force browser repaint before starting async work
   await new Promise(r => requestAnimationFrame(r));
 
-  let search: string, replace: string;
   try {
-    search = decodeBase64Utf8(searchB64);
-    replace = decodeBase64Utf8(replaceB64);
-  } catch {
-    state.messages.push({ role: "system", content: `Failed to decode diff data for ${file}` });
-    refreshPanelContent();
-    return { ok: false, file, error: "Failed to decode diff data" };
-  }
-
-  const filePath = resolveFilePath(file);
-  let applyOk = false;
-  let applyError = "";
-
-  try {
-    // Handle create (empty search = write entire file)
-    if (!search && replace) {
-      const writeResult = await ws.request("fs.write", { path: filePath, content: replace });
-      if (writeResult?.payload?.ok === false) {
-        applyError = `Write failed: ${file}`;
-        state.messages.push({ role: "system", content: applyError });
-      } else {
-        applyOk = true;
-        const idx = card?.dataset.diffIdx;
-        if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: `Created ${file}` };
-        else state.messages.push({ role: "system", content: `Created ${file}` });
-      }
-    } else {
-      // Try primary path, then fallbacks if it fails
-      let content: string | undefined;
-      let resolvedPath = filePath;
-
-      // Try reading from multiple paths
-      const pathsToTry = [filePath];
-      if (file !== filePath) pathsToTry.push(file);
-      const basename = file.split("/").pop() || file;
-      const root = state.roots[0] || "";
-      const baseInRoot = root ? `${root}/${basename}` : basename;
-      if (baseInRoot !== filePath && baseInRoot !== file) pathsToTry.push(baseInRoot);
-
-      for (const tryPath of pathsToTry) {
-        const r = await ws.request("fs.read", { path: tryPath }).catch(() => null);
-        const c = r?.payload?.content;
-        if (c !== undefined && c !== null) {
-          content = String(c);
-          resolvedPath = tryPath;
-          break;
-        }
-      }
-
-      if (content === undefined) {
-        applyError = `Could not read ${file} — tried: ${pathsToTry.join(", ")}`;
-        state.messages.push({ role: "system", content: applyError });
-      } else {
-        // Try exact match first
-        const exactCount = content.split(search).length - 1;
-
-        if (exactCount === 1) {
-          // Exact match — apply directly
-          const writeResult = await ws.request("fs.write", { path: resolvedPath, content: content.replace(search, replace) });
-          if (writeResult?.payload?.ok === false) {
-            applyError = `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}`;
-            state.messages.push({ role: "system", content: applyError });
-          } else {
-            applyOk = true;
-            const idx = card?.dataset.diffIdx;
-            if (idx !== undefined) {
-              state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file}. Reloading...` };
-            } else {
-              state.messages.push({ role: "system", content: `Applied change to ${file}. Reloading...` });
-            }
-          }
-        } else if (exactCount > 1) {
-          applyError = `Found ${exactCount} exact matches in ${file} — expected 1. Edit not applied.`;
-          state.messages.push({ role: "system", content: applyError });
-        } else {
-          // No exact match — try fuzzy line-based matching
-          const fuzzyResult = fuzzyLineMatch(content, search);
-          if (fuzzyResult) {
-            const newContent = content.slice(0, fuzzyResult.start) + replace + content.slice(fuzzyResult.end);
-            const writeResult = await ws.request("fs.write", { path: resolvedPath, content: newContent });
-            if (writeResult?.payload?.ok === false) {
-              applyError = `Write failed: ${file} - ${writeResult.payload?.error || "unknown"}`;
-              state.messages.push({ role: "system", content: applyError });
-            } else {
-              applyOk = true;
-              const idx = card?.dataset.diffIdx;
-              if (idx !== undefined) {
-                state.messages[parseInt(idx)] = { role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` };
-              } else {
-                state.messages.push({ role: "system", content: `Applied change to ${file} (fuzzy match). Reloading...` });
-              }
-            }
-          } else {
-            applyError = `No matching code found in ${file}. The file may have changed since the suggestion.`;
-            state.messages.push({ role: "system", content: applyError });
-          }
-        }
-      }
+    const preview = await ws.request("fs.patch.preview", { patches: [patch] });
+    if (!preview?.payload?.ok) {
+      const applyError = patchFailureMessage(preview?.payload, `Could not preview ${patch.file}`);
+      state.messages.push({ role: "system", content: applyError });
+      refreshPanelContent();
+      scrollChatToBottom();
+      return { ok: false, file: patch.file, error: applyError };
     }
+
+    const result = await ws.request("fs.patch.apply", { patches: [patch] });
+    if (!result?.payload?.ok || !result.payload.applied) {
+      const applyError = patchFailureMessage(result?.payload, `Failed to apply ${patch.file}`);
+      state.messages.push({ role: "system", content: applyError });
+      refreshPanelContent();
+      scrollChatToBottom();
+      return { ok: false, file: patch.file, error: applyError };
+    }
+
+    const groupId = result.payload.groupId || "";
+    const idx = card?.dataset.diffIdx;
+    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file] }));
+    const message = `__APPLIED__${appliedPayload}`;
+    if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: message };
+    else state.messages.push({ role: "system", content: message });
+
+    refreshPanelContent();
+    scrollChatToBottom();
+
+    // Auto-reload page after 1.5s so user sees the change
+    // (HMR-based dev servers handle this automatically, but static servers don't)
+    // Skip reload during batch apply-all (batchMode flag)
+    if (!(applyDiff as any)._batchMode) {
+      setTimeout(() => { window.location.reload(); }, 1500);
+    }
+
+    return { ok: true, file: patch.file, groupId };
   } catch (e: any) {
-    applyError = `Failed to apply: ${file} — ${e.message}`;
+    const applyError = `Failed to apply: ${patch.file} - ${e.message}`;
     state.messages.push({ role: "system", content: applyError });
+    refreshPanelContent();
+    scrollChatToBottom();
+    return { ok: false, file: patch.file, error: applyError };
   }
-
-  refreshPanelContent();
-  scrollChatToBottom();
-
-  // Auto-reload page after 1.5s so user sees the change
-  // (HMR-based dev servers handle this automatically, but static servers don't)
-  // Skip reload during batch apply-all (batchMode flag)
-  if (applyOk && !(applyDiff as any)._batchMode) {
-    setTimeout(() => { window.location.reload(); }, 1500);
-  }
-
-  return { ok: applyOk, file, error: applyError || undefined };
 }
 
 function rejectDiff(target: HTMLElement) {
@@ -780,6 +669,25 @@ async function undoDiff(target: HTMLElement) {
   refreshPanelContent();
 }
 
+async function rollbackPatch(target: HTMLElement) {
+  const groupId = target.dataset.groupId;
+  if (!groupId) return;
+  try {
+    const result = await ws.request("fs.patch.rollback", { groupId });
+    if (result?.payload?.ok) {
+      state.messages.push({ role: "system", content: "Patch group rolled back. Reloading..." });
+      refreshPanelContent();
+      setTimeout(() => { window.location.reload(); }, 1000);
+    } else {
+      state.messages.push({ role: "system", content: "Could not rollback patch group" });
+      refreshPanelContent();
+    }
+  } catch (e: any) {
+    state.messages.push({ role: "system", content: `Could not rollback patch group - ${e.message}` });
+    refreshPanelContent();
+  }
+}
+
 async function handleAction(action: string, target: HTMLElement) {
   switch (action) {
     case "select": toggleSelectMode(); break;
@@ -789,6 +697,22 @@ async function handleAction(action: string, target: HTMLElement) {
     case "close-panel": closePanel(); break;
     case "prompt-send": sendPrompt(); break;
     case "save-settings": saveSettings(); break;
+    case "test-model": testModel(); break;
+    case "prompt-preset": {
+      const preset = target.dataset.preset || "";
+      if (preset) {
+        $promptInput.value = preset;
+        $promptInput.focus();
+      }
+      break;
+    }
+    case "confirm-plan": {
+      try {
+        const prompt = decodeBase64Utf8(target.dataset.prompt || "");
+        void sendPrompt(prompt, true);
+      } catch {}
+      break;
+    }
     case "get-key": {
       const url = target.dataset.url;
       if (url) window.open(url, "_blank", "noopener");
@@ -802,7 +726,15 @@ async function handleAction(action: string, target: HTMLElement) {
       break;
     }
     case "network": togglePanel("chat"); captureNetworkProfile(); break;
-    case "attach-image": triggerFileAttach(); break;
+    case "attach-image": {
+      if (!selectedModelSupportsVision()) {
+        state.messages.push({ role: "system", content: "Image attachments are disabled for the selected model." });
+        if (state.panelOpen) refreshPanelContent();
+        break;
+      }
+      triggerFileAttach();
+      break;
+    }
     case "remove-attachment": {
       const idx = parseInt(target.dataset.idx || "0", 10);
       state.attachments.splice(idx, 1);
@@ -814,53 +746,52 @@ async function handleAction(action: string, target: HTMLElement) {
     case "apply-all": {
       const buttons = Array.from(shadow.querySelectorAll(`[data-action="apply-diff"]`));
       if (buttons.length === 0) break;
-      // Snapshot files before batch for rollback
-      const filesToSnapshot = new Set<string>();
+
+      const patches: FilePatch[] = [];
+      const diffIndexes: number[] = [];
       for (const btn of buttons) {
-        const file = (btn as HTMLElement).dataset.file;
-        if (file) filesToSnapshot.add(resolveFilePath(file));
-      }
-      const snapshots = new Map<string, { exists: boolean; content: string }>();
-      for (const fp of filesToSnapshot) {
         try {
-          const r = await ws.request("fs.read", { path: fp }).catch(() => null);
-          if (r?.payload && r.payload.content !== undefined && r.payload.content !== null) {
-            snapshots.set(fp, { exists: true, content: String(r.payload.content) });
-          } else {
-            snapshots.set(fp, { exists: false, content: "" });
+          const patch = patchFromButton(btn as HTMLElement);
+          const idx = (btn as HTMLElement).closest(".om-diff-card")?.getAttribute("data-diff-idx");
+          if (patch) {
+            patches.push(patch);
+            if (idx) diffIndexes.push(parseInt(idx, 10));
           }
         } catch {}
       }
-      // Apply diffs sequentially, suppress per-diff reload
-      (applyDiff as any)._batchMode = true;
-      let failed = false;
-      let failureMessage = "";
-      for (const btn of buttons) {
-        const result = await applyDiff(btn as HTMLElement);
-        if (!result.ok) {
-          failed = true;
-          failureMessage = result.error || `Failed to apply ${result.file || "change"}`;
+      if (!patches.length) break;
+
+      try {
+        const preview = await ws.request("fs.patch.preview", { patches });
+        if (!preview?.payload?.ok) {
+          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${patchFailureMessage(preview?.payload, "Could not preview patch group")}` });
+          refreshPanelContent();
           break;
         }
-      }
-      (applyDiff as any)._batchMode = false;
-      // If any failed, rollback all
-      if (failed && snapshots.size > 0) {
-        for (const [fp, snapshot] of snapshots) {
-          try {
-            if (snapshot.exists) {
-              await ws.request("fs.write", { path: fp, content: snapshot.content });
-            } else {
-              await ws.request("fs.delete", { path: fp });
-            }
-          } catch {}
+
+        const result = await ws.request("fs.patch.apply", { patches });
+        if (!result?.payload?.ok || !result.payload.applied) {
+          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${patchFailureMessage(result?.payload, "Could not apply patch group")}` });
+          refreshPanelContent();
+          break;
         }
-        state.messages.push({ role: "system", content: `Batch apply failed — all changes reverted. ${failureMessage}`.trim() });
+
+        const files = patches.map((patch) => patch.file);
+        const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId: result.payload.groupId, files }));
+        const message = `__APPLIED__${appliedPayload}`;
+        const [firstIdx, ...rest] = diffIndexes;
+        if (Number.isInteger(firstIdx)) state.messages[firstIdx] = { role: "system", content: message };
+        else state.messages.push({ role: "system", content: message });
+        for (const idx of rest) {
+          if (Number.isInteger(idx)) state.messages[idx] = { role: "system", content: "Applied in patch group" };
+        }
+        hideApplyBar();
+        refreshPanelContent();
+        setTimeout(() => { window.location.reload(); }, 1500);
+      } catch (e: any) {
+        state.messages.push({ role: "system", content: `Batch apply failed before writing. ${e.message}` });
         refreshPanelContent();
       }
-      hideApplyBar();
-      // Single reload after batch completes (not per-diff)
-      if (!failed) setTimeout(() => { window.location.reload(); }, 1500);
       break;
     }
     case "reject-all": {
@@ -872,6 +803,7 @@ async function handleAction(action: string, target: HTMLElement) {
       break;
     }
     case "undo-diff": undoDiff(target); break;
+    case "rollback-patch": rollbackPatch(target); break;
     case "clear-chat": {
       state.messages = [];
       try { sessionStorage.removeItem("__om_state__"); } catch {}
@@ -956,6 +888,25 @@ function updateModelSwitcher() {
   sel.innerHTML = opts;
 }
 
+function selectedModelInfo(): ToolbarModelInfo | undefined {
+  return MODEL_REGISTRY[state.provider]?.models.find((model) => model.id === state.model);
+}
+
+function selectedModelSupportsVision(): boolean {
+  const model = selectedModelInfo();
+  if (!model?.capabilities) return true;
+  return model.capabilities.vision !== false;
+}
+
+function updateAttachmentAvailability() {
+  const attach = shadow.querySelector(".om-prompt-attach") as HTMLButtonElement | null;
+  if (!attach) return;
+  const supportsVision = selectedModelSupportsVision();
+  attach.disabled = !supportsVision;
+  attach.classList.toggle("disabled", !supportsVision);
+  attach.title = supportsVision ? "Attach image" : "Selected model does not support images";
+}
+
 function providerIsConfigured(provider: string): boolean {
   const prov = MODEL_REGISTRY[provider];
   return !!(provider && (state.configuredProviders[provider] || prov?.local));
@@ -967,6 +918,7 @@ function ensureSelectedModel() {
   if (!prov.models.some((m) => m.id === state.model)) {
     state.model = prov.models[0].id;
   }
+  updateAttachmentAvailability();
 }
 
 async function refreshProviderModels(provider: string) {
@@ -1089,14 +1041,28 @@ function renderSettingsHTML(): string {
     }).join("");
 
   const prov = MODEL_REGISTRY[state.provider];
+  const modelSearch = state.modelSearch.trim().toLowerCase();
+  const providerModels = prov?.models || [];
+  const visibleModels = modelSearch
+    ? providerModels.filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(modelSearch))
+    : providerModels;
+  const selectedModelVisible = !!state.model && visibleModels.some((model) => model.id === state.model);
+  const modelOptionModels = selectedModelVisible || !state.model
+    ? visibleModels
+    : [...visibleModels, { id: state.model, name: state.model, source: "static" as const }];
   const modelOpts = prov
-    ? prov.models.map(m => `<option value="${escapeHtml(m.id)}" ${state.model === m.id ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("")
+    ? modelOptionModels.map((m) => {
+        const source = m.source ? ` [${m.source === "cache" ? "Cached" : m.source === "live" ? "Live" : "Static"}]` : "";
+        return `<option value="${escapeHtml(m.id)}" ${state.model === m.id ? "selected" : ""}>${escapeHtml(`${m.name}${source}`)}</option>`;
+      }).join("")
     : '<option value="">Select provider first</option>';
 
   const isLocal = prov?.local || false;
   const keyUrl = prov?.keyUrl || "";
   const keyPh = prov?.keyPlaceholder || "Enter API key...";
   const providerHasKey = state.configuredProviders[state.provider] || false;
+  const supportsCustomModel = !!state.provider && !MODEL_REGISTRY[state.provider]?.local;
+  const visionHint = selectedModelSupportsVision() ? "" : `<div class="om-key-hint">Image attachments disabled for this model.</div>`;
 
   const updateBanner = state.updateAvailable
     ? `<div class="om-update-banner">v${state.latestVersion} available <code class="om-update-cmd">npx openmagic@latest</code></div>` : "";
@@ -1113,6 +1079,15 @@ function renderSettingsHTML(): string {
         state.modelRefreshStatus === "loading" ? '<span class="om-spinner"></span>' :
         state.modelRefreshStatus === "live" ? ICON.check : ""
       } ${escapeHtml(state.modelRefreshMessage)}</div>`
+    : "";
+  const modelTestHtml = state.modelTestStatus
+    ? `<div class="om-model-refresh om-status ${
+        state.modelTestStatus === "success" ? "om-status-success" :
+        state.modelTestStatus === "error" ? "om-status-error" : "om-status-info"
+      }">${
+        state.modelTestStatus === "testing" ? '<span class="om-spinner"></span>' :
+        state.modelTestStatus === "success" ? ICON.check : ""
+      } ${escapeHtml(state.modelTestMessage)}</div>`
     : "";
 
   const saveBtnText = state.saveStatus === "saving" ? '<span class="om-spinner"></span> Saving...'
@@ -1161,10 +1136,19 @@ function renderSettingsHTML(): string {
       </div>
       <div class="om-field">
         <label class="om-label">Model</label>
+        ${providerModels.length > 8 ? `<input type="search" class="om-input" data-field="model-search" value="${escapeHtml(state.modelSearch)}" placeholder="Search models..." autocomplete="off" />` : ""}
         <select class="om-select" data-field="model"><option value="">Select Model...</option>${modelOpts}</select>
+        ${supportsCustomModel ? `<input type="text" class="om-input" data-field="custom-model" value="${escapeHtml(state.model)}" placeholder="Custom model ID..." autocomplete="off" spellcheck="false" />` : ""}
         ${modelStatusHtml}
+        ${visionHint}
       </div>
       ${keySection}
+      <label class="om-check-row">
+        <input type="checkbox" data-field="planBeforeEdit" ${state.planBeforeEdit ? "checked" : ""} />
+        <span>Plan before editing</span>
+      </label>
+      <button class="om-btn-secondary om-btn-sm" data-action="test-model" ${!state.provider || !state.model ? "disabled" : ""}>Test model</button>
+      ${modelTestHtml}
       <button class="${saveBtnClass}" data-action="save-settings" ${saveBtnDisabled}>${saveBtnText}</button>
       ${statusHtml}
     </div>`;
@@ -1184,21 +1168,38 @@ function renderChatHTML(): string {
       try {
         const diff = JSON.parse(decodeBase64Utf8(m.content.slice(8)));
         const isCreate = diff.type === "create" || (!diff.search && diff.replace);
+        const isDelete = diff.type === "delete";
         const searchB64 = encodeBase64Utf8(diff.search || "");
         const replaceB64 = encodeBase64Utf8(diff.replace || "");
-        const label = isCreate ? "Create new file" : "Edit";
-        const diffHtml = renderLineDiff(diff.search || "", diff.replace || "");
+        const label = isDelete ? "Delete file" : isCreate ? "Create new file" : "Edit";
+        const diffHtml = isDelete
+          ? `<div class="om-diff-line removed">- ${escapeHtml(diff.file)}</div>`
+          : renderLineDiff(diff.search || "", diff.replace || "");
         return `<div class="om-diff-card" data-diff-idx="${i}">
           <div class="om-diff-file">${escapeHtml(label)}: ${escapeHtml(diff.file)}</div>
           <div class="om-diff-lines">${diffHtml}</div>
           <div class="om-diff-actions">
-            <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
+            <button class="om-btn om-btn-sm" data-action="apply-diff" data-file="${escapeHtml(diff.file)}" data-patch-type="${escapeHtml(diff.type || (isCreate ? "create" : "replace"))}" data-search="${searchB64}" data-replace="${replaceB64}">Apply</button>
             <button class="om-btn-secondary om-btn-sm" data-action="reject-diff" data-idx="${i}">Reject</button>
           </div>
         </div>`;
       } catch {
         return `<div class="om-msg om-msg-system">Malformed diff data</div>`;
       }
+    }
+    if (m.content.startsWith("__APPLIED__")) {
+      try {
+        const applied = JSON.parse(decodeBase64Utf8(m.content.slice(11)));
+        const files = Array.isArray(applied.files) ? applied.files : [];
+        const label = files.length === 1 ? files[0] : `${files.length} files`;
+        return `<div class="om-msg om-msg-system">Applied patch group to ${escapeHtml(label)}. <button class="om-undo-btn" data-action="rollback-patch" data-group-id="${escapeHtml(applied.groupId || "")}">Rollback</button></div>`;
+      } catch {
+        return `<div class="om-msg om-msg-system">Applied patch group</div>`;
+      }
+    }
+    if (m.content.startsWith("__PLAN_CONFIRM__")) {
+      const promptB64 = m.content.slice(16);
+      return `<div class="om-msg om-msg-system">Plan ready. <button class="om-btn om-btn-sm" data-action="confirm-plan" data-prompt="${promptB64}">Generate changes</button></div>`;
     }
     if (m.content.startsWith("Applied change to ")) {
       const file = m.content.replace("Applied change to ", "").replace(/ \(fuzzy match.*?\)/g, "").replace(". Reloading...", "");
@@ -1253,7 +1254,7 @@ async function saveSettings() {
     return;
   }
 
-  const payload: any = { provider: state.provider, model: state.model };
+  const payload: any = { provider: state.provider, model: state.model, planBeforeEdit: state.planBeforeEdit };
   if (apiKey) payload.apiKey = apiKey;
 
   state.saveStatus = "saving";
@@ -1297,6 +1298,24 @@ async function saveSettings() {
   }
 }
 
+async function testModel() {
+  if (!state.provider || !state.model || !ws.isConnected()) return;
+  state.modelTestStatus = "testing";
+  state.modelTestMessage = "Testing model...";
+  refreshPanelContent();
+
+  try {
+    const result = await ws.request("provider.testModel", { provider: state.provider, model: state.model });
+    const payload = result?.payload || {};
+    state.modelTestStatus = payload.ok ? "success" : "error";
+    state.modelTestMessage = payload.message || (payload.ok ? "Model test succeeded" : "Model test failed");
+  } catch (e: any) {
+    state.modelTestStatus = "error";
+    state.modelTestMessage = e.message || "Model test failed";
+  }
+  refreshPanelContent();
+}
+
 function updateSaveButton() {
   const btn = $panelBody.querySelector('[data-action="save-settings"]');
   if (!btn) return;
@@ -1321,12 +1340,17 @@ function updateSaveButton() {
 
 // ── Send Prompt ──────────────────────────────────────────────────
 
-async function sendPrompt() {
-  const text = $promptInput.value.trim();
+async function sendPrompt(overrideText?: string, skipPlan = false) {
+  const text = (overrideText ?? $promptInput.value).trim();
   if (!text || state.streaming) return;
 
   if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     openPanel("settings");
+    return;
+  }
+
+  if (state.planBeforeEdit && !skipPlan) {
+    await runPlanBeforeEdit(text);
     return;
   }
 
@@ -1363,6 +1387,22 @@ async function sendPrompt() {
   const statusEl = $panelBody.querySelector(".om-msg-assistant:last-child");
   if (statusEl) statusEl.innerHTML = '<span class="om-spinner"></span> Reading project files...';
 
+  try {
+    const grounded = await ws.request("project.ground", {
+      pageUrl: window.location.href,
+      promptText: text,
+      selectedElement: state.selectedElement,
+    });
+    const files = grounded?.payload?.files;
+    if (Array.isArray(files) && files.length) {
+      context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
+      state.groundedFiles = files.map((file: any) => file.path);
+      const fileNames = state.groundedFiles.map((file) => file.split("/").pop()).join(", ");
+      if (statusEl) statusEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Thinking... (${files.length} files: ${fileNames})`)}`;
+    }
+  } catch { /* server grounding is best-effort */ }
+
+  if (!context.files) {
   try {
     const treeResult = await ws.request("fs.list", {});
     if (treeResult?.payload?.projectTree) {
@@ -1701,6 +1741,7 @@ async function sendPrompt() {
     }
     state.groundedFiles = files.map((f: {path: string}) => f.path);
   } catch { /* grounding is best-effort */ }
+  }
 
   // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry
   const MAX_RETRIES = 4;
@@ -1871,9 +1912,11 @@ async function sendPrompt() {
               content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
             });
           } else if (mod.type === "delete" && mod.file) {
+            const diffId = Math.random().toString(36).slice(2);
+            const diffPayload = JSON.stringify({ id: diffId, file: mod.file, type: "delete", groupId });
             state.messages.push({
               role: "system",
-              content: `LLM proposed deleting ${mod.file} — skipped (use edit with search/replace instead)`,
+              content: `__DIFF__${encodeBase64Utf8(diffPayload)}`,
             });
           }
         }
@@ -1894,6 +1937,57 @@ async function sendPrompt() {
   state.streamContent = "";
   state.attachments = [];
   renderAttachments();
+  refreshPanelContent();
+  scrollChatToBottom();
+}
+
+async function runPlanBeforeEdit(text: string) {
+  state.messages.push({ role: "user", content: text });
+  state.streaming = true;
+  state.streamContent = "";
+  $promptInput.value = "";
+  openPanel("chat");
+
+  const context: any = buildContext(state.selectedElement, state.screenshot);
+  context.pageUrl = window.location.href;
+  context.pageTitle = document.title;
+  try {
+    const grounded = await ws.request("project.ground", {
+      pageUrl: window.location.href,
+      promptText: text,
+      selectedElement: state.selectedElement,
+    });
+    const files = grounded?.payload?.files;
+    if (Array.isArray(files) && files.length) {
+      context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
+      state.groundedFiles = files.map((file: any) => file.path);
+    }
+  } catch {}
+
+  const planPrompt = `Plan only. Do not propose code patches yet. Identify the files likely to change and the intended edits for this request:\n\n${text}`;
+  try {
+    const result = await ws.stream(
+      "llm.chat",
+      {
+        provider: state.provider,
+        model: state.model,
+        messages: [{ role: "user", content: planPrompt }],
+        context,
+      },
+      (chunk: string) => {
+        state.streamContent += chunk;
+        refreshPanelContent();
+        scrollChatToBottom();
+      }
+    );
+    state.messages.push({ role: "assistant", content: result?.content || state.streamContent || "Plan generated." });
+    state.messages.push({ role: "system", content: `__PLAN_CONFIRM__${encodeBase64Utf8(text)}` });
+  } catch (e: any) {
+    state.messages.push({ role: "system", content: `Plan failed: ${e.message}` });
+  }
+
+  state.streaming = false;
+  state.streamContent = "";
   refreshPanelContent();
   scrollChatToBottom();
 }
@@ -2133,76 +2227,6 @@ function setupDraggable() {
       } catch {}
     }
   });
-}
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-function escapeHtml(text: string): string {
-  const d = document.createElement("div");
-  d.textContent = text;
-  return d.innerHTML;
-}
-
-function renderLineDiff(search: string, replace: string): string {
-  const searchLines = search.split("\n");
-  const replaceLines = replace.split("\n");
-  const lines: string[] = [];
-  const maxLines = 30; // cap display
-
-  // Simple LCS-based line diff
-  const sLen = Math.min(searchLines.length, maxLines);
-  const rLen = Math.min(replaceLines.length, maxLines);
-
-  // Find common prefix and suffix
-  let commonPrefix = 0;
-  while (commonPrefix < sLen && commonPrefix < rLen && searchLines[commonPrefix] === replaceLines[commonPrefix]) commonPrefix++;
-  let commonSuffix = 0;
-  while (commonSuffix < sLen - commonPrefix && commonSuffix < rLen - commonPrefix
-    && searchLines[sLen - 1 - commonSuffix] === replaceLines[rLen - 1 - commonSuffix]) commonSuffix++;
-
-  // Render context (unchanged), removed, added
-  for (let i = 0; i < commonPrefix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
-  }
-
-  // Removed lines (from search)
-  for (let i = commonPrefix; i < sLen - commonSuffix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-del"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign">-</span>${escapeHtml(searchLines[i])}</div>`);
-  }
-
-  // Added lines (from replace)
-  for (let i = commonPrefix; i < rLen - commonSuffix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ins"><span class="om-diff-ln"> </span><span class="om-diff-sign">+</span>${escapeHtml(replaceLines[i])}</div>`);
-  }
-
-  // Common suffix
-  for (let i = sLen - commonSuffix; i < sLen; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
-  }
-
-  if (searchLines.length > maxLines) lines.push(`<div class="om-diff-line om-diff-ctx">... ${searchLines.length - maxLines} more lines</div>`);
-
-  return lines.join("") || `<div class="om-diff-line om-diff-ins">${escapeHtml(replace.slice(0, 500))}</div>`;
-}
-
-function renderMarkdown(text: string): string {
-  // First: convert literal \n strings to actual newlines (from JSON escaping)
-  let clean = text.replace(/\\n/g, "\n");
-  let html = escapeHtml(clean);
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="om-code-block"><code>$2</code></pre>');
-  // Inline code (`...`)
-  html = html.replace(/`([^`]+)`/g, '<code class="om-inline-code">$1</code>');
-  // Bold (**...**)
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Italic (*...*)
-  // Italic: *text* but not **text** — avoid lookbehind for Safari compatibility
-  html = html.replace(/([^*]|^)\*([^*]+)\*([^*]|$)/g, '$1<em>$2</em>$3');
-  // Bullet lists (- item)
-  html = html.replace(/^- (.+)$/gm, '&#8226; $1');
-  // Line breaks
-  html = html.replace(/\n/g, '<br>');
-  return html;
 }
 
 async function collectDebugInfo(messageIdx?: number): Promise<string> {

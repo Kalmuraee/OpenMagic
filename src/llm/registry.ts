@@ -495,6 +495,13 @@ export const MODEL_REGISTRY: ProviderRegistry = {
         vision: false,
         context: 1000000,
         maxOutput: 384000,
+        thinking: {
+          supported: true,
+          paramName: "reasoning_effort",
+          paramType: "level",
+          levels: ["low", "medium", "high"],
+          defaultLevel: "high",
+        },
       },
       {
         id: "deepseek-chat",

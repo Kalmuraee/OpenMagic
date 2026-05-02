@@ -24,6 +24,8 @@ Provider API keys are stored in the local OpenMagic config and are used only by 
 
 OpenMagic limits file operations to configured project roots and rejects path traversal. Treat configured roots as sensitive: the model can propose edits and the toolbar can request writes after user action.
 
+Patch application runs server-side. Patch groups are previewed before writing, ambiguous matches are rejected, and applied groups keep rollback manifests for the current process.
+
 ## Reporting Vulnerabilities
 
 Please report security issues privately by emailing the maintainer listed in `package.json`, or by opening a GitHub security advisory if available. Include:

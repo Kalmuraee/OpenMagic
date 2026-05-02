@@ -178,6 +178,7 @@ export const TOOLBAR_CSS = `
   cursor: pointer; border-radius: 6px; transition: color 0.15s, background 0.15s;
 }
 .om-prompt-attach:hover { color: #a29bfe; background: rgba(108, 92, 231, 0.1); }
+.om-prompt-attach:disabled, .om-prompt-attach.disabled { opacity: .45; cursor: not-allowed; color: #444; background: none; }
 
 .om-model-switcher {
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
@@ -192,6 +193,12 @@ export const TOOLBAR_CSS = `
   display: flex; gap: 6px; padding: 4px 8px; flex-wrap: wrap;
   border-bottom: 1px solid rgba(255,255,255,0.03);
 }
+.om-prompt-presets { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 2px; }
+.om-prompt-presets button {
+  border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04);
+  color: #9a9aaa; border-radius: 6px; padding: 4px 7px; font-size: 10px; cursor: pointer;
+}
+.om-prompt-presets button:hover { color: #ddd; border-color: rgba(108,92,231,0.28); background: rgba(108,92,231,0.1); }
 .om-attachment-thumb {
   position: relative; width: 48px; height: 48px;
   border-radius: 6px; overflow: hidden;
@@ -214,6 +221,8 @@ export const TOOLBAR_CSS = `
 
 .om-field { display: flex; flex-direction: column; gap: 5px; }
 .om-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; }
+.om-check-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #bbb; margin: 2px 0; }
+.om-check-row input { accent-color: #6c5ce7; }
 
 .om-select, .om-input {
   background: rgba(255,255,255,0.04);

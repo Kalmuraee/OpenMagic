@@ -26,11 +26,12 @@ export function escapeHtml(text: string): string {
 export function renderLineDiff(search: string, replace: string): string {
   const searchLines = search.split("\n");
   const replaceLines = replace.split("\n");
-  const lines: string[] = [];
+  const rows: string[] = [];
   const maxLines = 30;
 
   const sLen = Math.min(searchLines.length, maxLines);
   const rLen = Math.min(replaceLines.length, maxLines);
+  const rowCount = Math.max(sLen, rLen);
 
   let commonPrefix = 0;
   while (commonPrefix < sLen && commonPrefix < rLen && searchLines[commonPrefix] === replaceLines[commonPrefix]) commonPrefix++;
@@ -38,25 +39,25 @@ export function renderLineDiff(search: string, replace: string): string {
   while (commonSuffix < sLen - commonPrefix && commonSuffix < rLen - commonPrefix
     && searchLines[sLen - 1 - commonSuffix] === replaceLines[rLen - 1 - commonSuffix]) commonSuffix++;
 
-  for (let i = 0; i < commonPrefix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
+  for (let i = 0; i < rowCount; i++) {
+    const inPrefix = i < commonPrefix;
+    const inSuffix = i >= rowCount - commonSuffix && i < sLen && i < rLen;
+    const oldClass = inPrefix || inSuffix ? "om-diff-ctx" : i < sLen ? "om-diff-del" : "om-diff-empty";
+    const newClass = inPrefix || inSuffix ? "om-diff-ctx" : i < rLen ? "om-diff-ins" : "om-diff-empty";
+    const oldLine = i < sLen ? escapeHtml(searchLines[i]) : "";
+    const newLine = i < rLen ? escapeHtml(replaceLines[i]) : "";
+    rows.push(`<div class="om-diff-row">
+      <div class="om-diff-cell ${oldClass}"><span class="om-diff-ln">${i < sLen ? i + 1 : ""}</span><span class="om-diff-sign">${oldClass === "om-diff-del" ? "-" : " "}</span><span class="om-diff-code">${oldLine}</span></div>
+      <div class="om-diff-cell ${newClass}"><span class="om-diff-ln">${i < rLen ? i + 1 : ""}</span><span class="om-diff-sign">${newClass === "om-diff-ins" ? "+" : " "}</span><span class="om-diff-code">${newLine}</span></div>
+    </div>`);
   }
 
-  for (let i = commonPrefix; i < sLen - commonSuffix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-del"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign">-</span>${escapeHtml(searchLines[i])}</div>`);
+  if (searchLines.length > maxLines || replaceLines.length > maxLines) {
+    const more = Math.max(searchLines.length, replaceLines.length) - maxLines;
+    rows.push(`<div class="om-diff-row om-diff-more">... ${more} more line${more === 1 ? "" : "s"}</div>`);
   }
 
-  for (let i = commonPrefix; i < rLen - commonSuffix; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ins"><span class="om-diff-ln"> </span><span class="om-diff-sign">+</span>${escapeHtml(replaceLines[i])}</div>`);
-  }
-
-  for (let i = sLen - commonSuffix; i < sLen; i++) {
-    lines.push(`<div class="om-diff-line om-diff-ctx"><span class="om-diff-ln">${i + 1}</span><span class="om-diff-sign"> </span>${escapeHtml(searchLines[i])}</div>`);
-  }
-
-  if (searchLines.length > maxLines) lines.push(`<div class="om-diff-line om-diff-ctx">... ${searchLines.length - maxLines} more lines</div>`);
-
-  return lines.join("") || `<div class="om-diff-line om-diff-ins">${escapeHtml(replace.slice(0, 500))}</div>`;
+  return rows.join("") || `<div class="om-diff-row"><div class="om-diff-cell om-diff-empty"></div><div class="om-diff-cell om-diff-ins">${escapeHtml(replace.slice(0, 500))}</div></div>`;
 }
 
 export function renderMarkdown(text: string): string {

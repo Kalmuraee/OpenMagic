@@ -1,6 +1,5 @@
 import {
   readFileSync,
-  writeFileSync,
   existsSync,
   statSync,
   lstatSync,
@@ -14,6 +13,7 @@ import {
   fsyncSync,
   closeSync,
   renameSync,
+  writeSync,
 } from "node:fs";
 import { join, resolve, relative, dirname, extname, parse } from "node:path";
 import { tmpdir } from "node:os";
@@ -135,16 +135,24 @@ export function readFileSafe(
 
 // ── Backup Management (temp directory) ──
 const BACKUP_DIR = join(tmpdir(), "openmagic-backups");
-const backupMap = new Map<string, string>(); // originalPath -> backupTempPath
+const MAX_BACKUPS_PER_FILE = 10;
+type BackupEntry = { backupPath?: string; existed: boolean };
+const backupStack = new Map<string, BackupEntry[]>(); // originalPath -> newest backup stack
 
 function getBackupPath(filePath: string): string {
   const hash = createHash("md5").update(resolve(filePath)).digest("hex").slice(0, 12);
   const name = filePath.split(/[/\\]/).pop() || "file";
-  return join(BACKUP_DIR, `${hash}_${name}`);
+  const unique = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return join(BACKUP_DIR, `${hash}_${unique}_${name}`);
 }
 
 export function getBackupForFile(filePath: string): string | undefined {
-  return backupMap.get(resolve(filePath));
+  const stack = backupStack.get(resolve(filePath));
+  return stack?.[stack.length - 1]?.backupPath;
+}
+
+export function getUndoCountForFile(filePath: string): number {
+  return backupStack.get(resolve(filePath))?.length || 0;
 }
 
 export function cleanupBackups(): void {
@@ -153,7 +161,74 @@ export function cleanupBackups(): void {
       rmSync(BACKUP_DIR, { recursive: true, force: true });
     }
   } catch {}
-  backupMap.clear();
+  backupStack.clear();
+}
+
+function pushBackup(filePath: string, entry: BackupEntry): string | undefined {
+  const key = resolve(filePath);
+  const stack = backupStack.get(key) || [];
+  stack.push(entry);
+  while (stack.length > MAX_BACKUPS_PER_FILE) {
+    const old = stack.shift();
+    if (old?.backupPath) {
+      try { unlinkSync(old.backupPath); } catch {}
+    }
+  }
+  backupStack.set(key, stack);
+  return entry.backupPath;
+}
+
+function createBackupEntry(filePath: string): BackupEntry {
+  if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
+  if (!existsSync(filePath)) {
+    return { existed: false };
+  }
+  const backupPath = getBackupPath(filePath);
+  copyFileSync(filePath, backupPath);
+  return { existed: true, backupPath };
+}
+
+function fsyncDir(dir: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Best effort on platforms that do not support opening directories.
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
+function atomicWriteFile(filePath: string, data: string | Buffer): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const tmpPath = join(dir, `.${parse(filePath).base}.openmagic-tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(tmpPath, "w", 0o600);
+    if (Buffer.isBuffer(data)) {
+      writeSync(fd, data);
+    } else {
+      writeSync(fd, data, 0, "utf-8");
+    }
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tmpPath, filePath);
+    fsyncDir(dir);
+  } catch (error) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+    try { unlinkSync(tmpPath); } catch {}
+    throw error;
+  }
 }
 
 export function writeFileSafe(
@@ -166,20 +241,7 @@ export function writeFileSafe(
   }
 
   try {
-    // Create backup in temp directory
-    let backupPath: string | undefined;
-    if (existsSync(filePath)) {
-      if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
-      backupPath = getBackupPath(filePath);
-      copyFileSync(filePath, backupPath);
-      backupMap.set(resolve(filePath), backupPath);
-    }
-
-    // Ensure directory exists
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    const backupPath = pushBackup(filePath, createBackupEntry(filePath));
 
     // Restore original line endings and BOM
     let output = content;
@@ -189,21 +251,7 @@ export function writeFileSafe(
       if (meta.hasBOM) output = "\uFEFF" + output;
     }
 
-    // Atomic write: write to temp, then rename
-    const tmpPath = filePath + ".openmagic-tmp-" + Date.now();
-    writeFileSync(tmpPath, output, "utf-8");
-    try {
-      const fd = openSync(tmpPath, "r");
-      fsyncSync(fd);
-      closeSync(fd);
-    } catch {} // fsync best-effort
-    try {
-      renameSync(tmpPath, filePath);
-    } catch {
-      // rename failed (cross-device?) — fall back to direct write
-      writeFileSync(filePath, output, "utf-8");
-      try { unlinkSync(tmpPath); } catch {}
-    }
+    atomicWriteFile(filePath, output);
     return { ok: true, backupPath };
   } catch (e: unknown) {
     return { ok: false, error: `Failed to write file: ${(e as Error).message}` };
@@ -228,10 +276,47 @@ export function deleteFileSafe(
       return { ok: false, error: "Can only delete regular files" };
     }
 
+    pushBackup(filePath, createBackupEntry(filePath));
     unlinkSync(filePath);
+    fsyncDir(dirname(filePath));
     return { ok: true };
   } catch (e: unknown) {
     return { ok: false, error: `Failed to delete file: ${(e as Error).message}` };
+  }
+}
+
+export function undoFileSafe(
+  filePath: string,
+  roots: string[]
+): { ok: boolean; error?: string; remainingUndoCount?: number } {
+  if (!isPathSafe(filePath, roots)) {
+    return { ok: false, error: "Path is outside allowed roots" };
+  }
+
+  const key = resolve(filePath);
+  const stack = backupStack.get(key);
+  const entry = stack?.pop();
+  if (!entry) {
+    return { ok: false, error: "No backup found" };
+  }
+  if (stack && stack.length === 0) backupStack.delete(key);
+
+  try {
+    if (entry.existed) {
+      if (!entry.backupPath || !existsSync(entry.backupPath)) {
+        return { ok: false, error: "Backup file is missing" };
+      }
+      const raw = readFileSync(entry.backupPath);
+      atomicWriteFile(filePath, raw);
+      try { unlinkSync(entry.backupPath); } catch {}
+    } else if (existsSync(filePath)) {
+      unlinkSync(filePath);
+      fsyncDir(dirname(filePath));
+    }
+    return { ok: true, remainingUndoCount: getUndoCountForFile(filePath) };
+  } catch (e: unknown) {
+    stack?.push(entry);
+    return { ok: false, error: `Undo failed: ${(e as Error).message}` };
   }
 }
 

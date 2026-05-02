@@ -214,7 +214,7 @@ function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
       };
     }
 
-    const match = findReplacement(base.content, patch.search);
+    const match = findReplacement(base.content, patch.search, patch.replace);
     if (!match.ok) {
       return {
         patch,
@@ -225,7 +225,8 @@ function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
       };
     }
 
-    const next = base.content.slice(0, match.start) + patch.replace + base.content.slice(match.end);
+    const replacement = match.replace ?? patch.replace;
+    const next = base.content.slice(0, match.start) + replacement + base.content.slice(match.end);
     stagedContent.set(path, { existed: base.existed, content: next, originalContent: base.originalContent });
     return {
       patch,
@@ -272,8 +273,9 @@ function loadBaseContent(
 
 function findReplacement(
   content: string,
-  search: string
-): { ok: true; start: number; end: number; confidence: number } | { ok: false; reason: string } {
+  search: string,
+  replace: string
+): { ok: true; start: number; end: number; confidence: number; replace?: string } | { ok: false; reason: string } {
   if (!search) return { ok: false, reason: "Replace patch is missing search text" };
 
   const exactMatches = findAll(content, search);
@@ -282,6 +284,27 @@ function findReplacement(
   }
   if (exactMatches.length > 1) {
     return { ok: false, reason: `Found ${exactMatches.length} exact matches; refusing ambiguous replace` };
+  }
+
+  const whitespace = normalizedLineMatch(content, search, (line) => line.trim());
+  if (whitespace.status === "ambiguous") {
+    return { ok: false, reason: `Found ${whitespace.count} whitespace-normalized matches; refusing ambiguous replace` };
+  }
+  if (whitespace.match) {
+    return {
+      ...whitespace.match,
+      ok: true,
+      confidence: 0.95,
+      replace: reindentReplacement(search, replace, whitespace.match.indent, whitespace.match.indents),
+    };
+  }
+
+  const indentation = indentationAdjustedMatch(content, search, replace);
+  if (indentation.status === "ambiguous") {
+    return { ok: false, reason: `Found ${indentation.count} indentation-adjusted matches; refusing ambiguous replace` };
+  }
+  if (indentation.match) {
+    return { ...indentation.match, ok: true, confidence: 0.9 };
   }
 
   const fuzzy = fuzzyLineMatch(content, search);
@@ -299,6 +322,89 @@ function findAll(content: string, search: string): number[] {
     index = content.indexOf(search, index + Math.max(1, search.length));
   }
   return matches;
+}
+
+function normalizedLineMatch(
+  content: string,
+  search: string,
+  normalize: (line: string) => string
+): { status: "ok"; match: { start: number; end: number; indent: string; indents: string[] } | null; count: number } | { status: "ambiguous"; count: number } {
+  const searchLines = search.split("\n");
+  const normalizedSearch = searchLines.map(normalize).join("\n");
+  if (!normalizedSearch.trim()) return { status: "ok", match: null, count: 0 };
+
+  const contentLines = content.split("\n");
+  const matches: Array<{ start: number; end: number; indent: string; indents: string[] }> = [];
+  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
+    const candidateLines = contentLines.slice(i, i + searchLines.length);
+    const candidate = candidateLines.map(normalize).join("\n");
+    if (candidate === normalizedSearch) {
+      matches.push({
+        ...lineRangeToOffsets(contentLines, i, searchLines.length),
+        indent: firstNonEmptyIndent(candidateLines),
+        indents: candidateLines.map(lineIndent),
+      });
+    }
+  }
+
+  if (matches.length > 1) return { status: "ambiguous", count: matches.length };
+  return { status: "ok", match: matches[0] || null, count: matches.length };
+}
+
+function indentationAdjustedMatch(
+  content: string,
+  search: string,
+  replace: string
+): { status: "ok"; match: { start: number; end: number; replace: string } | null; count: number } | { status: "ambiguous"; count: number } {
+  const searchLines = search.split("\n");
+  const strippedSearch = searchLines.map(stripLeadingWhitespace).join("\n");
+  if (!strippedSearch.trim()) return { status: "ok", match: null, count: 0 };
+
+  const contentLines = content.split("\n");
+  const matches: Array<{ start: number; end: number; indent: string; indents: string[] }> = [];
+  for (let i = 0; i <= contentLines.length - searchLines.length; i++) {
+    const candidateLines = contentLines.slice(i, i + searchLines.length);
+    if (candidateLines.map(stripLeadingWhitespace).join("\n") === strippedSearch) {
+      matches.push({
+        ...lineRangeToOffsets(contentLines, i, searchLines.length),
+        indent: firstNonEmptyIndent(candidateLines),
+        indents: candidateLines.map(lineIndent),
+      });
+    }
+  }
+
+  if (matches.length > 1) return { status: "ambiguous", count: matches.length };
+  const match = matches[0];
+  if (!match) return { status: "ok", match: null, count: 0 };
+  return {
+    status: "ok",
+    match: { start: match.start, end: match.end, replace: reindentReplacement(search, replace, match.indent, match.indents) },
+    count: 1,
+  };
+}
+
+function stripLeadingWhitespace(line: string): string {
+  return line.replace(/^\s+/, "");
+}
+
+function firstNonEmptyIndent(lines: string[]): string {
+  const line = lines.find((candidate) => candidate.trim().length > 0) || "";
+  return lineIndent(line);
+}
+
+function lineIndent(line: string): string {
+  return line.match(/^\s*/)?.[0] || "";
+}
+
+function reindentReplacement(search: string, replace: string, targetIndent: string, candidateIndents: string[] = []): string {
+  const searchIndent = firstNonEmptyIndent(search.split("\n"));
+  return replace.split("\n").map((line, index) => {
+    if (!line.trim()) return line;
+    const candidateIndent = candidateIndents[index];
+    if (candidateIndent !== undefined) return candidateIndent + stripLeadingWhitespace(line);
+    if (searchIndent && line.startsWith(searchIndent)) return targetIndent + line.slice(searchIndent.length);
+    return targetIndent + stripLeadingWhitespace(line);
+  }).join("\n");
 }
 
 function fuzzyLineMatch(content: string, search: string): { start: number; end: number; confidence: number } | null {

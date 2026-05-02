@@ -16,10 +16,19 @@ export type ClientMessageType =
   | "fs.read"
   | "fs.write"
   | "fs.delete"
+  | "fs.undo"
+  | "fs.patch.preview"
+  | "fs.patch.apply"
+  | "fs.patch.rollback"
   | "fs.list"
+  | "fs.grep"
   | "llm.chat"
+  | "provider.models"
+  | "provider.testModel"
+  | "project.ground"
   | "config.get"
-  | "config.set";
+  | "config.set"
+  | "debug.logs";
 
 export interface HandshakePayload {
   token: string;
@@ -51,6 +60,7 @@ export interface ConfigSetPayload {
   model?: string;
   apiKey?: string;
   roots?: string[];
+  planBeforeEdit?: boolean;
 }
 
 // Server → Toolbar
@@ -59,7 +69,16 @@ export type ServerMessageType =
   | "fs.content"
   | "fs.written"
   | "fs.deleted"
+  | "fs.undone"
+  | "fs.patch.previewed"
+  | "fs.patch.applied"
+  | "fs.patch.rolledback"
   | "fs.tree"
+  | "fs.grep.result"
+  | "provider.models.result"
+  | "provider.testModel.result"
+  | "project.ground.result"
+  | "debug.logs"
   | "llm.chunk"
   | "llm.done"
   | "llm.error"
@@ -143,6 +162,9 @@ export interface OpenMagicConfig {
   model?: string;
   apiKey?: string;
   apiKeys?: Record<string, string>; // per-provider key storage
+  planBeforeEdit?: boolean;
+  customModels?: Record<string, string[]>;
+  preferredThinkingMode?: Record<string, string>;
   roots: string[];
   proxyPort: number;
   targetPort: number;
@@ -186,6 +208,7 @@ export interface ProviderInfo {
   keyPrefix: string;
   keyPlaceholder: string;
   local?: boolean;
+  keyUrl?: string;
 }
 
 export type ProviderRegistry = Record<string, ProviderInfo>;

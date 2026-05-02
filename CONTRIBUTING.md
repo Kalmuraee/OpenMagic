@@ -33,12 +33,16 @@ src/
 ├── proxy.ts            # http-proxy reverse proxy, streaming HTML injection
 ├── server.ts           # WebSocket server, file I/O, LLM routing, debug endpoint
 ├── filesystem.ts       # Sandboxed file read/write, path traversal protection
+├── patch.ts            # Server-side atomic patch preview/apply/rollback
+├── project-grounding.ts # Server-side route/component/import grounding
 ├── config.ts           # Atomic config persistence (~/.openmagic/config.json)
 ├── security.ts         # Session token generation
 ├── detect.ts           # Dev server auto-detection (script parsing, port scanning)
 ├── shared-types.ts     # WebSocket protocol types
 ├── llm/
 │   ├── registry.ts     # 14 providers, 70+ models, all pre-configured
+│   ├── models.ts       # Server-side model catalog, live fetches, static fallback
+│   ├── provider-test.ts # Provider/model health checks and error classification
 │   ├── proxy.ts        # Routes LLM calls to the right adapter
 │   ├── prompts.ts      # System prompt and context builder
 │   ├── openai.ts       # OpenAI-compatible adapter (also handles Groq, Mistral, etc.)
@@ -70,7 +74,9 @@ All click/change handlers use event delegation attached once to the root via `da
 
 HTML responses are streamed through, not buffered. The toolbar script tag gets appended at the end of the stream.
 
-When applying LLM edits, OpenMagic tries exact string match first, then falls back to fuzzy line-by-line matching to handle indentation differences.
+When applying LLM edits, the toolbar sends typed patches to the server. The server previews all patches, rejects ambiguous or unsafe matches, applies patch groups atomically, and stores a rollback manifest for applied groups.
+
+Project grounding is server-side first. The toolbar calls `project.ground`, which detects common frameworks, maps routes to files, follows local imports, includes co-located styles, and respects a context budget. The older toolbar heuristic remains as a fallback.
 
 ---
 
@@ -87,11 +93,15 @@ When applying LLM edits, OpenMagic tries exact string match first, then falls ba
    },
    ```
 
-2. If the provider uses an OpenAI-compatible API (most do), you're done. The `openai.ts` adapter handles it via the registry's `baseUrl`.
+2. If the provider can list models, add or extend the server-side model adapter in `src/llm/models.ts`. Keep the browser toolbar out of provider-specific model fetching; it should receive provider/model data from `config.get` and `provider.models`.
 
-3. If the API is different, create `src/llm/newprovider.ts` with a `chat()` function matching the same signature as `openai.ts`, then add routing in `src/llm/proxy.ts`.
+3. If the provider uses an OpenAI-compatible chat API (most do), the `openai.ts` adapter handles it via the registry's `baseUrl`.
 
-4. Add the provider to the browser-side `MODEL_REGISTRY` object at the top of `src/toolbar/index.ts` so it shows in the dropdown.
+4. If the chat API is different, create `src/llm/newprovider.ts` with a `chat()` function matching the same signature as `openai.ts`, then add routing in `src/llm/proxy.ts`.
+
+5. Add tests for static fallback and live model normalization in `tests/models.test.ts`.
+
+6. If request payloads or streaming behavior differ, update the execution path and add request-construction tests in `tests/provider-execution.test.ts`.
 
 ---
 
@@ -111,7 +121,7 @@ Icons are SVGs defined in the `ICON` object at the top of `index.ts`. No emojis 
 
 ## Code style
 
-TypeScript strict mode is on. No eslint config yet. Just match what's already in each file. Keep things simple and direct.
+TypeScript strict mode is on and ESLint is configured locally. Run `npm run lint` before opening a PR. Keep changes simple and direct.
 
 ---
 
@@ -120,10 +130,13 @@ TypeScript strict mode is on. No eslint config yet. Just match what's already in
 ```bash
 npm test           # vitest
 npm run build      # build CLI + toolbar
-npx tsc --noEmit   # type check
+npm run typecheck  # type check
+npm run lint       # eslint
+npm run test:smoke # proxy and toolbar injection smoke test
+npm run check:pack # npm package dry run
 ```
 
-Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection). The toolbar is tested manually against a running dev server.
+Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection, provider catalogs). The smoke test covers the built proxy, toolbar injection, and toolbar bundle syntax; still test toolbar UX manually when changing UI behavior.
 
 ---
 
@@ -135,7 +148,9 @@ Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for serve
    ```bash
    npm run build
    npm test
-   npx tsc --noEmit
+   npm run typecheck
+   npm run lint
+   npm run test:smoke
    ```
 4. If you changed proxy, toolbar, or LLM logic, test manually with a dev server
 5. Fill out the PR template and submit against `main`

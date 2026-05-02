@@ -1,0 +1,31 @@
+name: Patch Application Bug
+description: Report a failed, partial, or incorrect file edit
+title: "[Patch]: "
+labels: ["bug", "patching"]
+body:
+  - type: textarea
+    id: prompt
+    attributes:
+      label: Prompt or requested change
+      description: What did you ask OpenMagic to change?
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Include whether files were partially applied, matched the wrong block, or failed to apply.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: textarea
+    id: affected-files
+    attributes:
+      label: Affected files
+      render: text
+  - type: textarea
+    id: debug-info
+    attributes:
+      label: Debug Info
+      render: text

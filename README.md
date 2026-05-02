@@ -53,13 +53,14 @@ Run this from your project folder so OpenMagic can find your source files and de
 | | Feature | Description |
 |---|---------|-------------|
 | **Select** | Element Selection | Click any element to capture its DOM, computed styles, parent layout, siblings, React props, and component name |
-| **Ground** | Smart File Grounding | Reads project files, follows import chains, auto-reads co-located stylesheets and `package.json` deps |
-| **Diff** | Diff Preview | Approve or reject each change. Undo to revert. Fuzzy line matching handles indentation differences |
+| **Ground** | Smart File Grounding | Server-side route, component, import, and stylesheet matching sends the most relevant files first |
+| **Diff** | Atomic Patch Preview | Approve or reject each change. Patch groups apply server-side with rollback support |
 | **Retry** | Auto-Retry | If the LLM requests more files, OpenMagic reads them transparently and retries — no manual intervention |
 | **Chat** | Markdown Chat | Streaming responses, copy buttons, session persistence across HMR reloads |
 | **Net** | Network Profiling | Captures page load timing, TTFB, FCP, and flags slow resources |
 | **Img** | Image Attachments | Drag-drop, paste from clipboard, or use the file picker — vision models analyze screenshots |
 | **Keys** | Per-Provider Keys | Store a key for each provider. Switch models without re-entering credentials |
+| **Plan** | Plan Before Editing | Review an implementation plan before asking the model to generate patches |
 | **KB** | Keyboard Shortcuts | Toggle, send, close, minimize — all from the keyboard |
 | **Min** | Minimize to Icon | Collapse the toolbar to a small floating button when you do not need it |
 
@@ -97,15 +98,15 @@ Stop with `Ctrl+C`. Nothing stays behind.
 
 ## Supported Providers
 
-14 providers, 70+ models. All pre-configured — select a provider, pick a model, paste your key.
+14 providers, 70+ models. Providers ship with a static fallback list, and OpenMagic fetches live model lists from the local server when the provider supports it. API keys stay server-side and are never sent to the toolbar.
 
 | Provider | Notable Models | Vision | Thinking / Reasoning |
 |----------|---------------|--------|---------------------|
-| **OpenAI** | GPT-5.4, GPT-5.4 Pro/Mini/Nano, o3, o4-mini, Codex Mini | Yes | reasoning_effort |
+| **OpenAI** | GPT-5.5, GPT-5.4 Pro/Mini/Nano, o3, o4-mini, Codex Mini | Yes | reasoning_effort |
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | Yes | Extended thinking (budget_tokens) |
 | **Google Gemini** | Gemini 3.1 Pro, 3 Flash, 2.5 Pro, 2.5 Flash | Yes | thinking_level |
 | **xAI (Grok)** | Grok 4.20, Grok 4.20 Reasoning, Grok 4.1 Fast | Yes | reasoning_effort |
-| **DeepSeek** | DeepSeek V3.2, DeepSeek R1 | -- | R1: reasoning_effort |
+| **DeepSeek** | DeepSeek V4 Flash/Pro, DeepSeek V3.2, DeepSeek R1 | -- | V4 Pro/R1: reasoning_effort |
 | **Mistral** | Large 3, Small 4, Codestral, Devstral 2, Magistral | Yes | Magistral: reasoning_effort |
 | **MiniMax** | MiniMax models | Varies | -- |
 | **Kimi** | Kimi models | Varies | -- |
@@ -115,6 +116,12 @@ Stop with `Ctrl+C`. Nothing stays behind.
 | **Groq** | Llama 4 Scout, Llama 3.3 70B, Qwen 3 32B | Llama 4 | -- |
 | **Ollama** | Any local model (free, private) | Varies | -- |
 | **OpenRouter** | 200+ models from all providers | Varies | Varies |
+
+Model lists are labeled internally as live, cached, or static. Cloud provider live lists are cached for 12 hours; local providers such as Ollama use a short cache so newly pulled models appear quickly.
+
+Use **Test model** in Settings to verify a provider key/model combination before sending a real request. OpenMagic classifies common failures such as invalid keys, unavailable models, quota/rate limits, and provider errors.
+
+Enable **Plan before editing** when you want the model to produce an implementation plan first. After reviewing the plan, choose **Generate changes** to ask for patches.
 
 ---
 

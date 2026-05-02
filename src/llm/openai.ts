@@ -14,26 +14,15 @@ interface OpenAICompatibleRequest {
   reasoning_effort?: string;
 }
 
-export async function chatOpenAICompatible(
+export function buildOpenAICompatibleRequest(
   provider: string,
   model: string,
-  apiKey: string,
   messages: ChatMessage[],
-  context: LlmContext,
-  onChunk: (chunk: string) => void,
-  onDone: (result: { content: string }) => void,
-  onError: (error: string) => void
-): Promise<void> {
+  context: LlmContext
+): OpenAICompatibleRequest {
   const providerConfig = MODEL_REGISTRY[provider];
-  if (!providerConfig) {
-    onError(`Unknown provider: ${provider}`);
-    return;
-  }
+  const modelInfo = providerConfig?.models.find((m) => m.id === model);
 
-  const apiBase = providerConfig.apiBase;
-  const url = `${apiBase}/chat/completions`;
-
-  // Build messages with context
   const apiMessages: OpenAICompatibleRequest["messages"] = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
@@ -46,8 +35,6 @@ export async function chatOpenAICompatible(
     if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
 
-      // If we have a screenshot and the model supports vision, add it
-      const modelInfo = providerConfig.models.find((m) => m.id === model);
       if (context.screenshot && modelInfo?.vision) {
         apiMessages.push({
           role: "user",
@@ -72,7 +59,7 @@ export async function chatOpenAICompatible(
     }
   }
 
-  // GPT-5.x, o3, o4 models require max_completion_tokens instead of max_tokens
+  // GPT-5.x, o3, o4 models require max_completion_tokens instead of max_tokens.
   const usesCompletionTokens = provider === "openai" && (
     model.startsWith("gpt-5") || model.startsWith("o3") || model.startsWith("o4") || model.startsWith("codex")
   );
@@ -89,8 +76,6 @@ export async function chatOpenAICompatible(
     body.max_tokens = 4096;
   }
 
-  // Add thinking/reasoning config if the model supports it
-  const modelInfo = providerConfig.models.find((m) => m.id === model);
   if (modelInfo?.thinking?.supported && modelInfo.thinking.paramType === "level") {
     body.reasoning_effort = modelInfo.thinking.defaultLevel || "medium";
     const limit = Math.min(modelInfo.maxOutput, 16384);
@@ -100,6 +85,30 @@ export async function chatOpenAICompatible(
       body.max_tokens = limit;
     }
   }
+
+  return body;
+}
+
+export async function chatOpenAICompatible(
+  provider: string,
+  model: string,
+  apiKey: string,
+  messages: ChatMessage[],
+  context: LlmContext,
+  onChunk: (chunk: string) => void,
+  onDone: (result: { content: string }) => void,
+  onError: (error: string) => void
+): Promise<void> {
+  const providerConfig = MODEL_REGISTRY[provider];
+  if (!providerConfig) {
+    onError(`Unknown provider: ${provider}`);
+    return;
+  }
+
+  const apiBase = providerConfig.apiBase;
+  const url = `${apiBase}/chat/completions`;
+
+  const body = buildOpenAICompatibleRequest(provider, model, messages, context);
 
   try {
     const headers: Record<string, string> = {

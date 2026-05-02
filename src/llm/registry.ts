@@ -59,7 +59,22 @@ export const MODEL_REGISTRY: ProviderRegistry = {
   openai: {
     name: "OpenAI",
     models: [
-      // GPT-5.4 family (March 2026 — latest flagship)
+      // GPT-5.5 family (current flagship)
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        vision: true,
+        context: 1000000,
+        maxOutput: 128000,
+        thinking: {
+          supported: true,
+          paramName: "reasoning_effort",
+          paramType: "level",
+          levels: ["none", "low", "medium", "high", "xhigh"],
+          defaultLevel: "medium",
+        },
+      },
+      // GPT-5.4 family
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -468,18 +483,39 @@ export const MODEL_REGISTRY: ProviderRegistry = {
     name: "DeepSeek",
     models: [
       {
-        id: "deepseek-chat",
-        name: "DeepSeek V3.2",
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
         vision: false,
-        context: 128000,
-        maxOutput: 8192,
+        context: 1000000,
+        maxOutput: 384000,
+      },
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        vision: false,
+        context: 1000000,
+        maxOutput: 384000,
+        thinking: {
+          supported: true,
+          paramName: "reasoning_effort",
+          paramType: "level",
+          levels: ["low", "medium", "high"],
+          defaultLevel: "high",
+        },
+      },
+      {
+        id: "deepseek-chat",
+        name: "DeepSeek Chat (V4 Flash alias)",
+        vision: false,
+        context: 1000000,
+        maxOutput: 384000,
       },
       {
         id: "deepseek-reasoner",
-        name: "DeepSeek R1",
+        name: "DeepSeek Reasoner (V4 Flash thinking alias)",
         vision: false,
-        context: 128000,
-        maxOutput: 8192,
+        context: 1000000,
+        maxOutput: 384000,
         thinking: {
           supported: true,
           paramName: "reasoning_effort",

@@ -19,6 +19,10 @@ import type {
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
+import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
+import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
+import { groundProject, type ProjectGroundRequest } from "./project-grounding.js";
+import { testProviderModel } from "./llm/provider-test.js";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -47,6 +51,37 @@ console.info = (...a: any[]) => { captureServerLog("info", ...a); _origInfo(...a
 
 interface ClientState {
   authenticated: boolean;
+}
+
+export type OperationCategory = "auth" | "read" | "write" | "delete" | "config" | "llm" | "debug" | "models";
+
+const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
+  handshake: "auth",
+  "fs.read": "read",
+  "fs.list": "read",
+  "fs.grep": "read",
+  "fs.write": "write",
+  "fs.undo": "write",
+  "fs.patch.preview": "write",
+  "fs.patch.apply": "write",
+  "fs.patch.rollback": "write",
+  "fs.delete": "delete",
+  "config.get": "config",
+  "config.set": "config",
+  "llm.chat": "llm",
+  "provider.models": "models",
+  "provider.testModel": "models",
+  "project.ground": "read",
+  "debug.logs": "debug",
+};
+
+export function getOperationCategory(type: string): OperationCategory | null {
+  return OPERATION_CATEGORIES[type] || null;
+}
+
+export function authorizeOperation(type: string, authenticated: boolean): boolean {
+  if (type === "handshake") return true;
+  return authenticated && !!getOperationCategory(type);
 }
 
 /**
@@ -111,8 +146,13 @@ export function attachOpenMagic(
 
       const state = clientStates.get(ws)!;
 
-      if (!state.authenticated && msg.type !== "handshake") {
-        sendError(ws, "auth_required", "Handshake required");
+      if (!authorizeOperation(msg.type, state.authenticated)) {
+        const category = getOperationCategory(msg.type);
+        if (!state.authenticated && category) {
+          sendError(ws, "auth_required", "Handshake required", msg.id);
+        } else {
+          sendError(ws, "unknown_type", `Unknown message type: ${msg.type}`, msg.id);
+        }
         return;
       }
 
@@ -254,6 +294,43 @@ async function handleMessage(
       break;
     }
 
+    case "fs.patch.preview": {
+      const payload = msg.payload as PatchGroupRequest | undefined;
+      if (!payload?.patches?.length) {
+        sendError(ws, "invalid_payload", "Missing patches", msg.id);
+        break;
+      }
+      const result = previewPatchGroup(roots[0] || process.cwd(), payload);
+      send(ws, { id: msg.id, type: "fs.patch.previewed", payload: result });
+      break;
+    }
+
+    case "fs.patch.apply": {
+      const payload = msg.payload as PatchGroupRequest | undefined;
+      if (!payload?.patches?.length) {
+        sendError(ws, "invalid_payload", "Missing patches", msg.id);
+        break;
+      }
+      const result = applyPatchGroup(roots[0] || process.cwd(), payload);
+      send(ws, { id: msg.id, type: "fs.patch.applied", payload: result });
+      break;
+    }
+
+    case "fs.patch.rollback": {
+      const payload = msg.payload as { groupId?: string } | undefined;
+      if (!payload?.groupId) {
+        sendError(ws, "invalid_payload", "Missing groupId", msg.id);
+        break;
+      }
+      const result = rollbackPatchGroup(roots[0] || process.cwd(), payload.groupId);
+      if (!result.ok) {
+        sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
+      } else {
+        send(ws, { id: msg.id, type: "fs.patch.rolledback", payload: result });
+      }
+      break;
+    }
+
     case "fs.list": {
       const payload = msg.payload as FsListPayload | undefined;
       const root = payload?.root || roots[0];
@@ -331,13 +408,65 @@ async function handleMessage(
         payload: {
           provider,
           model,
+          planBeforeEdit: !!config.planBeforeEdit,
           hasApiKey: !!(config.apiKeys?.[provider] || config.apiKey),
           roots: config.roots || roots,
           apiKeys: Object.fromEntries(
             Object.entries(config.apiKeys || {}).map(([k]) => [k, true])
           ),
+          providers: getToolbarRegistry(),
           detectedClis: cliStatuses,
         },
+      });
+      break;
+    }
+
+    case "provider.models": {
+      const payload = msg.payload as { provider?: string; refresh?: boolean } | undefined;
+      const provider = payload?.provider;
+      if (!provider) {
+        sendError(ws, "invalid_payload", "Missing provider", msg.id);
+        break;
+      }
+
+      const config = loadConfig();
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const result = await fetchProviderModels(provider, apiKey, { refresh: payload?.refresh });
+      send(ws, {
+        id: msg.id,
+        type: "provider.models.result",
+        payload: result,
+      });
+      break;
+    }
+
+    case "provider.testModel": {
+      const payload = msg.payload as { provider?: string; model?: string } | undefined;
+      const provider = payload?.provider;
+      const model = payload?.model;
+      if (!provider || !model) {
+        sendError(ws, "invalid_payload", "Missing provider or model", msg.id);
+        break;
+      }
+
+      const config = loadConfig();
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const result = await testProviderModel(provider, model, apiKey);
+      send(ws, {
+        id: msg.id,
+        type: "provider.testModel.result",
+        payload: result,
+      });
+      break;
+    }
+
+    case "project.ground": {
+      const payload = msg.payload as ProjectGroundRequest | undefined;
+      const result = groundProject(roots[0] || process.cwd(), payload || {});
+      send(ws, {
+        id: msg.id,
+        type: "project.ground.result",
+        payload: result,
       });
       break;
     }
@@ -347,6 +476,7 @@ async function handleMessage(
       const updates: Partial<OpenMagicConfig> = {};
       if (payload.provider !== undefined) updates.provider = payload.provider;
       if (payload.model !== undefined) updates.model = payload.model;
+      if (payload.planBeforeEdit !== undefined) updates.planBeforeEdit = payload.planBeforeEdit;
       // Per-provider key storage
       if (payload.apiKey !== undefined && payload.provider) {
         const existing = loadConfig();
@@ -440,7 +570,7 @@ function serveToolbarBundle(res: http.ServerResponse, token: string): void {
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "no-cache",
         });
-        res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n${content}`);
+        res.end(wrapToolbarBundle(content, token));
         return;
       }
     } catch {
@@ -452,5 +582,9 @@ function serveToolbarBundle(res: http.ServerResponse, token: string): void {
     "Content-Type": "application/javascript",
     "Access-Control-Allow-Origin": "*",
   });
-  res.end(`const __OPENMAGIC_TOKEN__=${JSON.stringify(token)};\n(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`);
+  res.end(wrapToolbarBundle(`(function(){var d=document.createElement("div");d.style.cssText="position:fixed;bottom:20px;right:20px;background:#1a1a2e;color:#e94560;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;z-index:2147483647;box-shadow:0 4px 24px rgba(0,0,0,0.3);";d.textContent="OpenMagic: Toolbar bundle not found.";document.body.appendChild(d);})();`, token));
+}
+
+export function wrapToolbarBundle(content: string, token: string): string {
+  return `(function(__OPENMAGIC_TOKEN__){\n${content}\n})(${JSON.stringify(token)});`;
 }

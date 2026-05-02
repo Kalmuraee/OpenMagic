@@ -12,11 +12,14 @@
   ],
   "scripts": {
     "build": "tsup",
-    "build:toolbar": "tsup src/toolbar/index.ts --format iife --global-name OpenMagicToolbar --out-dir dist/toolbar --minify",
+    "build:toolbar": "tsup src/toolbar/index.ts --no-config --format iife --global-name OpenMagicToolbar --platform browser --target es2020 --out-dir dist/toolbar --minify",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"*.config.ts\"",
     "test": "vitest run",
+    "test:smoke": "npm run build && node scripts/smoke-test.mjs",
+    "check:pack": "npm pack --dry-run",
+    "check:all": "npm run typecheck && npm run lint && npm test && npm run test:smoke && npm run check:pack",
     "prepublishOnly": "npm run build && npm run build:toolbar"
   },
   "keywords": [

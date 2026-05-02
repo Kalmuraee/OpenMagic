@@ -1,5 +1,8 @@
 import type { ModelInfo, ProviderInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getConfigDir } from "../config.js";
 
 export type ModelSource = "live" | "static" | "cache";
 
@@ -68,6 +71,7 @@ interface CacheEntry {
 const CLOUD_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const LOCAL_CACHE_TTL_MS = 60 * 1000;
 const modelCache = new Map<string, CacheEntry>();
+const MODEL_CACHE_VERSION = 1;
 
 const OPENAI_COMPATIBLE_MODEL_PROVIDERS = new Set([
   "openai",
@@ -151,6 +155,7 @@ export async function fetchProviderModels(
 
     const merged = mergeModels(staticModels, liveModels, now);
     modelCache.set(provider, { fetchedAt: now, models: merged });
+    persistModelCache(provider, { fetchedAt: now, models: merged });
     return { provider, models: merged, source: "live" };
   } catch (error) {
     return {
@@ -449,11 +454,48 @@ function mergeModels(staticModels: ModelCatalogEntry[], liveModels: ModelCatalog
 }
 
 function getCachedModels(provider: string, providerInfo: ProviderInfo, now: number): ModelCatalogEntry[] | null {
-  const cached = modelCache.get(provider);
+  const cached = modelCache.get(provider) || readPersistedModelCache(provider);
   if (!cached) return null;
   const ttl = providerInfo.local ? LOCAL_CACHE_TTL_MS : CLOUD_CACHE_TTL_MS;
   if (now - cached.fetchedAt > ttl) return null;
   return cached.models.map((model) => ({ ...model, source: "cache" as const }));
+}
+
+function getModelCachePath(): string {
+  return process.env.OPENMAGIC_MODEL_CACHE_FILE || join(getConfigDir(), "model-cache.json");
+}
+
+function readPersistedModelCache(provider: string): CacheEntry | null {
+  try {
+    const file = getModelCachePath();
+    if (!existsSync(file)) return null;
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as {
+      version?: number;
+      providers?: Record<string, CacheEntry>;
+    };
+    if (parsed.version !== MODEL_CACHE_VERSION) return null;
+    const entry = parsed.providers?.[provider];
+    if (!entry?.models?.length) return null;
+    modelCache.set(provider, entry);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function persistModelCache(provider: string, entry: CacheEntry): void {
+  try {
+    const file = getModelCachePath();
+    let providers: Record<string, CacheEntry> = {};
+    if (existsSync(file)) {
+      const parsed = JSON.parse(readFileSync(file, "utf-8")) as { providers?: Record<string, CacheEntry> };
+      providers = parsed.providers || {};
+    }
+    providers[provider] = entry;
+    writeFileSync(file, JSON.stringify({ version: MODEL_CACHE_VERSION, providers }, null, 2), { encoding: "utf-8", mode: 0o600 });
+  } catch {
+    // Cache persistence is best-effort; model fetch results still return to the caller.
+  }
 }
 
 function getDeepSeekAliases(id: string): string[] | undefined {

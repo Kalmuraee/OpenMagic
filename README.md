@@ -46,6 +46,8 @@ npx openmagic@latest
 
 Run this from your project folder so OpenMagic can find your source files and dev server. A proxied version of your app opens with the toolbar overlaid.
 
+Requires Node.js 20.19 or newer.
+
 ---
 
 ## Features

@@ -6,6 +6,8 @@ PRs are welcome. Bug fixes, new providers, UI work, docs, whatever you've got.
 
 ## Local setup
 
+OpenMagic requires Node.js 20.19 or newer.
+
 ```bash
 git clone https://github.com/Kalmuraee/OpenMagic.git
 cd OpenMagic

@@ -45,7 +45,7 @@ You MUST respond with valid JSON in this exact format:
 13. Check themeState.darkMode — if true, use dark-mode-aware colors and respect the project's dark mode classes.
 14. Use cssVariables to leverage existing design tokens (var(--color-primary)) instead of hardcoding hex values.
 15. Check activeBreakpoints to know which responsive breakpoint is active. Suggest responsive-aware changes.
-16. Check visibilityState — the element may be scrolled out of view, hidden, or inside a scrollable container.
+16. Check visibilityState — the element may be scrolled out of view, hidden, or inside a scrollable container; parentScrollContainer identifies the nearest scrolling ancestor.
 17. Always preserve existing code style, conventions, and indentation
 18. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 

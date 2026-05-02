@@ -34,7 +34,7 @@ export interface ProjectGroundResult {
   }>;
 }
 
-const TEXT_RE = /\.(?:[cm]?[jt]sx?|svelte|vue|astro|html?|css|scss|less|php|py|rb|blade\.php)$/i;
+const TEXT_RE = /\.(?:[cm]?[jt]sx?|json|svelte|vue|astro|html?|css|scss|less|php|py|rb|blade\.php)$/i;
 const STOP_WORDS = new Set(["the", "to", "in", "of", "and", "div", "span", "class", "style", "with", "for", "from"]);
 const DEFAULT_BUDGET = 48_000;
 const MAX_FILES = 10;
@@ -58,17 +58,20 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
     }
   }
 
+  const aliases = tsconfigAliases(root);
+  const allPaths = files.map((file) => file.path);
+
   for (const item of [...selected.keys()].slice(0, 4)) {
-    for (const dep of localImportCandidates(root, item, files.map((file) => file.path))) {
+    for (const dep of localImportCandidates(root, item, allPaths, aliases)) {
       mergeSelection(selected, dep, 8, "import dependency");
     }
-    for (const style of styleCandidates(item, files.map((file) => file.path))) {
+    for (const style of styleCandidates(item, allPaths)) {
       mergeSelection(selected, style, 6, "CSS match");
     }
   }
 
   for (const config of configCandidates(framework)) {
-    if (files.some((file) => file.path === config)) {
+    if (existsSync(join(root, config))) {
       mergeSelection(selected, config, 4, "framework config");
     }
   }
@@ -218,17 +221,64 @@ function scoreFiles(
   }).sort((a, b) => b.score - a.score);
 }
 
-function localImportCandidates(root: string, file: string, allPaths: string[]): string[] {
+function localImportCandidates(root: string, file: string, allPaths: string[], aliases: Record<string, string>): string[] {
   const read = readFileSafe(join(root, file), [root]);
   if ("error" in read) return [];
   const dir = dirname(file);
-  const imports = [...read.content.matchAll(/(?:import|from)\s+["'](\.{1,2}\/[^"']+)["']/g)].map((match) => match[1]);
+  const imports = [...read.content.matchAll(/(?:import|from)\s+["']([^"']+)["']/g)].map((match) => match[1]);
   const candidates: string[] = [];
   for (const imp of imports) {
-    const base = relative(root, join(root, dir, imp));
-    candidates.push(base, `${base}.tsx`, `${base}.ts`, `${base}.jsx`, `${base}.js`, `${base}/index.tsx`, `${base}/index.ts`);
+    let base = "";
+    if (imp.startsWith("./") || imp.startsWith("../")) {
+      base = relative(root, join(root, dir, imp));
+    } else {
+      base = resolveAliasImport(imp, aliases);
+      if (!base) continue;
+    }
+    candidates.push(base, `${base}.tsx`, `${base}.ts`, `${base}.jsx`, `${base}.js`, `${base}.json`, `${base}/index.tsx`, `${base}/index.ts`);
   }
   return candidates.filter((candidate) => allPaths.includes(candidate));
+}
+
+function tsconfigAliases(root: string): Record<string, string> {
+  for (const file of ["tsconfig.json", "tsconfig.app.json"]) {
+    const path = join(root, file);
+    if (!existsSync(path)) continue;
+    try {
+      const raw = readFileSync(path, "utf-8")
+        .replace(/\/\/.*$/gm, "")
+        .replace(/,\s*([}\]])/g, "$1");
+      const parsed = JSON.parse(raw);
+      const baseUrl = normalizePathPrefix(parsed?.compilerOptions?.baseUrl || ".");
+      const paths = parsed?.compilerOptions?.paths || {};
+      const aliases: Record<string, string> = {};
+      for (const [alias, targets] of Object.entries(paths)) {
+        const target = Array.isArray(targets) ? targets[0] : undefined;
+        if (!target) continue;
+        const aliasPrefix = alias.replace(/\*.*$/, "");
+        const targetPrefix = normalizePathPrefix(`${baseUrl}/${target.replace(/\*.*$/, "")}`);
+        if (aliasPrefix) aliases[aliasPrefix] = targetPrefix;
+      }
+      aliases["@/"] ||= "src/";
+      aliases["~/"] ||= "src/";
+      aliases["#/"] ||= "src/";
+      return aliases;
+    } catch {}
+  }
+  return { "@/": "src/", "~/": "src/", "#/": "src/" };
+}
+
+function resolveAliasImport(importPath: string, aliases: Record<string, string>): string {
+  for (const [aliasPrefix, targetPrefix] of Object.entries(aliases)) {
+    if (importPath.startsWith(aliasPrefix)) {
+      return normalizePathPrefix(importPath.replace(aliasPrefix, targetPrefix));
+    }
+  }
+  return "";
+}
+
+function normalizePathPrefix(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");
 }
 
 function styleCandidates(file: string, allPaths: string[]): string[] {
@@ -238,10 +288,16 @@ function styleCandidates(file: string, allPaths: string[]): string[] {
 }
 
 function configCandidates(framework: string): string[] {
-  const common = ["package.json", "tsconfig.json", "tailwind.config.ts", "tailwind.config.js", "src/index.css", "src/app/globals.css"];
+  const common = [
+    "package.json", "tsconfig.json", "tsconfig.app.json",
+    "tailwind.config.ts", "tailwind.config.js", "tailwind.config.mjs",
+    "src/index.css", "src/global.css", "src/app/globals.css", "src/styles/globals.css", "styles/globals.css", "app/globals.css",
+    ".eslintrc.json", ".prettierrc", "theme.ts", "theme.js", "src/theme.ts", "src/theme.js",
+  ];
   if (framework === "next") return [...common, "next.config.js", "next.config.mjs", "next.config.ts"];
   if (framework === "vite-react") return [...common, "vite.config.ts", "vite.config.js"];
   if (framework === "sveltekit") return [...common, "svelte.config.js", "vite.config.ts"];
+  if (framework === "astro") return [...common, "astro.config.mjs", "astro.config.ts"];
   return common;
 }
 

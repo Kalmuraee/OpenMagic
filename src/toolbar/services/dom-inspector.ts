@@ -41,6 +41,7 @@ export interface SelectedElement {
     scrollTop: number;
     scrollLeft: number;
     isScrollable: boolean;
+    parentScrollContainer: string | null;
   };
   activeBreakpoints: string[];
   pseudoElements: { before: string; after: string };
@@ -217,7 +218,14 @@ export function inspectElement(el: HTMLElement): SelectedElement {
   let isVisible = true;
   try { isVisible = el.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true; } catch { isVisible = computed.display !== "none" && computed.visibility !== "hidden"; }
   const isScrollable = el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth;
-  const visibilityState = { isVisible, isInViewport, scrollTop: el.scrollTop, scrollLeft: el.scrollLeft, isScrollable };
+  const visibilityState = {
+    isVisible,
+    isInViewport,
+    scrollTop: el.scrollTop,
+    scrollLeft: el.scrollLeft,
+    isScrollable,
+    parentScrollContainer: getParentScrollContainer(el),
+  };
 
   // Active media queries / breakpoints
   const activeBreakpoints: string[] = [];
@@ -477,6 +485,19 @@ function getReactProps(el: HTMLElement): Record<string, unknown> | null {
   return null;
 }
 
+function getParentScrollContainer(el: HTMLElement): string | null {
+  let current = el.parentElement;
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const overflow = `${style.overflow} ${style.overflowX} ${style.overflowY}`;
+    const canScroll = /(auto|scroll|overlay)/.test(overflow)
+      && (current.scrollHeight > current.clientHeight || current.scrollWidth > current.clientWidth);
+    if (canScroll) return getCssSelector(current);
+    current = current.parentElement;
+  }
+  return null;
+}
+
 // --- Tailwind / Utility Class Resolution ---
 
 function resolveClasses(el: HTMLElement, matchedRules: string[]): { className: string; css: string }[] {
@@ -532,4 +553,3 @@ export function hideHighlight(): void {
     highlightEl.style.display = "none";
   }
 }
-

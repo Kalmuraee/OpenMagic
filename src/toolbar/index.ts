@@ -1729,6 +1729,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false) {
         "next.config.js", "next.config.mjs", "next.config.ts",
         "vite.config.ts", "vite.config.js",
         "astro.config.mjs", "astro.config.ts",
+        ".eslintrc.json", ".prettierrc", "theme.ts", "theme.js", "src/theme.ts", "src/theme.js",
       ];
       for (const candidate of CONFIG_CANDIDATES) {
         if (totalChars >= MAX_GROUNDED_CHARS || readPaths.has(candidate)) continue;

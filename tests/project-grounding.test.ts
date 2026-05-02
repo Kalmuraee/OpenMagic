@@ -10,6 +10,9 @@ beforeEach(() => {
   mkdirSync(join(ROOT, "src/app/dashboard"), { recursive: true });
   mkdirSync(join(ROOT, "src/components"), { recursive: true });
   writeFileSync(join(ROOT, "package.json"), JSON.stringify({ dependencies: { next: "16.0.0", react: "19.0.0" } }));
+  writeFileSync(join(ROOT, "tsconfig.json"), JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@/*": ["src/*"] } } }));
+  writeFileSync(join(ROOT, ".prettierrc"), "{\"semi\": true}\n");
+  writeFileSync(join(ROOT, "src/theme.ts"), "export const theme = { color: 'purple' };\n");
   writeFileSync(join(ROOT, "src/app/dashboard/page.tsx"), "import { DashboardCard } from '../../components/DashboardCard';\nexport default function Page(){ return <DashboardCard />; }\n");
   writeFileSync(join(ROOT, "src/components/DashboardCard.tsx"), "import './DashboardCard.css';\nexport function DashboardCard(){ return <section className=\"dashboard-card\">Revenue</section>; }\n");
   writeFileSync(join(ROOT, "src/components/DashboardCard.css"), ".dashboard-card { color: red; }\n");
@@ -48,5 +51,21 @@ describe("project grounding", () => {
 
     const total = result.files.reduce((sum, file) => sum + file.content.length, 0);
     expect(total).toBeLessThanOrEqual(100);
+  });
+
+  it("grounds tsconfig aliases and dotfile/theme config candidates", () => {
+    writeFileSync(join(ROOT, "src/app/dashboard/page.tsx"), "import { DashboardCard } from '@/components/DashboardCard';\nexport default function Page(){ return <DashboardCard />; }\n");
+
+    const result = groundProject(ROOT, {
+      pageUrl: "http://localhost:4567/dashboard",
+      promptText: "use the theme for dashboard",
+      selectedElement: { className: "dashboard-card" },
+    });
+
+    const paths = result.files.map((file) => file.path);
+    expect(paths).toContain("src/components/DashboardCard.tsx");
+    expect(paths).toContain("tsconfig.json");
+    expect(paths).toContain(".prettierrc");
+    expect(paths).toContain("src/theme.ts");
   });
 });

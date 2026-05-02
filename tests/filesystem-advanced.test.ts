@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { readFileSafe, writeFileSafe, cleanupBackups } from "../src/filesystem.js";
+import { readFileSafe, writeFileSafe, deleteFileSafe, cleanupBackups, getUndoCountForFile, undoFileSafe } from "../src/filesystem.js";
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -94,5 +94,56 @@ describe("Atomic writes", () => {
     const files = readdirSync(TEST_DIR) as string[];
     const tmpFiles = files.filter((f: string) => f.includes(".openmagic-tmp"));
     expect(tmpFiles.length).toBe(0);
+  });
+});
+
+describe("Multi-level undo", () => {
+  it("keeps a stack of backups and pops them in reverse order", () => {
+    const filePath = join(TEST_DIR, "undo-stack.txt");
+    writeFileSync(filePath, "v1");
+
+    expect(writeFileSafe(filePath, "v2", [TEST_DIR]).ok).toBe(true);
+    expect(writeFileSafe(filePath, "v3", [TEST_DIR]).ok).toBe(true);
+    expect(getUndoCountForFile(filePath)).toBe(2);
+
+    expect(undoFileSafe(filePath, [TEST_DIR]).ok).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe("v2");
+    expect(getUndoCountForFile(filePath)).toBe(1);
+
+    expect(undoFileSafe(filePath, [TEST_DIR]).ok).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe("v1");
+    expect(getUndoCountForFile(filePath)).toBe(0);
+  });
+
+  it("undoes file creation by deleting the created file", () => {
+    const filePath = join(TEST_DIR, "created-then-undone.txt");
+
+    expect(writeFileSafe(filePath, "created", [TEST_DIR]).ok).toBe(true);
+    expect(existsSync(filePath)).toBe(true);
+
+    expect(undoFileSafe(filePath, [TEST_DIR]).ok).toBe(true);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("undoes deletion by restoring the deleted file", () => {
+    const filePath = join(TEST_DIR, "delete-undo.txt");
+    writeFileSync(filePath, "restore me");
+
+    expect(deleteFileSafe(filePath, [TEST_DIR]).ok).toBe(true);
+    expect(existsSync(filePath)).toBe(false);
+
+    expect(undoFileSafe(filePath, [TEST_DIR]).ok).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe("restore me");
+  });
+
+  it("caps the undo stack to ten entries", () => {
+    const filePath = join(TEST_DIR, "undo-cap.txt");
+    writeFileSync(filePath, "v0");
+
+    for (let i = 1; i <= 12; i++) {
+      expect(writeFileSafe(filePath, `v${i}`, [TEST_DIR]).ok).toBe(true);
+    }
+
+    expect(getUndoCountForFile(filePath)).toBe(10);
   });
 });

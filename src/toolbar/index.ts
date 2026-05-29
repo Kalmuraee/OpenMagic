@@ -145,6 +145,7 @@ const state = {
   verifyAfterApply: true,       // run the project's typecheck/lint after applying a patch
   selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
   matchRetryRounds: 0,          // bounded re-prompt-on-failed-match counter (reset on each fresh prompt)
+  lastPlan: "",                 // the approved plan text, fed into the edit pass (H15)
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -877,7 +878,13 @@ async function handleAction(action: string, target: HTMLElement) {
     case "confirm-plan": {
       try {
         const prompt = decodeBase64Utf8(target.dataset.prompt || "");
-        void sendPrompt(prompt, true);
+        // H15: feed the approved plan into the edit pass (as part of the user turn,
+        // so it reaches CLI providers too) instead of silently re-deriving it.
+        const plan = state.lastPlan?.trim();
+        const editText = plan
+          ? `Approved implementation plan:\n${plan}\n\nImplement exactly this plan for the request: ${prompt}`
+          : prompt;
+        void sendPrompt(editText, true);
       } catch {}
       break;
     }
@@ -1649,6 +1656,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
       selectedElement: state.selectedElement,
     });
     const files = grounded?.payload?.files;
+    if (grounded?.payload?.conventions) context.repoConventions = grounded.payload.conventions; // H15
     if (Array.isArray(files) && files.length) {
       context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
       state.groundedFiles = files.map((file: any) => file.path);
@@ -2275,7 +2283,9 @@ async function runPlanBeforeEdit(text: string) {
         scrollChatToBottom();
       }
     );
-    state.messages.push({ role: "assistant", content: result?.content || state.streamContent || "Plan generated." });
+    const planText = result?.content || state.streamContent || "";
+    state.lastPlan = planText; // H15: fed into the edit pass on confirm
+    state.messages.push({ role: "assistant", content: planText || "Plan generated." });
     state.messages.push({ role: "system", content: `__PLAN_CONFIRM__${encodeBase64Utf8(text)}` });
   } catch (e: any) {
     state.messages.push({ role: "system", content: `Plan failed: ${e.message}` });

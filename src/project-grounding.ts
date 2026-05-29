@@ -26,6 +26,7 @@ export interface GroundedFile {
 
 export interface ProjectGroundResult {
   framework: string;
+  conventions: string;
   files: GroundedFile[];
   rankedFiles: Array<{
     path: string;
@@ -33,6 +34,51 @@ export interface ProjectGroundResult {
     score: number;
     snippet: string;
   }>;
+}
+
+/**
+ * H15: a short, runtime-detected "repo conventions" summary so the model writes
+ * code that matches the project (framework/router, package manager, TS strictness,
+ * where components live) instead of guessing.
+ */
+export function detectRepoConventions(root: string): string {
+  const lines: string[] = [];
+  const framework = detectFramework(root);
+  if (framework !== "unknown") lines.push(`Framework: ${framework}`);
+
+  // Package manager from the lockfile.
+  const pm = existsSync(join(root, "pnpm-lock.yaml")) ? "pnpm"
+    : existsSync(join(root, "yarn.lock")) ? "yarn"
+    : existsSync(join(root, "bun.lockb")) ? "bun"
+    : existsSync(join(root, "package-lock.json")) ? "npm"
+    : null;
+  if (pm) lines.push(`Package manager: ${pm}`);
+
+  // TypeScript strictness.
+  const tsconfigPath = join(root, "tsconfig.json");
+  if (existsSync(tsconfigPath)) {
+    try {
+      const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf-8"));
+      const strict = tsconfig?.compilerOptions?.strict;
+      lines.push(`TypeScript: ${strict ? "strict mode" : "non-strict"}`);
+    } catch { /* unreadable tsconfig */ }
+  }
+
+  // Where components tend to live.
+  for (const dir of ["src/components", "components", "app/components", "src/lib/components"]) {
+    if (existsSync(join(root, dir))) { lines.push(`Components live in: ${dir}/`); break; }
+  }
+
+  // Styling approach from deps.
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (deps.tailwindcss) lines.push("Styling: Tailwind CSS");
+    else if (deps["@mui/material"]) lines.push("Styling: MUI");
+    else if (deps["styled-components"]) lines.push("Styling: styled-components");
+  } catch { /* no/invalid package.json */ }
+
+  return lines.join("\n");
 }
 
 const TEXT_RE = /\.(?:[cm]?[jt]sx?|json|svelte|vue|astro|html?|css|scss|less|php|py|rb|blade\.php)$/i;
@@ -109,6 +155,7 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
 
   return {
     framework,
+    conventions: detectRepoConventions(root),
     files: grounded,
     rankedFiles: grounded.map((file) => ({
       path: file.path,

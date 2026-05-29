@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { detectFramework, groundProject } from "../src/project-grounding.js";
+import { detectFramework, detectRepoConventions, groundProject } from "../src/project-grounding.js";
 
 const ROOT = join(process.cwd(), ".test-grounding-root");
 
@@ -25,6 +25,16 @@ afterEach(() => {
 describe("project grounding", () => {
   it("detects the framework", () => {
     expect(detectFramework(ROOT)).toBe("next");
+  });
+
+  it("summarizes repo conventions (H15)", () => {
+    const conventions = detectRepoConventions(ROOT);
+    expect(conventions).toContain("Framework: next");
+    expect(conventions).toContain("Components live in: src/components/");
+    expect(conventions).toContain("TypeScript:");
+    // also surfaced on the ground result
+    const result = groundProject(ROOT, { pageUrl: "http://localhost/dashboard", promptText: "dashboard" });
+    expect(result.conventions).toContain("Framework: next");
   });
 
   it("marks truncated files instead of silently slicing them (H10)", () => {

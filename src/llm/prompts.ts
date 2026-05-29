@@ -31,6 +31,7 @@ You MUST respond with valid JSON in this exact format:
 
 ## Rules
 1. If the user is asking a QUESTION (not requesting a change), respond with {"modifications":[],"explanation":"your answer here"}. Only propose modifications when the user explicitly wants something changed.
+1b. If the request is genuinely ambiguous (multiple plausible files/targets and getting it wrong would edit the wrong code), respond with {"modifications":[],"explanation":"a short clarifying question"} instead of guessing. Follow the Repo Conventions block when present.
 2. NEVER use delete+create to modify an existing file. Always use edit with search/replace. Only use create for genuinely new files that don't exist yet.
 3. Copy the search string EXACTLY from the grounded source files — do not retype, reformat, or change whitespace/indentation
 4. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
@@ -119,6 +120,7 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
     parts.files = context.files;
   }
   if (context.projectTree) parts.projectTree = context.projectTree;
+  if ((context as any).repoConventions) parts.repoConventions = (context as any).repoConventions;
   if ((context as any).pageUrl) parts.pageUrl = (context as any).pageUrl;
   if ((context as any).pageTitle) parts.pageTitle = (context as any).pageTitle;
   if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
@@ -148,6 +150,7 @@ export function buildUserMessage(
     consoleLogs?: string;
     runtimeErrors?: string;
     projectTree?: string;
+    repoConventions?: string;
     pageUrl?: string;
     pageTitle?: string;
     searchResults?: string;
@@ -162,6 +165,10 @@ export function buildUserMessage(
 
   if (context.projectTree) {
     parts.push(`## Project Structure\n\`\`\`\n${context.projectTree}\n\`\`\``);
+  }
+
+  if (context.repoConventions) {
+    parts.push(`## Repo Conventions (match these)\n\`\`\`\n${context.repoConventions}\n\`\`\``);
   }
 
   // Grounded source files

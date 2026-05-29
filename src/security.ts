@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 let sessionToken: string | null = null;
 
@@ -15,5 +15,10 @@ export function getSessionToken(): string {
 }
 
 export function validateToken(token: string): boolean {
-  return token === sessionToken;
+  if (!sessionToken || typeof token !== "string") return false;
+  // Constant-time comparison to avoid leaking the token via response timing.
+  const a = Buffer.from(token);
+  const b = Buffer.from(sessionToken);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }

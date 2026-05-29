@@ -596,7 +596,10 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
 
     const groupId = result.payload.groupId || "";
     const idx = card?.dataset.diffIdx;
-    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file], patches: [patch] }));
+    // H14: surface non-exact (fuzzy) match confidence so the user can scrutinize it.
+    const confidence = (result.payload.changes || preview.payload.changes || [])
+      .find((c: any) => c.file === patch.file)?.confidence;
+    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file], patches: [patch], confidence }));
     const message = `__APPLIED__${appliedPayload}`;
     if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: message };
     else state.messages.push({ role: "system", content: message });
@@ -1301,7 +1304,11 @@ function renderChatHTML(): string {
         const applied = JSON.parse(decodeBase64Utf8(m.content.slice(11)));
         const files = Array.isArray(applied.files) ? applied.files : [];
         const label = files.length === 1 ? files[0] : `${files.length} files`;
-        return `<div class="om-msg om-msg-system">Applied patch group to ${escapeHtml(label)}. <button class="om-undo-btn" data-action="rollback-patch" data-group-id="${escapeHtml(applied.groupId || "")}">Rollback</button></div>`;
+        const conf = typeof applied.confidence === "number" ? applied.confidence : undefined;
+        const confNote = (conf !== undefined && conf < 1)
+          ? ` <span class="om-fuzzy-badge" title="Applied via fuzzy match — verify the result">~${Math.round(conf * 100)}% match</span>`
+          : "";
+        return `<div class="om-msg om-msg-system">Applied patch group to ${escapeHtml(label)}.${confNote} <button class="om-undo-btn" data-action="rollback-patch" data-group-id="${escapeHtml(applied.groupId || "")}">Rollback</button></div>`;
       } catch {
         return `<div class="om-msg om-msg-system">Applied patch group</div>`;
       }

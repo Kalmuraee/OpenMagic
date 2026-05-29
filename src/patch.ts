@@ -53,6 +53,11 @@ interface PatchManifest {
 
 const manifests = new Map<string, PatchManifest>();
 
+// Trigram-similarity floor for the riskiest (fuzzy) match tier. Deliberately
+// high: below this we refuse rather than guess. Exact/whitespace/indentation
+// tiers (confidence >= 0.9) are unaffected.
+export const FUZZY_MIN_CONFIDENCE = 0.92;
+
 export function previewPatch(root: string, patch: FilePatch): PatchPreviewResult {
   const planned = planPatches(root, [patch]);
   return {
@@ -143,6 +148,12 @@ export function clearPatchManifests(): void {
 function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
   const stagedContent = new Map<string, { existed: boolean; content: string; originalContent: string }>();
 
+  // Fuzzy (trigram) matching is the only non-deterministic tier. In a multi-hunk
+  // group a single wrong fuzzy match can silently corrupt one file while others
+  // apply cleanly, so we only permit it when the group has a single replace.
+  const replaceCount = patches.filter((p) => p.type === "replace").length;
+  const allowFuzzy = replaceCount <= 1;
+
   return patches.map((patch) => {
     const path = resolvePatchPath(root, patch.file);
     const base = loadBaseContent(root, path, stagedContent);
@@ -214,7 +225,7 @@ function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
       };
     }
 
-    const match = findReplacement(base.content, patch.search, patch.replace);
+    const match = findReplacement(base.content, patch.search, patch.replace, allowFuzzy);
     if (!match.ok) {
       return {
         patch,
@@ -274,7 +285,8 @@ function loadBaseContent(
 function findReplacement(
   content: string,
   search: string,
-  replace: string
+  replace: string,
+  allowFuzzy = true
 ): { ok: true; start: number; end: number; confidence: number; replace?: string } | { ok: false; reason: string } {
   if (!search) return { ok: false, reason: "Replace patch is missing search text" };
 
@@ -307,9 +319,15 @@ function findReplacement(
     return { ...indentation.match, ok: true, confidence: 0.9 };
   }
 
+  if (!allowFuzzy) {
+    return { ok: false, reason: "No exact/whitespace/indentation match; fuzzy matching is disabled for multi-hunk patch groups" };
+  }
+
   const fuzzy = fuzzyLineMatch(content, search);
   if (!fuzzy) return { ok: false, reason: "No matching code found" };
-  if (fuzzy.confidence < 0.8) return { ok: false, reason: `Low-confidence fuzzy match (${fuzzy.confidence.toFixed(2)})` };
+  if (fuzzy.confidence < FUZZY_MIN_CONFIDENCE) {
+    return { ok: false, reason: `Low-confidence fuzzy match (${fuzzy.confidence.toFixed(2)} < ${FUZZY_MIN_CONFIDENCE}); refusing to guess` };
+  }
 
   return { ok: true, start: fuzzy.start, end: fuzzy.end, confidence: fuzzy.confidence };
 }

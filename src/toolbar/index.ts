@@ -144,6 +144,7 @@ const state = {
   minimized: false,
   verifyAfterApply: true,       // run the project's typecheck/lint after applying a patch
   selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
+  matchRetryRounds: 0,          // bounded re-prompt-on-failed-match counter (reset on each fresh prompt)
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -555,6 +556,43 @@ function patchFailureMessage(payload: any, fallback: string): string {
 }
 
 const MAX_SELF_CORRECT = 2;
+const MAX_MATCH_RETRY = 2;
+
+/**
+ * H3: when a search block doesn't match the file, don't dead-end. Re-read the
+ * actual file(s), hand the model the real content + the failure reason, and ask
+ * it to regenerate an exact search block. Bounded by its own counter. Returns
+ * true if a re-prompt was issued (caller should then suppress the raw error).
+ */
+async function repromptOnMatchFailure(files: string[], reason: string): Promise<boolean> {
+  if (state.matchRetryRounds >= MAX_MATCH_RETRY || state.streaming) return false;
+  state.matchRetryRounds++;
+
+  const root = state.roots[0] || "";
+  const actual: string[] = [];
+  for (const f of files.slice(0, 3)) {
+    try {
+      const r = await ws.request("fs.read", { path: root ? `${root}/${f}` : f }).catch(() => null);
+      const content = String(r?.payload?.content || "");
+      if (content) actual.push(`### ${f}\n${content.slice(0, 8000)}`);
+    } catch { /* file may not exist */ }
+  }
+  if (!actual.length) return false; // nothing to show — let the caller surface the error
+
+  state.messages.push({
+    role: "assistant",
+    content: `That edit didn't match the file (${reason}). Re-reading the current source and retrying…`,
+  });
+  refreshPanelContent();
+  scrollChatToBottom();
+
+  const correction =
+    `Your previous edit could not be applied: ${reason}. The search block did not match the file exactly. ` +
+    `Here is the current content — copy the search block EXACTLY from it (preserving whitespace and indentation) ` +
+    `and return corrected modifications:\n\n${actual.join("\n\n")}`;
+  await sendPrompt(correction, true, undefined, true);
+  return true;
+}
 
 /**
  * H6: the verification gate. After a patch group is applied, run the project's
@@ -639,6 +677,10 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
     const preview = await ws.request("fs.patch.preview", { patches: [patch] });
     if (!preview?.payload?.ok) {
       const applyError = patchFailureMessage(preview?.payload, `Could not preview ${patch.file}`);
+      // H3: re-prompt with the real file content instead of dead-ending.
+      if (!(applyDiff as any)._batchMode && await repromptOnMatchFailure([patch.file], applyError)) {
+        return { ok: false, file: patch.file, error: applyError };
+      }
       state.messages.push({ role: "system", content: applyError });
       refreshPanelContent();
       scrollChatToBottom();
@@ -893,7 +935,10 @@ async function handleAction(action: string, target: HTMLElement) {
       try {
         const preview = await ws.request("fs.patch.preview", { patches });
         if (!preview?.payload?.ok) {
-          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${patchFailureMessage(preview?.payload, "Could not preview patch group")}` });
+          const reason = patchFailureMessage(preview?.payload, "Could not preview patch group");
+          // H3: re-prompt with the real file content instead of dead-ending.
+          if (await repromptOnMatchFailure(patches.map((p) => p.file), reason)) break;
+          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${reason}` });
           refreshPanelContent();
           break;
         }
@@ -1545,7 +1590,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
 
   // A fresh, user-initiated prompt resets the self-correction budget; a
   // self-correction re-prompt must NOT, or the loop would never terminate.
-  if (!isSelfCorrect) state.selfCorrectRounds = 0;
+  if (!isSelfCorrect) { state.selfCorrectRounds = 0; state.matchRetryRounds = 0; }
 
   if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     openPanel("settings");

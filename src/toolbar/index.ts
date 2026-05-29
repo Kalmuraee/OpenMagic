@@ -2114,6 +2114,12 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
             } else {
               context.files.push({ path: neededFile, content: fullContent });
             }
+            // Keep the grounded-files state in sync with context so the chips and
+            // later prompts don't diverge from what was actually sent (hardening).
+            if (!state.groundedFiles.includes(neededFile)) {
+              state.groundedFiles.push(neededFile);
+              state.groundedFileReasons[neededFile] = ["requested via NEED_FILE"];
+            }
           } else {
             state.messages.push({ role: "system", content: `Could not read ${neededFile}` });
             break;

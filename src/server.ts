@@ -20,6 +20,7 @@ import type {
 import { handleLlmChat } from "./llm/proxy.js";
 import { coerceThinkingLevel } from "./llm/thinking.js";
 import { AbortRegistry } from "./abort-registry.js";
+import { verifyPatchGroup } from "./verify.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
 import { applyPatchGroup, previewPatchGroup, pruneOldManifests, rollbackChain, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
@@ -72,6 +73,7 @@ const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
   "fs.patch.preview": "write",
   "fs.patch.apply": "write",
   "fs.patch.rollback": "write",
+  "fs.patch.verify": "write",
   "fs.delete": "delete",
   "config.get": "config",
   "config.set": "config",
@@ -340,6 +342,26 @@ async function handleMessage(
         sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
       } else {
         send(ws, { id: msg.id, type: "fs.patch.rolledback", payload: result });
+      }
+      break;
+    }
+
+    case "fs.patch.verify": {
+      const payload = msg.payload as { files?: string[]; timeoutMs?: number } | undefined;
+      const files = Array.isArray(payload?.files) ? payload!.files : [];
+      // Cancellable like llm.chat: a closed tab / explicit cancel kills the spawned
+      // typecheck so it doesn't keep running.
+      const reqId = `${state.connId}:${msg.id}`;
+      const controller = llmAbortRegistry.register(reqId);
+      try {
+        const result = await verifyPatchGroup(roots[0] || process.cwd(), {
+          files,
+          timeoutMs: payload?.timeoutMs,
+          signal: controller.signal,
+        });
+        send(ws, { id: msg.id, type: "fs.patch.verified", payload: result });
+      } finally {
+        llmAbortRegistry.complete(reqId);
       }
       break;
     }

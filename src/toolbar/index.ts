@@ -142,6 +142,8 @@ const state = {
   lastRedoPatch: null as RedoPatchRequest | null,
   sessionEstimatedCost: 0,
   minimized: false,
+  verifyAfterApply: true,       // run the project's typecheck/lint after applying a patch
+  selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -551,6 +553,63 @@ function patchFailureMessage(payload: any, fallback: string): string {
   return failed?.reason ? `${failed.file || "Patch"}: ${failed.reason}` : fallback;
 }
 
+const MAX_SELF_CORRECT = 2;
+
+/**
+ * H6: the verification gate. After a patch group is applied, run the project's
+ * own typecheck/lint. If the edit broke the build, revert it and either hand the
+ * errors back to the model for a bounded self-correction, or (budget spent)
+ * surface the failure. Passing/inconclusive verification falls through to reload.
+ */
+async function verifyAndSettle(groupId: string, files: string[], reload: () => void): Promise<void> {
+  if (!state.verifyAfterApply || !files.length) { reload(); return; }
+
+  const statusEl = $panelBody.querySelector(".om-msg-system:last-child");
+  if (statusEl) statusEl.innerHTML += ' <span class="om-spinner"></span> verifying…';
+
+  let verdict: any;
+  try {
+    const res = await ws.request("fs.patch.verify", { files });
+    verdict = res?.payload;
+  } catch {
+    reload(); // verification itself couldn't run — don't block the edit
+    return;
+  }
+
+  if (verdict?.status !== "failed") {
+    // passed or inconclusive — the change stands
+    reload();
+    return;
+  }
+
+  // The edit broke verification. Revert the whole self-correction chain so we
+  // return to the last known-good state, then re-engage the model with the errors.
+  try { await ws.request("fs.patch.rollback", { groupId, chain: true }); } catch {}
+  const errorText = (verdict.errors || []).join("\n").slice(0, 2000) || "verification failed";
+
+  if (state.selfCorrectRounds < MAX_SELF_CORRECT) {
+    state.selfCorrectRounds++;
+    state.messages.push({
+      role: "assistant",
+      content: `That change failed verification and was reverted (self-correction ${state.selfCorrectRounds}/${MAX_SELF_CORRECT}). Re-checking against the errors…`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    const correction =
+      `Your previous edit to ${files.join(", ")} failed the project's type/lint check and was reverted. ` +
+      `Return corrected modifications that resolve these errors:\n\n${errorText}`;
+    await sendPrompt(correction, true, undefined, true);
+  } else {
+    state.messages.push({
+      role: "assistant",
+      content: `The change still failed verification after ${MAX_SELF_CORRECT} attempts, so it was reverted to the last working state. Errors:\n\n${errorText}`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    reload();
+  }
+}
+
 async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
   let patch: FilePatch | null = null;
   try {
@@ -607,11 +666,11 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
     refreshPanelContent();
     scrollChatToBottom();
 
-    // Auto-reload page after 1.5s so user sees the change
-    // (HMR-based dev servers handle this automatically, but static servers don't)
-    // Skip reload during batch apply-all (batchMode flag)
+    // Verify the edit, then auto-reload so the user sees the change.
+    // (HMR-based dev servers handle reload automatically, static servers don't.)
+    // Skip during batch apply-all (batchMode handles verify/reload once at the end).
     if (!(applyDiff as any)._batchMode) {
-      setTimeout(() => { window.location.reload(); }, 1500);
+      await verifyAndSettle(groupId, [patch.file], () => setTimeout(() => { window.location.reload(); }, 1500));
     }
 
     return { ok: true, file: patch.file, groupId };
@@ -856,7 +915,7 @@ async function handleAction(action: string, target: HTMLElement) {
         }
         hideApplyBar();
         refreshPanelContent();
-        setTimeout(() => { window.location.reload(); }, 1500);
+        await verifyAndSettle(result.payload.groupId || "", files, () => setTimeout(() => { window.location.reload(); }, 1500));
       } catch (e: any) {
         state.messages.push({ role: "system", content: `Batch apply failed before writing. ${e.message}` });
         refreshPanelContent();
@@ -1479,9 +1538,13 @@ async function retryPrompt(target: HTMLElement) {
   }
 }
 
-async function sendPrompt(overrideText?: string, skipPlan = false, contextOverride?: any) {
+async function sendPrompt(overrideText?: string, skipPlan = false, contextOverride?: any, isSelfCorrect = false) {
   const text = (overrideText ?? $promptInput.value).trim();
   if (!text || state.streaming) return;
+
+  // A fresh, user-initiated prompt resets the self-correction budget; a
+  // self-correction re-prompt must NOT, or the loop would never terminate.
+  if (!isSelfCorrect) state.selfCorrectRounds = 0;
 
   if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     openPanel("settings");

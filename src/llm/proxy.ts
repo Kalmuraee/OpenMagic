@@ -1,6 +1,7 @@
 import type { ChatMessage, LlmContext, LlmResponse } from "../shared-types.js";
 import { invalidateCliCache } from "./cli-detect.js";
 import { getExecutionAdapter } from "./execution-adapters.js";
+import { sanitizeHistory } from "./history.js";
 
 interface LlmChatParams {
   provider: string;
@@ -70,7 +71,11 @@ export async function handleLlmChat(
   onDone: (result: { content: string; modifications?: LlmResponse["modifications"] }) => void,
   onError: (error: string) => void
 ): Promise<void> {
-  const { provider, model, apiKey, messages, context } = params;
+  const { provider, model, apiKey, context } = params;
+  // Strip UI sentinels and fold load-bearing feedback (rejections, failed
+  // matches, verify errors) into the current user turn so it survives the
+  // system-drop in every adapter and reaches CLI agents.
+  const messages = sanitizeHistory(params.messages);
 
   const wrappedOnDone = (result: { content: string }) => {
     let modifications: LlmResponse["modifications"] | undefined;

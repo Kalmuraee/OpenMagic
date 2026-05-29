@@ -22,7 +22,7 @@ import { coerceThinkingLevel } from "./llm/thinking.js";
 import { AbortRegistry } from "./abort-registry.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
-import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
+import { applyPatchGroup, previewPatchGroup, pruneOldManifests, rollbackChain, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
 import { groundProject, type ProjectGroundRequest } from "./project-grounding.js";
 import { testProviderModel } from "./llm/provider-test.js";
 
@@ -105,6 +105,10 @@ export function attachOpenMagic(
   handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean;
   handleUpgrade: (req: http.IncomingMessage, socket: any, head: Buffer) => boolean;
 } {
+
+  // Drop undo manifests left over from sessions more than 7 days ago, while
+  // keeping recent ones so a crashed session's edits can still be rolled back.
+  pruneOldManifests(7 * 24 * 60 * 60 * 1000);
 
   // Request handler for /__openmagic__/ paths — returns true if handled
   function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
@@ -323,12 +327,15 @@ async function handleMessage(
     }
 
     case "fs.patch.rollback": {
-      const payload = msg.payload as { groupId?: string } | undefined;
+      const payload = msg.payload as { groupId?: string; chain?: boolean } | undefined;
       if (!payload?.groupId) {
         sendError(ws, "invalid_payload", "Missing groupId", msg.id);
         break;
       }
-      const result = rollbackPatchGroup(roots[0] || process.cwd(), payload.groupId);
+      const root = roots[0] || process.cwd();
+      const result = payload.chain
+        ? rollbackChain(root, payload.groupId)
+        : rollbackPatchGroup(root, payload.groupId);
       if (!result.ok) {
         sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
       } else {

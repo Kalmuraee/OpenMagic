@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChatMessage, LlmContext } from "../shared-types.js";
-import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextParts } from "./prompts.js";
 
 /**
  * OpenAI Codex CLI adapter.
@@ -27,7 +27,8 @@ export async function chatCodexCli(
       : "Help me with this element.";
 
   const contextParts = buildContextParts(context);
-  const fullPrompt = `${SYSTEM_PROMPT}\n\n${buildUserMessage(userPrompt, contextParts)}`;
+  const systemText = context.nativeEdit ? NATIVE_EDIT_INSTRUCTION : SYSTEM_PROMPT;
+  const fullPrompt = `${systemText}\n\n${buildUserMessage(userPrompt, contextParts)}`;
 
   // `codex exec` is the non-interactive subcommand (no TTY required)
   // --full-auto: auto-approve actions (alias for --sandbox workspace-write)

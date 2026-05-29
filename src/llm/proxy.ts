@@ -6,8 +6,9 @@ import type {
   ParseStatus,
 } from "../shared-types.js";
 import { invalidateCliCache } from "./cli-detect.js";
-import { getExecutionAdapter } from "./execution-adapters.js";
+import { getExecutionAdapter, isCliProvider } from "./execution-adapters.js";
 import { sanitizeHistory } from "./history.js";
+import { captureAndRevert, isNativeEditEligible } from "./native-capture.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import {
   AnthropicToolDriver,
@@ -24,8 +25,9 @@ interface LlmChatParams {
   apiKey: string;
   messages: ChatMessage[];
   context: LlmContext;
-  useTools?: boolean; // opt-in: route tool-capable providers through native tool-calling
-  root?: string;      // project root, required for tool execution
+  useTools?: boolean;   // opt-in: route tool-capable providers through native tool-calling
+  nativeEdit?: boolean; // opt-in: let CLI agents edit the tree natively (capture+revert+review)
+  root?: string;        // project root, required for tool execution / native capture
 }
 
 // Providers whose APIs support native tool-calling (H11). The OpenAI-compatible
@@ -183,6 +185,32 @@ export async function handleLlmChat(
   };
 
   try {
+    // H9: CLI native-edit path (opt-in, git repo + clean tree). Let the agent
+    // edit the working tree natively, capture the diff via git, REVERT it, and
+    // route the changes through the normal review→apply→verify pipeline — their
+    // multi-turn editing power without the write-before-approve regression.
+    if (params.nativeEdit && params.root && isCliProvider(provider) && isNativeEditEligible(params.root)) {
+      const adapter = getExecutionAdapter(provider);
+      if (adapter) {
+        let narration = "";
+        await adapter.chat(
+          model, apiKey, messages, { ...context, nativeEdit: true },
+          onChunk,
+          (r) => { narration = r.content; },
+          cliOnError,
+          signal
+        );
+        if (signal?.aborted) return;
+        const modifications = captureAndRevert(params.root);
+        onDone({
+          content: narration || (modifications.length ? `Captured ${modifications.length} change(s) from the agent — review below.` : "The agent made no file changes."),
+          modifications,
+          parseStatus: "clean",
+        });
+        return;
+      }
+    }
+
     // H11: native tool-calling path (opt-in, tool-capable API providers). The
     // model reads exact file contents via tools and proposes edits against code
     // it actually saw. Falls through to the JSON-string contract on any failure.

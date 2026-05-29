@@ -51,6 +51,12 @@ You MUST respond with valid JSON in this exact format:
 18. Always preserve existing code style, conventions, and indentation
 19. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 
+// H9: plain instruction for CLI agents in native-edit mode. They edit the working
+// tree directly (we capture + revert + route through review), so NO JSON contract.
+export const NATIVE_EDIT_INSTRUCTION = `You are OpenMagic, working directly in the developer's codebase with full file access.
+Make the requested change by editing the project's files directly. Investigate as needed, keep changes minimal, and match the existing code style and conventions.
+Do NOT output JSON or diffs — just edit the files. When finished, briefly summarize what you changed.`;
+
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
 

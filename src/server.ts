@@ -411,6 +411,8 @@ async function handleMessage(
           context: llmContext,
           // H11: opt-in native tool-calling (config flag or env), off by default.
           useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1",
+          // H9: opt-in CLI native-edit (config flag or env), off by default.
+          nativeEdit: config.nativeEdit === true || process.env.OPENMAGIC_NATIVE_EDIT === "1",
           root: roots[0],
         },
         (chunk) => {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChatMessage, LlmContext } from "../shared-types.js";
-import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextParts } from "./prompts.js";
 
 /**
  * Google Gemini CLI adapter.
@@ -26,7 +26,8 @@ export async function chatGeminiCli(
       : "Help me with this element.";
 
   const contextParts = buildContextParts(context);
-  const fullPrompt = `${SYSTEM_PROMPT}\n\n${buildUserMessage(userPrompt, contextParts)}`;
+  const systemText = context.nativeEdit ? NATIVE_EDIT_INSTRUCTION : SYSTEM_PROMPT;
+  const fullPrompt = `${systemText}\n\n${buildUserMessage(userPrompt, contextParts)}`;
 
   // Pipe full prompt via stdin — Gemini CLI auto-detects piped stdin
   // and enters non-interactive headless mode.

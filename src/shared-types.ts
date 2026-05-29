@@ -109,6 +109,7 @@ export interface LlmContext {
   // Per-request thinking controls (override registry defaults when present).
   reasoningLevel?: ThinkingLevel;   // for paramType "level" providers
   thinkingBudget?: number;          // for paramType "budget" providers (token count)
+  nativeEdit?: boolean;             // H9: CLI agent edits files directly (plain prompt, no JSON contract)
 }
 
 export interface ElementInfo {
@@ -185,7 +186,8 @@ export interface OpenMagicConfig {
   apiKey?: string;
   apiKeys?: Record<string, string>; // per-provider key storage
   planBeforeEdit?: boolean;
-  useTools?: boolean; // opt-in: native tool-calling for tool-capable providers (H11)
+  useTools?: boolean;   // opt-in: native tool-calling for tool-capable providers (H11)
+  nativeEdit?: boolean; // opt-in: CLI agents edit the tree natively, captured+reverted+reviewed (H9)
   customModels?: Record<string, string[]>;
   preferredThinkingMode?: Record<string, string>;
   roots: string[];

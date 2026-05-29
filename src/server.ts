@@ -409,6 +409,9 @@ async function handleMessage(
           apiKey,
           messages: payload.messages,
           context: llmContext,
+          // H11: opt-in native tool-calling (config flag or env), off by default.
+          useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1",
+          root: roots[0],
         },
         (chunk) => {
           send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } });

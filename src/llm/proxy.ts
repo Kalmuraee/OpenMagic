@@ -8,6 +8,15 @@ import type {
 import { invalidateCliCache } from "./cli-detect.js";
 import { getExecutionAdapter } from "./execution-adapters.js";
 import { sanitizeHistory } from "./history.js";
+import { MODEL_REGISTRY } from "./registry.js";
+import {
+  AnthropicToolDriver,
+  GoogleToolDriver,
+  OpenAiToolDriver,
+  runToolLoop,
+  type ToolDriver,
+} from "./tool-loop.js";
+import { executeServerTool } from "./tools.js";
 
 interface LlmChatParams {
   provider: string;
@@ -15,6 +24,36 @@ interface LlmChatParams {
   apiKey: string;
   messages: ChatMessage[];
   context: LlmContext;
+  useTools?: boolean; // opt-in: route tool-capable providers through native tool-calling
+  root?: string;      // project root, required for tool execution
+}
+
+// Providers whose APIs support native tool-calling (H11). The OpenAI-compatible
+// set covers the majority; Anthropic and Google have their own drivers.
+const OPENAI_TOOL_PROVIDERS = new Set([
+  "openai", "deepseek", "groq", "mistral", "xai", "openrouter",
+  "minimax", "moonshot", "qwen", "zhipu", "doubao",
+]);
+
+export function toolCapableProvider(provider: string): boolean {
+  return provider === "anthropic" || provider === "google" || OPENAI_TOOL_PROVIDERS.has(provider);
+}
+
+function buildToolDriver(
+  provider: string,
+  model: string,
+  apiKey: string,
+  messages: ChatMessage[],
+  context: LlmContext
+): ToolDriver | null {
+  const reg = MODEL_REGISTRY[provider];
+  const modelInfo = reg?.models.find((m) => m.id === model);
+  if (provider === "anthropic") return new AnthropicToolDriver(model, apiKey, modelInfo, messages, context);
+  if (provider === "google") return new GoogleToolDriver(model, apiKey, messages, context);
+  if (OPENAI_TOOL_PROVIDERS.has(provider) && reg) {
+    return new OpenAiToolDriver(reg.apiBase, model, apiKey, provider, modelInfo, messages, context);
+  }
+  return null;
 }
 
 export interface ParsedLlmResponse {
@@ -144,6 +183,28 @@ export async function handleLlmChat(
   };
 
   try {
+    // H11: native tool-calling path (opt-in, tool-capable API providers). The
+    // model reads exact file contents via tools and proposes edits against code
+    // it actually saw. Falls through to the JSON-string contract on any failure.
+    if (params.useTools && params.root && toolCapableProvider(provider)) {
+      const driver = buildToolDriver(provider, model, apiKey, messages, context);
+      if (driver) {
+        try {
+          const result = await runToolLoop(
+            driver,
+            (name, args) => executeServerTool(name, args, params.root!, [params.root!]),
+            { signal }
+          );
+          if (signal?.aborted) return;
+          onDone({ content: result.content, modifications: result.modifications, parseStatus: "clean" });
+          return;
+        } catch (e) {
+          if (signal?.aborted || (e as Error).name === "AbortError") return;
+          // tool-calling failed — fall back to the streamed JSON-string path
+        }
+      }
+    }
+
     const adapter = getExecutionAdapter(provider);
     if (!adapter) {
       onError(`Unsupported provider: ${provider}. Check your Settings.`);

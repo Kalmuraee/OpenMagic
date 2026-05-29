@@ -185,6 +185,7 @@ export interface OpenMagicConfig {
   apiKey?: string;
   apiKeys?: Record<string, string>; // per-provider key storage
   planBeforeEdit?: boolean;
+  useTools?: boolean; // opt-in: native tool-calling for tool-capable providers (H11)
   customModels?: Record<string, string[]>;
   preferredThinkingMode?: Record<string, string>;
   roots: string[];

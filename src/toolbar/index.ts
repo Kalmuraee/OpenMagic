@@ -2030,8 +2030,31 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
         .replace(/^NEED_FILE:\s*\S+\s*/gm, "")
         .replace(/^SEARCH_FILES:\s*"[^"]*"(?:\s+in\s+\S+)?\s*/gm, "")
         .trim();
+
+      // H5: be honest about how the response parsed. A stream cut mid-array looks
+      // identical to "no change" — don't present a salvaged/truncated/failed parse
+      // as success when there's nothing to apply.
+      const parseStatus = result?.parseStatus as
+        | "clean" | "salvaged" | "truncated" | "failed" | undefined;
+      const parseUnreliable = !!parseStatus && parseStatus !== "clean";
+      if (parseUnreliable && !hasRealModifications) {
+        const why = parseStatus === "truncated"
+          ? "The response was cut off before it finished — the edits are incomplete."
+          : parseStatus === "salvaged"
+          ? "I could only partially read the response, so the proposed edits were lost."
+          : "I couldn't parse a usable response.";
+        const tail = (parseStatus !== "failed" && displayContent) ? `\n\n${displayContent}` : "";
+        state.messages.push({ role: "assistant", content: `${why}${tail}` });
+        state.messages.push({ role: "system", content: `__RETRY__${encodeBase64Utf8(text)}` });
+        break;
+      }
+
       if (!displayContent) {
         displayContent = "I couldn't determine the exact change from the available files. Try selecting a more specific element or giving more detail.";
+      }
+      if (parseUnreliable) {
+        // Some edits parsed but the stream may be incomplete — keep what we got, but warn.
+        displayContent = `(Heads up — the response may have been cut off, so double-check the edits below.)\n\n${displayContent}`;
       }
       state.messages.push({ role: "assistant", content: displayContent });
 

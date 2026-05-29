@@ -155,6 +155,13 @@ export interface LlmResponse {
   explanation: string;
 }
 
+// How confident we are in the structured response we parsed back from the model:
+//  - clean:     a complete, valid JSON object was parsed
+//  - truncated: the stream was cut mid-JSON and we repaired the braces/strings
+//  - salvaged:  only the explanation could be regex-recovered (modifications lost)
+//  - failed:    nothing parseable was found
+export type ParseStatus = "clean" | "salvaged" | "truncated" | "failed";
+
 // --- Config ---
 
 export interface OpenMagicConfig {

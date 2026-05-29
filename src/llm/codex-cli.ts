@@ -17,7 +17,8 @@ export async function chatCodexCli(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   const userPrompt =
@@ -44,6 +45,12 @@ export async function chatCodexCli(
 
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
+
+  let aborted = false;
+  if (signal) {
+    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
+    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+  }
 
   let fullContent = "";
   let buffer = "";
@@ -82,6 +89,7 @@ export async function chatCodexCli(
   });
 
   proc.on("close", (code) => {
+    if (aborted) return; // client cancelled — stay silent
     // Process remaining buffer
     if (buffer.trim()) {
       try {

@@ -19,6 +19,7 @@ import type {
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
 import { coerceThinkingLevel } from "./llm/thinking.js";
+import { AbortRegistry } from "./abort-registry.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
 import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
@@ -52,7 +53,12 @@ console.info = (...a: any[]) => { captureServerLog("info", ...a); _origInfo(...a
 
 interface ClientState {
   authenticated: boolean;
+  connId: string;
 }
+
+// Tracks in-flight LLM requests so they can be cancelled on llm.cancel / disconnect.
+const llmAbortRegistry = new AbortRegistry();
+let connCounter = 0;
 
 export type OperationCategory = "auth" | "read" | "write" | "delete" | "config" | "llm" | "debug" | "models";
 
@@ -70,6 +76,7 @@ const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
   "config.get": "config",
   "config.set": "config",
   "llm.chat": "llm",
+  "llm.cancel": "llm",
   "provider.models": "models",
   "provider.testModel": "models",
   "project.ground": "read",
@@ -134,7 +141,8 @@ export function attachOpenMagic(
       ws.close(4003, "Forbidden origin");
       return;
     }
-    clientStates.set(ws, { authenticated: false });
+    const connId = String(++connCounter);
+    clientStates.set(ws, { authenticated: false, connId });
 
     ws.on("message", async (data) => {
       let msg: WsMessage;
@@ -165,6 +173,10 @@ export function attachOpenMagic(
     });
 
     ws.on("close", () => {
+      // Cancel any in-flight LLM work for this connection so server-side
+      // fetch()/CLI children don't keep running (and editing files) after the
+      // toolbar tab is gone.
+      llmAbortRegistry.abortByPrefix(`${connId}:`);
       clientStates.delete(ws);
     });
   });
@@ -359,6 +371,8 @@ async function handleMessage(
         if (pref) llmContext.reasoningLevel = pref;
       }
 
+      const reqId = `${state.connId}:${msg.id}`;
+      const controller = llmAbortRegistry.register(reqId);
       await handleLlmChat(
         {
           provider,
@@ -371,12 +385,25 @@ async function handleMessage(
           send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } });
         },
         (result) => {
+          llmAbortRegistry.complete(reqId);
           send(ws, { id: msg.id, type: "llm.done", payload: result });
         },
         (error) => {
+          llmAbortRegistry.complete(reqId);
           send(ws, { id: msg.id, type: "llm.error", payload: { message: error } });
-        }
+        },
+        controller.signal
       );
+      llmAbortRegistry.complete(reqId);
+      break;
+    }
+
+    case "llm.cancel": {
+      // Abort the in-flight request with the given id. The waiting client-side
+      // stream is resolved locally by ws-client, so no response is required.
+      const payload = msg.payload as { id?: string } | undefined;
+      if (payload?.id) llmAbortRegistry.abort(`${state.connId}:${payload.id}`);
+      send(ws, { id: msg.id, type: "llm.done", payload: { content: "", modifications: [], cancelled: true } });
       break;
     }
 

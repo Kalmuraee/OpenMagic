@@ -16,7 +16,8 @@ export async function chatGeminiCli(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   const userPrompt =
@@ -45,6 +46,12 @@ export async function chatGeminiCli(
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
 
+  let aborted = false;
+  if (signal) {
+    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
+    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+  }
+
   let fullContent = "";
   let errOutput = "";
 
@@ -67,6 +74,7 @@ export async function chatGeminiCli(
   });
 
   proc.on("close", (code) => {
+    if (aborted) return; // client cancelled — stay silent
     if (code === 0 || fullContent.trim()) {
       onDone({ content: fullContent });
     } else {

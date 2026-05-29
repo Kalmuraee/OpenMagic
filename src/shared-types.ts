@@ -23,6 +23,7 @@ export type ClientMessageType =
   | "fs.list"
   | "fs.grep"
   | "llm.chat"
+  | "llm.cancel"
   | "provider.models"
   | "provider.testModel"
   | "project.ground"

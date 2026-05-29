@@ -114,7 +114,8 @@ export async function handleLlmChat(
     modifications?: LlmResponse["modifications"];
     parseStatus?: ParseStatus;
   }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const { provider, model, apiKey, context } = params;
   // Strip UI sentinels and fold load-bearing feedback (rejections, failed
@@ -149,8 +150,9 @@ export async function handleLlmChat(
       return;
     }
     const adapterOnError = adapter.id.endsWith("-cli") ? cliOnError : onError;
-    await adapter.chat(model, apiKey, messages, context, onChunk, wrappedOnDone, adapterOnError);
+    await adapter.chat(model, apiKey, messages, context, onChunk, wrappedOnDone, adapterOnError, signal);
   } catch (e: unknown) {
+    if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     const msg = (e as Error).message || "Unknown error";
     if (msg.includes("fetch") || msg.includes("ECONNREFUSED") || msg.includes("network")) {
       onError(`Network error: Could not reach the ${provider} API. Check your internet connection.`);

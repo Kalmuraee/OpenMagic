@@ -29,7 +29,8 @@ export async function chatClaudeCode(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   // Build the prompt the same way as other providers
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
@@ -68,6 +69,13 @@ export async function chatClaudeCode(
   // Send system prompt + user prompt via stdin
   proc.stdin.write(`${SYSTEM_PROMPT}\n\n${fullPrompt}`);
   proc.stdin.end();
+
+  // Kill the child if the client cancels or disconnects.
+  let aborted = false;
+  if (signal) {
+    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
+    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+  }
 
   let fullContent = "";
   let resultContent = ""; // From the final result event
@@ -118,6 +126,7 @@ export async function chatClaudeCode(
   });
 
   proc.on("close", (code) => {
+    if (aborted) return; // client cancelled — stay silent
     // Process remaining buffer
     if (buffer.trim()) {
       try {

@@ -83,7 +83,8 @@ export async function chatAnthropic(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const url = "https://api.anthropic.com/v1/messages";
 
@@ -98,6 +99,7 @@ export async function chatAnthropic(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -156,6 +158,7 @@ export async function chatAnthropic(
 
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
+    if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     onError(`Request failed: ${(e as Error).message}`);
   }
 }

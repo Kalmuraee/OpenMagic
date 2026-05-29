@@ -83,7 +83,8 @@ export async function chatGoogle(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
@@ -94,6 +95,7 @@ export async function chatGoogle(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -148,6 +150,7 @@ export async function chatGoogle(
 
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
+    if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     onError(`Request failed: ${(e as Error).message}`);
   }
 }

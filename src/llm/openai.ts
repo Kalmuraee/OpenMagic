@@ -98,7 +98,8 @@ export async function chatOpenAICompatible(
   context: LlmContext,
   onChunk: (chunk: string) => void,
   onDone: (result: { content: string; truncated?: boolean }) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const providerConfig = MODEL_REGISTRY[provider];
   if (!providerConfig) {
@@ -126,6 +127,7 @@ export async function chatOpenAICompatible(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -182,6 +184,7 @@ export async function chatOpenAICompatible(
 
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
+    if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     onError(`Request failed: ${(e as Error).message}`);
   }
 }

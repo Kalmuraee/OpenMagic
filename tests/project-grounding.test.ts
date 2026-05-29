@@ -27,6 +27,23 @@ describe("project grounding", () => {
     expect(detectFramework(ROOT)).toBe("next");
   });
 
+  it("marks truncated files instead of silently slicing them (H10)", () => {
+    const big = "export const data = '" + "x".repeat(20000) + "';\n// dashboard card marker\n";
+    writeFileSync(join(ROOT, "src/components/DashboardCard.tsx"), big);
+
+    const result = groundProject(ROOT, {
+      pageUrl: "http://localhost:4567/dashboard",
+      promptText: "make dashboard card responsive",
+      selectedElement: { componentHint: "DashboardCard", className: "dashboard-card" },
+      contextBudget: 100000,
+    });
+
+    const card = result.files.find((f) => f.path === "src/components/DashboardCard.tsx");
+    expect(card?.truncated).toBe(true);
+    expect(card?.content).toContain("[TRUNCATED");
+    expect(card?.content).toContain("NEED_FILE: src/components/DashboardCard.tsx");
+  });
+
   it("grounds route, component, import, and CSS files with reasons", () => {
     const result = groundProject(ROOT, {
       pageUrl: "http://localhost:4567/dashboard",

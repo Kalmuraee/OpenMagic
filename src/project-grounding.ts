@@ -21,6 +21,7 @@ export interface GroundedFile {
   content: string;
   reasons: string[];
   score: number;
+  truncated?: boolean;
 }
 
 export interface ProjectGroundResult {
@@ -89,8 +90,20 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
     if ("error" in read) continue;
     const cap = Math.min(12_000, budget - used);
     if (cap <= 0) break;
-    const content = read.content.slice(0, cap);
-    grounded.push({ path: item.path, content, reasons: item.reasons, score: item.score });
+    const truncated = read.content.length > cap;
+    let content: string;
+    if (truncated) {
+      // Mark truncation explicitly — a silently-sliced file causes guaranteed
+      // search-match failures on the cut region. The model can request the rest
+      // via NEED_FILE (which has its own retry budget). Reserve room for the
+      // marker so the file still fits within the budget.
+      const marker = `\n// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
+      const room = Math.max(0, cap - marker.length);
+      content = read.content.slice(0, room) + marker;
+    } else {
+      content = read.content;
+    }
+    grounded.push({ path: item.path, content, reasons: item.reasons, score: item.score, truncated });
     used += content.length;
   }
 

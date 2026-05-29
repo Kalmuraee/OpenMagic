@@ -1963,13 +1963,19 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
     model: state.model,
   };
 
-  // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry
-  const MAX_RETRIES = 4;
-  let retryCount = 0;
+  // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry.
+  // H10: NEED_FILE and SEARCH_FILES get separate budgets so reading files doesn't
+  // starve codebase searches (and vice versa); a total cap guards against loops.
+  const MAX_NEED_FILE = 5;
+  const MAX_SEARCH = 4;
+  const MAX_TOTAL_ITERS = 10;
+  let needFileCount = 0;
+  let searchCount = 0;
+  let iters = 0;
   const retriedFiles = new Set<string>(); // prevent re-reading same file
 
   try {
-    while (retryCount <= MAX_RETRIES) {
+    while (iters++ < MAX_TOTAL_ITERS) {
       state.streamContent = "";
 
       const result = await ws.stream(
@@ -2016,10 +2022,10 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
         || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
         || responseContent.match(/NEED_FILE:\s*\\?"?([^\s"\\}\]]+)"?/)
       );
-      if (needFileMatch && retryCount < MAX_RETRIES && !retriedFiles.has(needFileMatch[1].trim())) {
+      if (needFileMatch && needFileCount < MAX_NEED_FILE && !retriedFiles.has(needFileMatch[1].trim())) {
         const neededFile = needFileMatch[1].trim();
         retriedFiles.add(neededFile);
-        retryCount++;
+        needFileCount++;
 
         // Show transient status (update the spinner, don't add permanent messages)
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
@@ -2074,10 +2080,10 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
       );
       // Prevent infinite loop: skip if we already searched for this pattern
       const alreadySearched = (context as any).searchResults?.some((s: any) => s.query === searchMatch?.[1]);
-      if (searchMatch && retryCount < MAX_RETRIES && !alreadySearched) {
+      if (searchMatch && searchCount < MAX_SEARCH && !alreadySearched) {
         const pattern = searchMatch[1];
         const searchPath = searchMatch[2] || "";
-        retryCount++;
+        searchCount++;
 
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
         if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Searching: "${pattern}"...`)}`;

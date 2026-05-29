@@ -2,7 +2,7 @@ import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshotWithFeedback } from "./services/capture.js";
-import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
+import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
 
@@ -221,6 +221,7 @@ function init() {
 
   installNetworkCapture();
   installConsoleCapture();
+  installRuntimeErrorCapture();
   checkForUpdates();
 
   // Connect to server — same origin (single port)

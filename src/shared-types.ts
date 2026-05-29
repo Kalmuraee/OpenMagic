@@ -103,6 +103,7 @@ export interface LlmContext {
   screenshot?: string; // base64 data URL
   networkLogs?: NetworkLogEntry[];
   consoleLogs?: ConsoleLogEntry[];
+  runtimeErrors?: RuntimeErrorEntry[];
   files?: FileContext[];
   projectTree?: string;
   // Per-request thinking controls (override registry defaults when present).
@@ -137,6 +138,14 @@ export interface NetworkLogEntry {
 export interface ConsoleLogEntry {
   level: "log" | "warn" | "error" | "info" | "debug";
   args: string[];
+  timestamp: number;
+}
+
+export interface RuntimeErrorEntry {
+  type: "error" | "unhandledrejection" | "overlay";
+  message: string;
+  source?: string;
+  stack?: string;
   timestamp: number;
 }
 

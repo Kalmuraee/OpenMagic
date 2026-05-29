@@ -136,24 +136,110 @@ export function clearConsoleLogs(): void {
   consoleLogs.length = 0;
 }
 
+// --- Runtime Error Capture (H7) ---
+// Uncaught errors and unhandled rejections — the only signal that catches
+// "compiled fine but white-screened at runtime". Plus a scrape of the framework
+// error overlay (Next.js / Vite / webpack) which shows the real stack.
+
+interface RuntimeErrorEntry {
+  type: "error" | "unhandledrejection" | "overlay";
+  message: string;
+  source?: string;
+  stack?: string;
+  timestamp: number;
+}
+
+const runtimeErrors: RuntimeErrorEntry[] = [];
+const MAX_RUNTIME_ERRORS = 30;
+let runtimeCaptureInstalled = false;
+
+function addRuntimeError(entry: RuntimeErrorEntry): void {
+  runtimeErrors.push(entry);
+  if (runtimeErrors.length > MAX_RUNTIME_ERRORS) runtimeErrors.shift();
+}
+
+export function installRuntimeErrorCapture(): void {
+  if (runtimeCaptureInstalled || typeof window === "undefined") return;
+  runtimeCaptureInstalled = true;
+
+  window.addEventListener("error", (e: ErrorEvent) => {
+    const err = e.error as Error | undefined;
+    addRuntimeError({
+      type: "error",
+      message: e.message || String(err?.message || err || "Unknown error"),
+      source: e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : undefined,
+      stack: err?.stack?.slice(0, 1500),
+      timestamp: Date.now(),
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+    const reason = e.reason as any;
+    addRuntimeError({
+      type: "unhandledrejection",
+      message: reason?.message ? String(reason.message) : String(reason).slice(0, 500),
+      stack: typeof reason?.stack === "string" ? reason.stack.slice(0, 1500) : undefined,
+      timestamp: Date.now(),
+    });
+  });
+}
+
+// Read the visible framework error overlay (compiled-but-crashed apps render one).
+export function scrapeErrorOverlay(): string | null {
+  if (typeof document === "undefined") return null;
+  try {
+    // Next.js (App & Pages router) renders into a <nextjs-portal> shadow host.
+    const nextPortal = document.querySelector("nextjs-portal");
+    const nextText = (nextPortal as any)?.shadowRoot?.textContent?.trim();
+    if (nextText) return nextText.slice(0, 4000);
+
+    // Vite overlay: <vite-error-overlay> custom element with a shadow root.
+    const viteOverlay = document.querySelector("vite-error-overlay");
+    const viteText = (viteOverlay as any)?.shadowRoot?.textContent?.trim();
+    if (viteText) return viteText.slice(0, 4000);
+
+    // webpack-dev-server overlay iframe/container.
+    const webpackOverlay = document.querySelector("#webpack-dev-server-client-overlay, #react-refresh-overlay");
+    const webpackText = webpackOverlay?.textContent?.trim();
+    if (webpackText) return webpackText.slice(0, 4000);
+  } catch {
+    // overlay shape varies across versions — best-effort only
+  }
+  return null;
+}
+
+export function getRuntimeErrors(): RuntimeErrorEntry[] {
+  const list = [...runtimeErrors];
+  const overlay = scrapeErrorOverlay();
+  if (overlay) list.push({ type: "overlay", message: overlay, timestamp: Date.now() });
+  return list;
+}
+
+export function clearRuntimeErrors(): void {
+  runtimeErrors.length = 0;
+}
+
 // --- Context Builder ---
+
+// Forward the whole captured element (H2: the prompt reads ~20 fields, not the 7
+// we used to send), capping the largest free-text fields so the prompt stays bounded.
+function forwardElement(el: SelectedElement): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(el as unknown as Record<string, unknown>) };
+  if (typeof out.outerHTML === "string" && out.outerHTML.length > 8000) {
+    out.outerHTML = out.outerHTML.slice(0, 8000) + " …[truncated]";
+  }
+  if (typeof out.textContent === "string" && out.textContent.length > 2000) {
+    out.textContent = out.textContent.slice(0, 2000) + " …[truncated]";
+  }
+  return out;
+}
 
 export function buildContext(
   selectedElement: SelectedElement | null,
   screenshot: string | null
 ) {
   return {
-    selectedElement: selectedElement
-      ? {
-          tagName: selectedElement.tagName,
-          id: selectedElement.id,
-          className: selectedElement.className,
-          textContent: selectedElement.textContent,
-          outerHTML: selectedElement.outerHTML,
-          cssSelector: selectedElement.cssSelector,
-          computedStyles: selectedElement.computedStyles,
-        }
-      : undefined,
+    selectedElement: selectedElement ? forwardElement(selectedElement) : undefined,
     screenshot: screenshot || undefined,
     networkLogs: getNetworkLogs().map((l) => ({
       method: l.method,
@@ -166,6 +252,13 @@ export function buildContext(
       level: l.level,
       args: l.args,
       timestamp: l.timestamp,
+    })),
+    runtimeErrors: getRuntimeErrors().map((e) => ({
+      type: e.type,
+      message: e.message,
+      source: e.source,
+      stack: e.stack,
+      timestamp: e.timestamp,
     })),
   };
 }

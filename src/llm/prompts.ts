@@ -46,8 +46,9 @@ You MUST respond with valid JSON in this exact format:
 14. Use cssVariables to leverage existing design tokens (var(--color-primary)) instead of hardcoding hex values.
 15. Check activeBreakpoints to know which responsive breakpoint is active. Suggest responsive-aware changes.
 16. Check visibilityState — the element may be scrolled out of view, hidden, or inside a scrollable container; parentScrollContainer identifies the nearest scrolling ancestor.
-17. Always preserve existing code style, conventions, and indentation
-18. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
+17. If Runtime Errors are present, they are uncaught exceptions or framework error-overlay output from the live app — they usually point directly at the bug. Prioritize fixing them and use the stack/source location to find the file.
+18. Always preserve existing code style, conventions, and indentation
+19. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
@@ -122,6 +123,11 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
   if ((context as any).pageTitle) parts.pageTitle = (context as any).pageTitle;
   if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
   if (context.consoleLogs) parts.consoleLogs = context.consoleLogs.map(l => `[${l.level}] ${l.args.join(" ")}`).join("\n");
+  if (context.runtimeErrors?.length) {
+    parts.runtimeErrors = context.runtimeErrors
+      .map(e => `[${e.type}] ${e.message}${e.source ? ` (${e.source})` : ""}${e.stack ? `\n${e.stack}` : ""}`)
+      .join("\n\n");
+  }
   if ((context as any).searchResults?.length) {
     parts.searchResults = (context as any).searchResults.map(
       (s: any) => `Search: "${s.query}"\n${s.matches.map((m: any) => `  ${m.file}:${m.lineNum}: ${m.line}`).join("\n")}`
@@ -140,6 +146,7 @@ export function buildUserMessage(
     filePath?: string;
     networkLogs?: string;
     consoleLogs?: string;
+    runtimeErrors?: string;
     projectTree?: string;
     pageUrl?: string;
     pageTitle?: string;
@@ -175,6 +182,10 @@ export function buildUserMessage(
 
   if (context.consoleLogs) {
     parts.push(`## Console Output\n\`\`\`\n${context.consoleLogs}\n\`\`\``);
+  }
+
+  if (context.runtimeErrors) {
+    parts.push(`## Runtime Errors (uncaught — likely the bug to fix)\n\`\`\`\n${context.runtimeErrors}\n\`\`\``);
   }
 
   if (context.searchResults) {

@@ -1,18 +1,14 @@
-import type { ChatMessage, LlmContext } from "../shared-types.js";
+import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { mapGoogleThinkingLevel, resolveMaxOutput, resolveReasoningLevel } from "./thinking.js";
 
-export async function chatGoogle(
+export function buildGoogleRequest(
   model: string,
-  apiKey: string,
   messages: ChatMessage[],
   context: LlmContext,
-  onChunk: (chunk: string) => void,
-  onDone: (result: { content: string }) => void,
-  onError: (error: string) => void
-): Promise<void> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
-
+  modelInfoOverride?: ModelInfo
+): Record<string, unknown> {
   const contents: Array<{
     role: string;
     parts: Array<{ text?: string; inline_data?: { mime_type: string; data: string } }>;
@@ -35,11 +31,8 @@ export async function chatGoogle(
 
       if (context.screenshot) {
         const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
-        const mimeType = mimeMatch?.[1] || "image/jpeg";
-        const base64Data = context.screenshot.replace(
-          /^data:image\/\w+;base64,/,
-          ""
-        );
+        const mimeType = mimeMatch?.[1] || "image/png";
+        const base64Data = context.screenshot.replace(/^data:image\/[a-z+]+;base64,/, "");
         parts.push({
           inline_data: {
             mime_type: mimeType,
@@ -57,18 +50,17 @@ export async function chatGoogle(
     }
   }
 
-  // Check for thinking support
   const providerConfig = MODEL_REGISTRY.google;
-  const modelInfo = providerConfig?.models.find((m) => m.id === model);
-  const thinkingLevel = modelInfo?.thinking?.defaultLevel;
+  const modelInfo = modelInfoOverride ?? providerConfig?.models.find((m) => m.id === model);
 
   const generationConfig: Record<string, unknown> = {
-    maxOutputTokens: 8192,
+    maxOutputTokens: resolveMaxOutput(modelInfo),
   };
 
-  const thinkingConfig = (thinkingLevel && thinkingLevel !== "none")
-    ? { thinkingLevel: thinkingLevel.toUpperCase() }
+  const level = modelInfo?.thinking?.paramType === "level"
+    ? resolveReasoningLevel(context, modelInfo)
     : undefined;
+  const thinkingLevel = level ? mapGoogleThinkingLevel(level) : undefined;
 
   const body: Record<string, unknown> = {
     system_instruction: {
@@ -77,9 +69,25 @@ export async function chatGoogle(
     contents,
     generationConfig,
   };
-  if (thinkingConfig) {
-    body.thinkingConfig = thinkingConfig;
+  if (thinkingLevel) {
+    body.thinkingConfig = { thinkingLevel };
   }
+
+  return body;
+}
+
+export async function chatGoogle(
+  model: string,
+  apiKey: string,
+  messages: ChatMessage[],
+  context: LlmContext,
+  onChunk: (chunk: string) => void,
+  onDone: (result: { content: string; truncated?: boolean }) => void,
+  onError: (error: string) => void
+): Promise<void> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
+  const body = buildGoogleRequest(model, messages, context);
 
   try {
     const response = await fetch(url, {
@@ -109,6 +117,7 @@ export async function chatGoogle(
     const decoder = new TextDecoder();
     let fullContent = "";
     let buffer = "";
+    let truncated = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -129,13 +138,15 @@ export async function chatGoogle(
             fullContent += text;
             onChunk(text);
           }
+          // Output budget hit before completion.
+          if (parsed.candidates?.[0]?.finishReason === "MAX_TOKENS") truncated = true;
         } catch {
           // Skip malformed chunks
         }
       }
     }
 
-    onDone({ content: fullContent });
+    onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
     onError(`Request failed: ${(e as Error).message}`);
   }

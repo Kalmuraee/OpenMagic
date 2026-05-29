@@ -15,7 +15,7 @@ export interface ExecutionAdapter {
     messages: ChatMessage[],
     context: LlmContext,
     onChunk: (chunk: string) => void,
-    onDone: (result: { content: string }) => void,
+    onDone: (result: { content: string; truncated?: boolean }) => void,
     onError: (error: string) => void
   ) => Promise<void>;
 }

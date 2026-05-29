@@ -18,6 +18,7 @@ import type {
   OpenMagicConfig,
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
+import { coerceThinkingLevel } from "./llm/thinking.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
 import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
@@ -350,13 +351,21 @@ async function handleMessage(
         return;
       }
 
+      // Apply the user's saved per-provider thinking preference (was previously
+      // stored but never used) unless the request already specified one.
+      const llmContext = payload.context || {};
+      if (llmContext.reasoningLevel === undefined) {
+        const pref = coerceThinkingLevel(config.preferredThinkingMode?.[provider]);
+        if (pref) llmContext.reasoningLevel = pref;
+      }
+
       await handleLlmChat(
         {
           provider,
           model: payload.model || config.model || MODEL_REGISTRY[provider]?.models[0]?.id || "gpt-4o",
           apiKey,
           messages: payload.messages,
-          context: payload.context,
+          context: llmContext,
         },
         (chunk) => {
           send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } });

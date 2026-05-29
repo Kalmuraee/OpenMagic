@@ -1,23 +1,19 @@
-import type { ChatMessage, LlmContext } from "../shared-types.js";
+import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { resolveMaxOutput, resolveThinkingBudget } from "./thinking.js";
 
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: string | Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
 }
 
-export async function chatAnthropic(
+export function buildAnthropicRequest(
   model: string,
-  apiKey: string,
   messages: ChatMessage[],
   context: LlmContext,
-  onChunk: (chunk: string) => void,
-  onDone: (result: { content: string }) => void,
-  onError: (error: string) => void
-): Promise<void> {
-  const url = "https://api.anthropic.com/v1/messages";
-
+  modelInfoOverride?: ModelInfo
+): Record<string, unknown> {
   const apiMessages: AnthropicMessage[] = [];
   const lastUserIdx = messages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
 
@@ -28,14 +24,11 @@ export async function chatAnthropic(
     if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
 
-      // If screenshot available, use vision
+      // If screenshot available, use vision. Accept data: URLs and bare base64.
       if (context.screenshot) {
         const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
-        const mediaType = mimeMatch?.[1] || "image/jpeg";
-        const base64Data = context.screenshot.replace(
-          /^data:image\/\w+;base64,/,
-          ""
-        );
+        const mediaType = mimeMatch?.[1] || "image/png";
+        const base64Data = context.screenshot.replace(/^data:image\/[a-z+]+;base64,/, "");
         apiMessages.push({
           role: "user",
           content: [
@@ -61,26 +54,40 @@ export async function chatAnthropic(
     }
   }
 
-  // Build body with optional extended thinking
   const providerConfig = MODEL_REGISTRY.anthropic;
-  const modelInfo = providerConfig?.models.find((m) => m.id === model);
-  const thinkingBudget = modelInfo?.thinking?.defaultBudget || 0;
+  const modelInfo = modelInfoOverride ?? providerConfig?.models.find((m) => m.id === model);
+
+  // Full output budget; thinking budget is clamped to stay strictly below it.
+  const maxOut = resolveMaxOutput(modelInfo);
+  const thinkingBudget = resolveThinkingBudget(context, modelInfo);
 
   const body: Record<string, unknown> = {
     model,
-    max_tokens: thinkingBudget > 0 ? Math.max(thinkingBudget + 4096, 16384) : 4096,
+    max_tokens: maxOut,
     system: SYSTEM_PROMPT,
     messages: apiMessages,
     stream: true,
   };
 
-  // Add extended thinking if supported
   if (thinkingBudget > 0) {
-    body.thinking = {
-      type: "enabled",
-      budget_tokens: thinkingBudget,
-    };
+    body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
   }
+
+  return body;
+}
+
+export async function chatAnthropic(
+  model: string,
+  apiKey: string,
+  messages: ChatMessage[],
+  context: LlmContext,
+  onChunk: (chunk: string) => void,
+  onDone: (result: { content: string; truncated?: boolean }) => void,
+  onError: (error: string) => void
+): Promise<void> {
+  const url = "https://api.anthropic.com/v1/messages";
+
+  const body = buildAnthropicRequest(model, messages, context);
 
   try {
     const response = await fetch(url, {
@@ -114,6 +121,7 @@ export async function chatAnthropic(
     const decoder = new TextDecoder();
     let fullContent = "";
     let buffer = "";
+    let truncated = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -136,13 +144,17 @@ export async function chatAnthropic(
               onChunk(delta);
             }
           }
+          // Output budget hit before completion (message_delta carries stop_reason).
+          if (parsed.delta?.stop_reason === "max_tokens" || parsed.message?.stop_reason === "max_tokens") {
+            truncated = true;
+          }
         } catch {
           // Skip malformed chunks
         }
       }
     }
 
-    onDone({ content: fullContent });
+    onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
     onError(`Request failed: ${(e as Error).message}`);
   }

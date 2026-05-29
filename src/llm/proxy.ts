@@ -122,12 +122,15 @@ export async function handleLlmChat(
   // system-drop in every adapter and reaches CLI agents.
   const messages = sanitizeHistory(params.messages);
 
-  const wrappedOnDone = (result: { content: string }) => {
+  const wrappedOnDone = (result: { content: string; truncated?: boolean }) => {
     const parsed = parseLlmResponse(result.content);
+    // A length-capped stream is truncated even if the partial JSON happened to
+    // parse — trust the adapter's finish-reason signal over the parser.
+    const parseStatus = result.truncated ? "truncated" : parsed.status;
     onDone({
       content: result.content,
       modifications: parsed.modifications,
-      parseStatus: parsed.status,
+      parseStatus,
     });
   };
 

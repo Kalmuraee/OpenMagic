@@ -102,6 +102,9 @@ export interface LlmContext {
   consoleLogs?: ConsoleLogEntry[];
   files?: FileContext[];
   projectTree?: string;
+  // Per-request thinking controls (override registry defaults when present).
+  reasoningLevel?: ThinkingLevel;   // for paramType "level" providers
+  thinkingBudget?: number;          // for paramType "budget" providers (token count)
 }
 
 export interface ElementInfo {

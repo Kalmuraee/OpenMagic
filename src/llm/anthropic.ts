@@ -64,7 +64,10 @@ export function buildAnthropicRequest(
   const body: Record<string, unknown> = {
     model,
     max_tokens: maxOut,
-    system: SYSTEM_PROMPT,
+    // Prompt caching: the large, stable system prompt is cached across every turn
+    // of a conversation / retry loop (~90% cheaper + faster on cache hits). OpenAI
+    // caches automatically; Anthropic needs this explicit cache_control marker.
+    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     messages: apiMessages,
     stream: true,
   };

@@ -60,6 +60,13 @@ describe("buildAnthropicRequest", () => {
     expect(body.max_tokens).toBe(32000);
     expect(body.thinking).toBeUndefined();
   });
+
+  it("marks the system prompt cacheable (prompt caching) — Phase 4", () => {
+    const body = buildAnthropicRequest("plain", msgs, {}, plainModel) as Record<string, any>;
+    expect(Array.isArray(body.system)).toBe(true);
+    expect(body.system[0]).toMatchObject({ type: "text", cache_control: { type: "ephemeral" } });
+    expect(typeof body.system[0].text).toBe("string");
+  });
 });
 
 describe("buildGoogleRequest", () => {

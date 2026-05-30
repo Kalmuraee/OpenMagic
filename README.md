@@ -46,6 +46,18 @@ npx openmagic@latest
 
 Run this from your project folder so OpenMagic can find your source files and dev server. A proxied version of your app opens with the toolbar overlaid.
 
+Prefer a permanent install? Install it globally and run `openmagic` directly:
+
+```bash
+npm install -g openmagic      # install once
+openmagic                     # then run from any project folder
+openmagic --version           # check your version
+```
+
+OpenMagic checks npm on startup and prints a one-line notice when a newer version
+is available (with the right update command for how you launched it). Disable the
+check with `OPENMAGIC_NO_UPDATE_CHECK=1`.
+
 Requires Node.js 20.19 or newer.
 
 ---

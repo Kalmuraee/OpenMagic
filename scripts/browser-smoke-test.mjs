@@ -36,7 +36,7 @@ try {
     "--no-open",
   ], {
     cwd: root,
-    env: { ...process.env, FORCE_COLOR: "0", HOME: tempDir, OPENMAGIC_MODEL_CACHE_FILE: join(tempDir, "model-cache.json") },
+    env: { ...process.env, FORCE_COLOR: "0", OPENMAGIC_NO_UPDATE_CHECK: "1", HOME: tempDir, OPENMAGIC_MODEL_CACHE_FILE: join(tempDir, "model-cache.json") },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

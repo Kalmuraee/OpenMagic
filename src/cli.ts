@@ -184,8 +184,19 @@ import { loadConfig, saveConfig } from "./config.js";
 import { cleanupBackups } from "./filesystem.js";
 
 import { createRequire } from "node:module";
+import { checkForCliUpdate } from "./update-check.js";
 const _require = createRequire(import.meta.url);
 const VERSION: string = _require("../package.json").version;
+
+// Non-blocking startup update check: ask npm if a newer version exists and, if so,
+// print a suggestion to update (tailored to how OpenMagic was launched). Never
+// blocks startup; opt out with OPENMAGIC_NO_UPDATE_CHECK=1.
+function notifyIfUpdateAvailable(): void {
+  if (process.env.OPENMAGIC_NO_UPDATE_CHECK === "1") return;
+  void checkForCliUpdate(VERSION, process.argv[1] || "")
+    .then((notice) => { if (notice) { writeLine(`${INDENT}${pc.yellow("↑")} ${pc.yellow(notice)}`); writeLine(); } })
+    .catch(() => { /* fail-silent */ });
+}
 
 function ask(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -496,6 +507,7 @@ program
     writeLine();
     writeLine(`${INDENT}${pc.white("OpenMagic")} ${pc.dim(`v${VERSION}`)}`);
     writeLine();
+    notifyIfUpdateAvailable();
 
     let targetPort: number;
     let targetHost = opts.host;

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -74,6 +74,23 @@ export interface RunScriptResult {
   aborted: boolean;
 }
 
+// `npm run <script>` spawns the actual command as a grandchild; killing only the
+// npm wrapper leaves it (and its stdio pipes) alive, so 'close' never fires. Kill
+// the whole tree: the process group on POSIX, taskkill /T on Windows.
+function killTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      execSync(`taskkill /pid ${pid} /T /F`, { stdio: "ignore" });
+    } else {
+      process.kill(-pid, "SIGKILL"); // negative pid = process group (requires detached)
+    }
+  } catch {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+  }
+}
+
 export function runVerifyScript(
   root: string,
   script: string,
@@ -85,11 +102,13 @@ export function runVerifyScript(
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      detached: process.platform !== "win32", // own process group so killTree reaches grandchildren
     });
 
     let output = "";
     let timedOut = false;
     let aborted = false;
+    let settled = false;
     const cap = (chunk: Buffer) => {
       output += chunk.toString();
       if (output.length > 64_000) output = output.slice(-64_000); // keep the tail (errors land last)
@@ -97,29 +116,34 @@ export function runVerifyScript(
     child.stdout?.on("data", cap);
     child.stderr?.on("data", cap);
 
+    const finish = (result: RunScriptResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+
+    // On timeout/abort, kill the tree and resolve immediately — don't wait for
+    // 'close', which can lag while a killed grandchild's pipes drain.
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      killTree(child);
+      finish({ code: null, output, timedOut: true, aborted });
     }, timeoutMs);
 
     const onAbort = () => {
       aborted = true;
-      child.kill("SIGTERM");
+      killTree(child);
+      finish({ code: null, output, timedOut, aborted: true });
     };
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve({ code: null, output: output || "failed to spawn npm", timedOut, aborted });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ code, output, timedOut, aborted });
-    });
+    child.on("error", () => finish({ code: null, output: output || "failed to spawn npm", timedOut, aborted }));
+    child.on("close", (code) => finish({ code, output, timedOut, aborted }));
   });
 }
 

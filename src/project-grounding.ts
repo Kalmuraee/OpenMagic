@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { listFiles, readFileSafe } from "./filesystem.js";
+import { findSymbol, getSymbolIndex } from "./symbol-index.js";
 
 export interface ProjectGroundRequest {
   pageUrl?: string;
@@ -99,6 +100,25 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
     selected.set(item.path, { score: item.score, reasons: new Set(item.reasons) });
   }
 
+  // C1: symbol-index boost — resolve the selected component / prompt terms to the
+  // files that actually EXPORT them. Catches targets whose filename doesn't match
+  // the symbol (e.g. <PricingTable> exported from widgets.tsx), which pure
+  // filename/path heuristics miss.
+  const symbolIndex = getSymbolIndex(root, [root]);
+  const hint = request.selectedElement?.componentHint;
+  if (hint) {
+    for (const entry of findSymbol(symbolIndex, hint)) {
+      mergeSelection(selected, entry.file, entry.kind === "component" ? 28 : 18, `exports ${entry.name}`);
+    }
+  }
+  for (const token of tokens) {
+    for (const entry of findSymbol(symbolIndex, token)) {
+      if (entry.kind === "component" || entry.kind === "class" || entry.kind === "function") {
+        mergeSelection(selected, entry.file, 12, `exports ${entry.name}`);
+      }
+    }
+  }
+
   for (const routePath of routePaths) {
     if (files.some((file) => file.path === routePath)) {
       mergeSelection(selected, routePath, 30, "route match");
@@ -180,6 +200,13 @@ export function detectFramework(root: string): string {
   if (deps["@sveltejs/kit"] || existsSync(join(root, "svelte.config.js"))) return "sveltekit";
   if (deps.astro || existsSync(join(root, "astro.config.mjs"))) return "astro";
   if (deps.nuxt || existsSync(join(root, "nuxt.config.ts"))) return "nuxt";
+  // Phase 8 R3: detect before the generic vue/vite/react checks below.
+  if (deps["@angular/core"] || existsSync(join(root, "angular.json"))) return "angular";
+  // React Router v7 framework mode (Remix successor) — gate on the framework dep,
+  // not plain react-router-dom (which a SPA can use without file routing).
+  if (deps["@react-router/dev"] || existsSync(join(root, "react-router.config.ts"))) return "react-router";
+  if (deps["@solidjs/start"]) return "solidstart";
+  if (deps["solid-js"]) return "solid";
   if (deps.vue || existsSync(join(root, "vite.config.ts"))) return deps.react ? "vite-react" : "vue";
   if (deps.react || existsSync(join(root, "src/App.tsx")) || existsSync(join(root, "src/App.jsx"))) return "vite-react";
   if (existsSync(join(root, "config/routes.rb"))) return "rails";
@@ -202,7 +229,7 @@ function buildTokens(request: ProjectGroundRequest): string[] {
     .filter((token) => token.length >= 2 && !STOP_WORDS.has(token));
 }
 
-function routePathCandidates(pageUrl: string, framework: string): string[] {
+export function routePathCandidates(pageUrl: string, framework: string): string[] {
   let pathname = "/";
   try {
     pathname = new URL(pageUrl || "http://localhost/").pathname;
@@ -225,9 +252,30 @@ function routePathCandidates(pageUrl: string, framework: string): string[] {
       `pages/${route}.ts`
     );
   } else if (framework === "sveltekit") {
-    candidates.push(`src/routes/${clean}/+page.svelte`, "src/routes/+page.svelte");
+    candidates.push(clean ? `src/routes/${clean}/+page.svelte` : "src/routes/+page.svelte", "src/routes/+page.svelte");
   } else if (framework === "astro") {
     candidates.push(`src/pages/${route}.astro`, "src/pages/index.astro");
+  } else if (framework === "nuxt") {
+    // Nuxt 4 puts pages under app/pages; Nuxt 3 under pages — offer both.
+    for (const base of ["app/pages", "pages"]) {
+      candidates.push(`${base}/${route}.vue`, `${base}/${clean || "index"}/index.vue`, `${base}/index.vue`);
+    }
+  } else if (framework === "solidstart" || framework === "solid") {
+    candidates.push(`src/routes/${route}.tsx`, `src/routes/${route}.jsx`, `src/routes/${clean || "index"}/index.tsx`, "src/routes/index.tsx");
+  } else if (framework === "react-router") {
+    // Flat-file convention: dots are slashes; index is _index. (Config-based
+    // routing can't be inferred from the URL — symbol-index grounding covers it.)
+    const dotted = clean ? clean.replace(/\//g, ".") : "_index";
+    for (const ext of ["tsx", "jsx", "ts", "js"]) {
+      candidates.push(`app/routes/${dotted}.${ext}`, `app/routes/${dotted}/route.${ext}`);
+    }
+    candidates.push("app/routes.ts", "app/root.tsx");
+  } else if (framework === "angular") {
+    // Config-driven routing — surface the route config + the conventional component.
+    candidates.push("src/app/app.routes.ts", "src/app/app-routing.module.ts");
+    for (const part of parts) {
+      candidates.push(`src/app/${part}/${part}.component.ts`, `src/app/${part}/${part}.ts`);
+    }
   } else {
     candidates.push("src/App.tsx", "src/App.jsx", "src/main.tsx", "src/main.jsx", `src/pages/${route}.tsx`);
   }

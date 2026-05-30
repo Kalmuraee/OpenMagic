@@ -1,0 +1,9 @@
+{
+  "name": "vanilla: create a new helper file",
+  "fixture": "vanilla",
+  "prompt": "add a noop helper",
+  "modifications": [
+    { "file": "utils.js", "type": "create", "content": "export const noop = () => {};\n" }
+  ],
+  "expect": { "applies": true, "file": "utils.js", "contains": ["noop"] }
+}

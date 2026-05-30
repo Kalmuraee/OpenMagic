@@ -1,10 +1,14 @@
 import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
-import { captureScreenshotWithFeedback } from "./services/capture.js";
-import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
+import { captureScreenshot, captureScreenshotWithFeedback } from "./services/capture.js";
+import { summarizeDesignTokens, collectStyleSamples, buildDesignReviewPrompt } from "./design-audit.js";
+import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs, getRuntimeErrors, scrapeErrorOverlay, summarizeRuntimeFailure } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
-import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
+import { buildTextEditModification } from "./inline-edit.js";
+import { filterCommands, type Command } from "./command-palette.js";
+import { EDITABLE_STYLE_PROPS, diffElementState, describeElementChanges, type ElementState } from "./element-editor.js";
+import { clearToolbarState, restoreToolbarState, saveToolbarState, savePendingRuntimeCheck, loadPendingRuntimeCheck, clearPendingRuntimeCheck } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
 
@@ -105,15 +109,16 @@ let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.43.2";
+const CURRENT_VERSION = "0.44.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
   connected: false,
   panelOpen: false,
-  activePanel: "" as "" | "chat" | "settings",
+  activePanel: "" as "" | "chat" | "settings" | "edit",
   selecting: false,
-  selectedElement: null as SelectedElement | null,
+  selectedElement: null as SelectedElement | null, // primary (most recent) selection
+  selectedElements: [] as SelectedElement[],        // U3: full multi-selection list
   screenshot: null as string | null,
   messages: [] as { role: "user" | "assistant" | "system"; content: string }[],
   streaming: false,
@@ -134,6 +139,7 @@ const state = {
   modelTestStatus: "" as "" | "testing" | "success" | "error",
   modelTestMessage: "",
   planBeforeEdit: false,
+  serverAgent: false,          // H12: run the investigate→edit loop server-side (opt-in)
   networkCapture: false,       // whether network panel is showing
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
@@ -146,6 +152,11 @@ const state = {
   selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
   matchRetryRounds: 0,          // bounded re-prompt-on-failed-match counter (reset on each fresh prompt)
   lastPlan: "",                 // the approved plan text, fed into the edit pass (H15)
+  cmdkOpen: false,              // ⌘K command palette open (U4)
+  cmdkIndex: 0,                 // highlighted command index
+  editTargetEl: null as HTMLElement | null,                 // live element being visually edited
+  editorOriginal: null as ElementState | null,              // snapshot at editor open (for diffing)
+  editorRevert: null as { attrs: Record<string, string>; text: string } | null, // for Discard
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -204,6 +215,34 @@ function init() {
 
   host.setAttribute("data-openmagic-ready", "true");
   host.addEventListener("openmagic:test-open-settings", () => openPanel("settings"));
+  // Test hook: select an element by CSS selector and open the visual editor.
+  host.addEventListener("openmagic:test-edit-element", (e: Event) => {
+    const selector = (e as CustomEvent).detail?.selector;
+    if (!selector) return;
+    state.selectedElement = { tagName: "el", cssSelector: selector, outerHTML: "" } as unknown as SelectedElement;
+    openElementEditor();
+  });
+  // Test hook: derive the page's design tokens and expose a summary (validates
+  // the brand/consistency extraction on a real rendered page).
+  host.addEventListener("openmagic:test-design-tokens", () => {
+    const t = summarizeDesignTokens(collectStyleSamples());
+    host.setAttribute("data-openmagic-design-tokens", JSON.stringify({
+      colors: t.colors.length, fonts: t.fontFamilies.length, sizes: t.fontSizes.length,
+    }));
+  });
+  // Test hook: apply a live edit (the inputs live in a closed shadow root, so a
+  // browser test can't reach them; this exercises applyLiveEdit faithfully).
+  host.addEventListener("openmagic:test-live-edit", (e: Event) => {
+    const d = (e as CustomEvent).detail || {};
+    const fake = document.createElement("input");
+    if (d.kind === "style") fake.dataset.editStyle = d.name;
+    else if (d.kind === "text") fake.dataset.editText = "";
+    else if (d.kind === "class") fake.dataset.editClass = "";
+    else if (d.kind === "attribute") fake.dataset.editAttr = d.name;
+    else if (d.kind === "css") fake.dataset.editCustomCss = "";
+    fake.value = d.value ?? "";
+    applyLiveEdit(fake);
+  });
   document.body.appendChild(host);
 
   // Attach event delegation ONCE
@@ -241,6 +280,7 @@ function init() {
           MODEL_REGISTRY = { ...MODEL_REGISTRY, ...msg.payload.providers };
         }
         state.planBeforeEdit = !!msg.payload?.planBeforeEdit;
+        state.serverAgent = !!msg.payload?.serverAgent;
 
         // Store detected CLI agents from server
         state.detectedClis = msg.payload?.detectedClis || [];
@@ -273,6 +313,7 @@ function init() {
         updatePillButtons();
         updateModelSwitcher();
         void refreshProviderModels(state.provider);
+        void checkRuntimeAfterReload(); // Phase 6: catch "compiled but crashed" edits
       })
       .catch(() => {
         state.connected = false;
@@ -294,6 +335,7 @@ function buildStaticDOM(): string {
         <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
         <button class="om-pill-btn" data-action="network" title="Network & Performance">${ICON.activity}</button>
         <span class="om-pill-divider"></span>
+        <button class="om-pill-btn" data-action="design-review" title="Review UI/UX & propose design fixes">${ICON.sparkle}</button>
         <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
         <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
         <button class="om-pill-btn" data-action="minimize" title="Minimize">${ICON.minus}</button>
@@ -332,6 +374,12 @@ function buildStaticDOM(): string {
         <input class="om-prompt-input" type="text" placeholder="Describe what to change..." autocomplete="off" />
         <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
         <input type="file" class="om-file-input om-hidden" accept="image/*" multiple />
+      </div>
+      <div class="om-cmdk om-hidden" data-cmdk>
+        <div class="om-cmdk-box">
+          <input class="om-cmdk-input" type="text" placeholder="Type a command…" autocomplete="off" data-cmdk-input aria-label="Command palette" />
+          <div class="om-cmdk-list" data-cmdk-list></div>
+        </div>
       </div>
     </div>`;
 }
@@ -406,6 +454,36 @@ function attachGlobalEvents(root: HTMLElement) {
   });
   $promptInput.addEventListener("input", updatePromptContext);
 
+  // Visual element editor: live-apply edits to the page as the user types.
+  $panelBody?.addEventListener("input", (e) => {
+    if (state.activePanel !== "edit") return;
+    const t = e.target as HTMLElement;
+    if (t.dataset.editStyle || t.dataset.editText !== undefined || t.dataset.editClass !== undefined || t.dataset.editAttr || t.dataset.editCustomCss !== undefined) {
+      applyLiveEdit(t);
+    }
+  });
+
+  // Command palette (U4): input filtering, keyboard nav, click-to-run, click-out.
+  const cmdkInput = root.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  if (cmdkInput) {
+    cmdkInput.addEventListener("input", () => { state.cmdkIndex = 0; renderCmdkList(cmdkInput.value); });
+    cmdkInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveCmdk(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveCmdk(-1); }
+      else if (e.key === "Enter") { e.preventDefault(); runCmdkSelected(); }
+      else if (e.key === "Escape") { e.preventDefault(); closeCmdk(); }
+    });
+  }
+  const cmdkOverlay = root.querySelector("[data-cmdk]") as HTMLElement | null;
+  if (cmdkOverlay) {
+    cmdkOverlay.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (target === cmdkOverlay) { closeCmdk(); return; } // click outside the box
+      const item = target.closest("[data-cmdk-run]") as HTMLElement | null;
+      if (item) { closeCmdk(); runCommand(item.getAttribute("data-cmdk-run") || ""); }
+    });
+  }
+
   // File input change handler
   const fileInput = root.querySelector(".om-file-input") as HTMLInputElement;
   if (fileInput) {
@@ -476,11 +554,10 @@ function attachGlobalEvents(root: HTMLElement) {
       }
       return;
     }
-    // Ctrl/Cmd + K: focus prompt input. Shift+K is kept as a compatibility shortcut.
+    // Ctrl/Cmd + K: open the command palette (U4). It includes "Focus the prompt".
     if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
-      if (!state.panelOpen) openPanel("chat");
-      $promptInput.focus();
+      if (state.cmdkOpen) closeCmdk(); else openCmdk();
       return;
     }
     // Ctrl/Cmd + Shift + Z: redo the last rolled-back patch group when available.
@@ -559,6 +636,177 @@ function patchFailureMessage(payload: any, fallback: string): string {
 const MAX_SELF_CORRECT = 2;
 const MAX_MATCH_RETRY = 2;
 
+// U4: ⌘K command palette ------------------------------------------------------
+const COMMANDS: Command[] = [
+  { id: "select", label: "Select an element", action: "select", keywords: ["pick", "inspect", "click"] },
+  { id: "design-review", label: "Review UI/UX & propose design fixes", action: "design-review", keywords: ["design", "ux", "ui", "audit", "critique", "improve", "redesign", "brand"] },
+  { id: "edit-element", label: "Edit element (styles, text, attributes)", action: "edit-element", keywords: ["css", "style", "html", "properties", "visual"] },
+  { id: "chat", label: "Open chat", action: "open-chat", keywords: ["ask", "prompt"] },
+  { id: "focus", label: "Focus the prompt", action: "focus-prompt", keywords: ["type", "write"] },
+  { id: "screenshot", label: "Capture a screenshot", action: "screenshot", keywords: ["image", "snap"] },
+  { id: "settings", label: "Open settings", action: "open-settings", keywords: ["config", "provider", "api key", "model"] },
+  { id: "apply-all", label: "Apply all pending changes", action: "apply-all", keywords: ["accept", "save"] },
+  { id: "undo-last", label: "Undo the last applied change", action: "undo-last", keywords: ["revert", "rollback"] },
+  { id: "redo-last", label: "Redo the last reverted change", action: "redo-last", keywords: [] },
+  { id: "clear-element", label: "Clear the selected element", action: "clear-element", keywords: ["deselect"] },
+  { id: "clear-chat", label: "Clear the chat", action: "clear-chat", keywords: ["reset"] },
+  { id: "minimize", label: "Minimize the toolbar", action: "minimize", keywords: ["hide", "collapse"] },
+];
+
+// Click the most recent button matching any of the selectors (newest undo/redo).
+function clickLatest(selectors: string[]): void {
+  for (const sel of selectors) {
+    const els = shadow.querySelectorAll(sel);
+    if (els.length) { (els[els.length - 1] as HTMLElement).click(); return; }
+  }
+}
+
+function runCommand(action: string): void {
+  if (action === "open-chat") { openPanel("chat"); return; }
+  if (action === "open-settings") { openPanel("settings"); return; }
+  if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
+  if (action === "clear-element") { state.selectedElement = null; state.selectedElements = []; updatePromptContext(); return; }
+  if (action === "design-review") { void runDesignReview(); return; }
+  if (action === "edit-element") { openElementEditor(); return; }
+  if (action === "undo-last") { clickLatest(['[data-action="rollback-patch"]', '[data-action="undo-diff"]']); return; }
+  if (action === "redo-last") { clickLatest(['[data-action="redo-patch"]']); return; }
+  // Route the rest through the real control if present, else the action handler.
+  const btn = shadow.querySelector(`[data-action="${action}"]`) as HTMLElement | null;
+  handleAction(action, btn || document.createElement("button"));
+}
+
+function openCmdk(): void {
+  state.cmdkOpen = true;
+  state.cmdkIndex = 0;
+  const overlay = shadow.querySelector("[data-cmdk]") as HTMLElement | null;
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  if (!overlay || !input) return;
+  overlay.classList.remove("om-hidden");
+  input.value = "";
+  renderCmdkList("");
+  input.focus();
+}
+
+function closeCmdk(): void {
+  state.cmdkOpen = false;
+  (shadow.querySelector("[data-cmdk]") as HTMLElement | null)?.classList.add("om-hidden");
+}
+
+function currentCmdkMatches(): Command[] {
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  return filterCommands(COMMANDS, input?.value || "");
+}
+
+function renderCmdkList(query: string): void {
+  const list = shadow.querySelector("[data-cmdk-list]") as HTMLElement | null;
+  if (!list) return;
+  const matches = filterCommands(COMMANDS, query);
+  if (state.cmdkIndex >= matches.length) state.cmdkIndex = Math.max(0, matches.length - 1);
+  list.innerHTML = matches.length
+    ? matches.map((c, i) =>
+        `<div class="om-cmdk-item${i === state.cmdkIndex ? " om-cmdk-active" : ""}" data-cmdk-run="${escapeHtml(c.action)}">${escapeHtml(c.label)}</div>`
+      ).join("")
+    : `<div class="om-cmdk-empty">No matching commands</div>`;
+}
+
+function moveCmdk(delta: number): void {
+  const count = currentCmdkMatches().length;
+  if (!count) return;
+  state.cmdkIndex = (state.cmdkIndex + delta + count) % count;
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  renderCmdkList(input?.value || "");
+}
+
+function runCmdkSelected(): void {
+  const matches = currentCmdkMatches();
+  const cmd = matches[state.cmdkIndex];
+  closeCmdk();
+  if (cmd) runCommand(cmd.action);
+}
+
+/**
+ * Phase 6: after an apply+reload, check whether the edit compiled but crashed the
+ * app at runtime (uncaught error or framework error overlay). If so, revert the
+ * chain and self-correct with the runtime errors — the H6 typecheck gate runs
+ * before reload and can't see this. Bounded by the same self-correction budget.
+ */
+async function checkRuntimeAfterReload(): Promise<void> {
+  const pending = loadPendingRuntimeCheck();
+  if (!pending) return;
+  clearPendingRuntimeCheck(); // one-shot
+
+  // Let the freshly-reloaded app render and throw before we look.
+  await new Promise((r) => setTimeout(r, 1500));
+
+  const failure = summarizeRuntimeFailure(scrapeErrorOverlay(), getRuntimeErrors());
+  if (!failure) return; // healthy at runtime — nothing to do
+
+  try { await ws.request("fs.patch.rollback", { groupId: pending.groupId, chain: true }); } catch { /* manifest may be gone */ }
+  openPanel("chat");
+
+  if (pending.selfCorrectRounds < MAX_SELF_CORRECT && pending.prompt) {
+    state.selfCorrectRounds = pending.selfCorrectRounds + 1;
+    state.messages.push({
+      role: "assistant",
+      content: `The applied change compiled but crashed the app at runtime — reverted and re-attempting (self-correction ${state.selfCorrectRounds}/${MAX_SELF_CORRECT}).`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    const correction =
+      `Your previous edit to ${pending.files.join(", ")} compiled but crashed the running app and was reverted. ` +
+      `Fix these runtime errors and return corrected modifications:\n\n${failure}`;
+    await sendPrompt(correction, true, undefined, true);
+  } else {
+    state.messages.push({
+      role: "assistant",
+      content: `The applied change crashed the app at runtime and was reverted to the last working state. Runtime errors:\n\n${failure}`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+  }
+}
+
+/**
+ * U2: apply a direct text edit. Grounds the project, tries to produce the code
+ * change deterministically (no LLM) by finding the old text verbatim in source;
+ * if that's unsafe/ambiguous, falls back to a focused LLM prompt. Either way the
+ * change flows through the existing diff-card → apply → verify pipeline.
+ */
+async function applyInlineTextEdit(oldText: string, newText: string): Promise<void> {
+  if (!oldText || oldText === newText || state.streaming) return;
+  openPanel("chat");
+  state.messages.push({ role: "user", content: `Change text "${oldText}" → "${newText}"` });
+  refreshPanelContent();
+  scrollChatToBottom();
+
+  let files: Array<{ path: string; content: string }> = [];
+  try {
+    const grounded = await ws.request("project.ground", {
+      pageUrl: window.location.href,
+      promptText: `${oldText} ${newText}`,
+      selectedElement: state.selectedElement,
+    });
+    files = (grounded?.payload?.files || []).map((f: any) => ({ path: f.path, content: f.content }));
+  } catch { /* grounding best-effort */ }
+
+  const mod = buildTextEditModification(files, oldText, newText);
+  if (mod) {
+    const groupId = Math.random().toString(36).slice(2);
+    const diffId = Math.random().toString(36).slice(2);
+    const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace, groupId });
+    state.messages.push({ role: "assistant", content: `Direct text edit in \`${mod.file}\` — review and apply below.` });
+    state.messages.push({ role: "system", content: `__DIFF__${encodeBase64Utf8(diffPayload)}` });
+    updateApplyBar(1);
+    refreshPanelContent();
+    scrollChatToBottom();
+    return;
+  }
+
+  // Couldn't locate the text safely — let the model handle it with full context.
+  const tag = state.selectedElement?.tagName?.toLowerCase() || "element";
+  await sendPrompt(`Change the visible text of the selected <${tag}> from "${oldText}" to "${newText}".`, true);
+}
+
 /**
  * H3: when a search block doesn't match the file, don't dead-end. Re-read the
  * actual file(s), hand the model the real content + the failure reason, and ask
@@ -602,7 +850,21 @@ async function repromptOnMatchFailure(files: string[], reason: string): Promise<
  * surface the failure. Passing/inconclusive verification falls through to reload.
  */
 async function verifyAndSettle(groupId: string, files: string[], reload: () => void): Promise<void> {
-  if (!state.verifyAfterApply || !files.length) { reload(); return; }
+  if (!files.length) { reload(); return; }
+
+  // Arm the Phase 6 runtime check for any apply→reload — a "compiled but crashed
+  // at runtime" edit is only detectable after the reload, in the browser.
+  const armRuntimeCheck = () => {
+    const lastUser = [...state.messages].reverse().find((m) => m.role === "user");
+    savePendingRuntimeCheck({
+      groupId,
+      files,
+      selfCorrectRounds: state.selfCorrectRounds,
+      prompt: typeof lastUser?.content === "string" ? lastUser.content : "",
+    });
+  };
+
+  if (!state.verifyAfterApply) { armRuntimeCheck(); reload(); return; }
 
   const statusEl = $panelBody.querySelector(".om-msg-system:last-child");
   if (statusEl) statusEl.innerHTML += ' <span class="om-spinner"></span> verifying…';
@@ -617,7 +879,8 @@ async function verifyAndSettle(groupId: string, files: string[], reload: () => v
   }
 
   if (verdict?.status !== "failed") {
-    // passed or inconclusive — the change stands
+    // passed or inconclusive — the change stands; arm the runtime check for after reload.
+    armRuntimeCheck();
     reload();
     return;
   }
@@ -1025,8 +1288,19 @@ async function handleAction(action: string, target: HTMLElement) {
       });
       break;
     }
-    case "clear-element": state.selectedElement = null; updatePromptContext(); break;
+    case "clear-element": state.selectedElement = null; state.selectedElements = []; updatePromptContext(); break;
     case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
+    case "apply-text-edit": {
+      const input = shadow.querySelector("[data-inline-edit-input]") as HTMLInputElement | null;
+      const oldText = (state.selectedElement?.textContent || "").trim();
+      const newText = (input?.value || "").trim();
+      void applyInlineTextEdit(oldText, newText);
+      break;
+    }
+    case "design-review": void runDesignReview(); break;
+    case "edit-element": openElementEditor(); break;
+    case "apply-element-edit": void applyElementEditToCode(); break;
+    case "discard-element-edit": revertElementEdits(); openPanel("chat"); break;
     case "minimize": {
       state.minimized = !state.minimized;
       const panel = shadow.querySelector(".om-panel") as HTMLElement;
@@ -1179,8 +1453,24 @@ async function refreshProviderModels(provider: string) {
 function updatePromptContext() {
   const chips: string[] = [];
   if (state.selectedElement) {
-    const selectedLabel = `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
-    chips.push(`<span class="om-prompt-chip">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+    const selectedLabel = state.selectedElements.length > 1
+      ? `${state.selectedElements.length} elements`
+      : `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
+    const title = state.selectedElements.length > 1
+      ? state.selectedElements.map((el) => el.cssSelector || el.tagName).join("\n")
+      : "";
+    chips.push(`<span class="om-prompt-chip" title="${escapeHtml(title)}">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-edit" data-action="edit-element" title="Edit styles, text & attributes">edit</button> <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+
+    // U2: direct inline text editing for elements with short, single-line text.
+    const txt = (state.selectedElement.textContent || "").trim();
+    if (txt && txt.length <= 80 && !txt.includes("\n")) {
+      chips.push(
+        `<span class="om-inline-edit-wrap">` +
+        `<input class="om-inline-edit" type="text" value="${escapeHtml(txt)}" data-inline-edit-input aria-label="Edit element text" />` +
+        `<button class="om-btn om-btn-sm" data-action="apply-text-edit" title="Apply a direct text edit">Edit text</button>` +
+        `</span>`
+      );
+    }
   }
   if (state.screenshot) {
     chips.push(`<span class="om-prompt-chip">Screenshot <button class="om-prompt-chip-x" data-action="clear-screenshot">${ICON.x}</button></span>`);
@@ -1208,13 +1498,168 @@ function updatePromptContext() {
 
 // ── Panel Management ─────────────────────────────────────────────
 
-function openPanel(panel: "chat" | "settings") {
+/**
+ * UX/UI review: capture the page (screenshot) + derive its design system, then
+ * ask a (vision) model to find issues and propose brand-consistent fixes. The
+ * proposal comes back as diff cards (preview) → Apply runs the verify→HMR loop,
+ * so the user sees the result and confirms.
+ */
+async function runDesignReview(): Promise<void> {
+  if (state.streaming) return;
+  openPanel("chat");
+
+  if (!selectedModelSupportsVision()) {
+    state.messages.push({
+      role: "system",
+      content: "Heads up: the current model isn't vision-capable, so the review will rely on the detected design tokens and source rather than the screenshot. Switch to a vision model for a visual critique.",
+    });
+    refreshPanelContent();
+  }
+
+  let screenshot: string | null = null;
+  try { screenshot = (await captureScreenshot()) ?? null; } catch { /* fall back to token-only review */ }
+
+  const tokens = summarizeDesignTokens(collectStyleSamples());
+  const prompt = buildDesignReviewPrompt(tokens, { pageTitle: document.title });
+  if (screenshot) state.screenshot = screenshot;
+  await sendPrompt(prompt, true);
+}
+
+// ── Visual element editor (live preview → confirm → code) ────────────────────
+
+function captureLiveElementState(el: HTMLElement): ElementState {
+  const cs = getComputedStyle(el);
+  const styles: Record<string, string> = {};
+  for (const p of EDITABLE_STYLE_PROPS) styles[p] = cs.getPropertyValue(p).trim();
+  const attributes: Record<string, string> = {};
+  for (const a of Array.from(el.attributes)) {
+    if (a.name === "style" || a.name === "class") continue;
+    attributes[a.name] = a.value;
+  }
+  return { styles, text: el.textContent || "", className: el.className, attributes };
+}
+
+function elementLabel(): string {
+  const el = state.selectedElement;
+  if (!el) return "element";
+  return el.cssSelector || `${el.tagName}${el.id ? "#" + el.id : ""}`;
+}
+
+function openElementEditor(): void {
+  const sel = state.selectedElement?.cssSelector;
+  let el: HTMLElement | null = null;
+  try { el = sel ? (document.querySelector(sel) as HTMLElement | null) : null; } catch { el = null; }
+  if (!el) {
+    // Can't resolve the live element — fall back to describing it via chat.
+    openPanel("chat");
+    return;
+  }
+  state.editTargetEl = el;
+  state.editorOriginal = captureLiveElementState(el);
+  const attrs: Record<string, string> = {};
+  for (const a of Array.from(el.attributes)) attrs[a.name] = a.value;
+  state.editorRevert = { attrs, text: el.textContent || "" };
+  $host?.setAttribute("data-openmagic-editing", elementLabel());
+  openPanel("edit");
+}
+
+// Live preview: apply an edit straight to the page element as the user types.
+function applyLiveEdit(target: HTMLElement): void {
+  const el = state.editTargetEl;
+  if (!el) return;
+  const value = (target as HTMLInputElement | HTMLTextAreaElement).value;
+  if (target.dataset.editStyle) {
+    if (value.trim()) el.style.setProperty(target.dataset.editStyle, value); else el.style.removeProperty(target.dataset.editStyle);
+  } else if (target.dataset.editText !== undefined) {
+    el.textContent = value;
+  } else if (target.dataset.editClass !== undefined) {
+    el.className = value;
+  } else if (target.dataset.editAttr) {
+    if (value) el.setAttribute(target.dataset.editAttr, value); else el.removeAttribute(target.dataset.editAttr);
+  } else if (target.dataset.editCustomCss !== undefined) {
+    // Parse "prop: value;" declarations and apply each.
+    for (const decl of value.split(";")) {
+      const idx = decl.indexOf(":");
+      if (idx === -1) continue;
+      const prop = decl.slice(0, idx).trim();
+      const val = decl.slice(idx + 1).trim();
+      if (prop && val) el.style.setProperty(prop, val);
+    }
+  }
+}
+
+function revertElementEdits(): void {
+  const el = state.editTargetEl;
+  const snap = state.editorRevert;
+  if (el && snap) {
+    for (const a of Array.from(el.attributes)) el.removeAttribute(a.name);
+    for (const [k, v] of Object.entries(snap.attrs)) { try { el.setAttribute(k, v); } catch { /* invalid attr name */ } }
+    el.textContent = snap.text;
+  }
+  state.editTargetEl = null;
+  state.editorOriginal = null;
+  state.editorRevert = null;
+  $host?.setAttribute("data-openmagic-editing", "");
+}
+
+async function applyElementEditToCode(): Promise<void> {
+  const el = state.editTargetEl;
+  const original = state.editorOriginal;
+  if (!el || !original) { openPanel("chat"); return; }
+  const changes = diffElementState(original, captureLiveElementState(el));
+  // Keep the live preview on the page until the source change applies + reloads.
+  state.editTargetEl = null;
+  state.editorOriginal = null;
+  state.editorRevert = null;
+  $host?.setAttribute("data-openmagic-editing", "");
+  if (!changes.length) { openPanel("chat"); return; }
+  openPanel("chat");
+  await sendPrompt(describeElementChanges(elementLabel(), changes), true);
+}
+
+function renderEditPanelHTML(): string {
+  const s = state.editorOriginal;
+  if (!s || !state.editTargetEl) {
+    return `<div class="om-status">Select an element first, then choose "Edit element".</div>`;
+  }
+  const styleInputs = EDITABLE_STYLE_PROPS.map((p) =>
+    `<label class="om-edit-row"><span class="om-edit-label">${escapeHtml(p)}</span>` +
+    `<input class="om-edit-input" data-edit-style="${escapeHtml(p)}" value="${escapeHtml(s.styles[p] || "")}" /></label>`
+  ).join("");
+  const attrRows = Object.entries(s.attributes).map(([name, val]) =>
+    `<label class="om-edit-row"><span class="om-edit-label">@${escapeHtml(name)}</span>` +
+    `<input class="om-edit-input" data-edit-attr="${escapeHtml(name)}" value="${escapeHtml(val)}" /></label>`
+  ).join("");
+
+  return `
+    <div class="om-edit">
+      <div class="om-edit-target">${escapeHtml(elementLabel())}</div>
+      <div class="om-edit-hint">Edits preview live on the page. "Apply to code" sends them to the LLM to change the source.</div>
+
+      <div class="om-edit-section">Content</div>
+      <label class="om-edit-row"><span class="om-edit-label">text</span><input class="om-edit-input" data-edit-text value="${escapeHtml(s.text.slice(0, 200))}" /></label>
+      <label class="om-edit-row"><span class="om-edit-label">class</span><input class="om-edit-input" data-edit-class value="${escapeHtml(s.className)}" /></label>
+
+      <div class="om-edit-section">Styles</div>
+      ${styleInputs}
+      <label class="om-edit-row om-edit-row-wide"><span class="om-edit-label">custom CSS</span><input class="om-edit-input" data-edit-custom-css placeholder="prop: value; …" /></label>
+
+      ${attrRows ? `<div class="om-edit-section">Attributes</div>${attrRows}` : ""}
+
+      <div class="om-edit-actions">
+        <button class="om-btn om-btn-sm" data-action="apply-element-edit">Apply to code</button>
+        <button class="om-btn-secondary om-btn-sm" data-action="discard-element-edit">Discard</button>
+      </div>
+    </div>`;
+}
+
+function openPanel(panel: "chat" | "settings" | "edit") {
   state.panelOpen = true;
   state.activePanel = panel;
   $host?.setAttribute("data-openmagic-panel", panel);
   $panel.classList.remove("om-hidden");
   const title = shadow.querySelector(".om-panel-title");
-  if (title) title.textContent = panel === "settings" ? "Settings" : "Chat";
+  if (title) title.textContent = panel === "settings" ? "Settings" : panel === "edit" ? "Edit element" : "Chat";
   refreshPanelContent();
   updatePillButtons();
 }
@@ -1238,6 +1683,8 @@ function togglePanel(panel: "chat" | "settings") {
 function refreshPanelContent() {
   if (state.activePanel === "settings") {
     $panelBody.innerHTML = renderSettingsHTML();
+  } else if (state.activePanel === "edit") {
+    $panelBody.innerHTML = renderEditPanelHTML();
   } else if (state.activePanel === "chat") {
     $panelBody.innerHTML = renderChatHTML();
     scrollChatToBottom();
@@ -1455,7 +1902,15 @@ function renderChatHTML(): string {
     ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span> Generating response...</div>` : "";
 
   const empty = !state.messages.length && !state.streaming
-    ? `<div class="om-chat-empty">Select an element or type below to start</div>` : "";
+    ? `<div class="om-chat-empty">
+        <div class="om-onboard-title">Make a change in 3 steps</div>
+        <ol class="om-onboard-steps">
+          <li>${ICON.crosshair} <b>Select</b> an element on the page</li>
+          <li>${ICON.chat} <b>Describe</b> the change you want</li>
+          <li>Review the diff and <b>Apply</b> — it's verified automatically</li>
+        </ol>
+        <div class="om-onboard-tip">Tip: press <kbd>⌘K</kbd> for the command palette</div>
+      </div>` : "";
 
   return `<div class="om-chat-messages">${empty}${msgs}${streamHtml}</div>`;
 }
@@ -1621,7 +2076,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
   openPanel("chat");
 
   // Build context — includes page info, selected element, screenshot, network/console logs
-  const context: any = contextOverride || buildContext(state.selectedElement, state.screenshot);
+  const context: any = contextOverride || buildContext(state.selectedElement, state.screenshot, state.selectedElements);
   context.pageUrl = context.pageUrl || window.location.href;
   context.pageTitle = context.pageTitle || document.title;
 
@@ -2031,8 +2486,11 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
     while (iters++ < MAX_TOTAL_ITERS) {
       state.streamContent = "";
 
+      // H12: when the server-side agent loop is enabled, route the edit pass
+      // through agent.run (same envelope) so file-reads/searches happen
+      // server-side; otherwise the browser runs the investigate loop below.
       const result = await ws.stream(
-        "llm.chat",
+        state.serverAgent ? "agent.run" : "llm.chat",
         {
           provider: state.provider,
           model: state.model,
@@ -2442,7 +2900,20 @@ function enterSelectMode() {
     e.stopPropagation();
     const t = e.target as HTMLElement;
     if (t.closest("openmagic-toolbar") || t.dataset?.openmagic) return;
-    state.selectedElement = inspectElement(t);
+    const el = inspectElement(t);
+    // U3: hold Shift/Cmd/Ctrl to add to the selection and keep picking; a plain
+    // click replaces the selection and exits select mode (the common case).
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    if (additive) {
+      if (!state.selectedElements.some((s) => s.cssSelector === el.cssSelector)) {
+        state.selectedElements.push(el);
+      }
+      state.selectedElement = el;
+      updatePromptContext();
+      return; // stay in select mode to add more
+    }
+    state.selectedElements = [el];
+    state.selectedElement = el;
     exitSelectMode();
     updatePromptContext();
     $promptInput.focus();

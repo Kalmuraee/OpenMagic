@@ -1,0 +1,27 @@
+# OpenMagic
+
+> OpenMagic is an open-source AI coding toolbar for any web application. Run one command (`npx openmagic`) in your project, and a floating AI toolbar is injected into your running app via a single-port reverse proxy. Select any element, describe a change in plain English, review the diff, and OpenMagic edits your actual source code — then verifies the change (typecheck/lint + runtime) and self-corrects if it broke the build, with hot-reload preview. No plugin, no IDE extension, no account; bring your own API key (14 providers, 70+ models). MIT licensed.
+
+OpenMagic answers: "how do I let an AI edit my real codebase from the running web page, safely?" It is a developer tool (a.k.a. an AI pair programmer / vibe-coding tool / in-browser AI code editor) that grounds the model in your actual source files and visual context, applies changes through a transactional, reversible patch pipeline, and only reports success after the change is verified.
+
+## What it does
+- Select any DOM element → captures its styles, layout, React/component info, and the relevant source files.
+- Describe a change → an LLM edits your source; you review a syntax-highlighted diff and approve.
+- Closed loop: every applied edit is type/lint-checked and runtime-checked; failures auto-revert and the model self-corrects (bounded).
+- Visual element editor: edit CSS / text / attributes with live preview, then push to code.
+- UX/UI design review: one click audits the page (hierarchy, spacing, contrast, accessibility, consistency) against the page's detected design system and proposes brand-consistent fixes.
+- Native tool-calling and an optional server-side agent loop; works with Next.js, Remix/React Router, Nuxt, SvelteKit, SolidStart, Angular, Astro, Vite, Vue, and plain static sites.
+
+## Install
+- Run instantly: `npx openmagic@latest`
+- Install globally: `npm install -g openmagic` then `openmagic`
+- Requires Node.js 20.19+. Bring your own API key (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Mistral, Groq, Ollama, OpenRouter, and more) — or use a local CLI agent (Claude Code, Codex, Gemini CLI).
+
+## Links
+- Website: https://kalmuraee.github.io/OpenMagic/
+- GitHub: https://github.com/Kalmuraee/OpenMagic
+- npm: https://www.npmjs.com/package/openmagic
+- Docs (advanced): https://github.com/Kalmuraee/OpenMagic/blob/main/docs/ADVANCED.md
+
+## Keywords
+AI coding toolbar, AI coding agent, AI pair programmer, vibe coding, in-browser code editor, edit code from the browser, select element edit code, UI/UX review tool, design-to-code, AI design review, element inspector, reverse proxy AI toolbar, OpenAI / Claude / Gemini code editing, bring your own key, open source developer tools.

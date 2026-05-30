@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { grepFiles, listFiles, readFileSafe } from "../filesystem.js";
+import { findSymbol, getSymbolIndex } from "../symbol-index.js";
 import type { CodeModification } from "../shared-types.js";
 
 /**
@@ -59,6 +60,15 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   {
+    name: "find_symbol",
+    description: "Locate the file(s) that export a named symbol — component, function, class, type, or constant. Use this to jump straight to the source for a component you see in the UI.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+    },
+  },
+  {
     name: "propose_edits",
     description: "Propose the final code modifications. Call this exactly once when you know the precise edits. Copy each search block byte-for-byte from a file you read.",
     parameters: {
@@ -115,6 +125,11 @@ export function executeServerTool(
       const entries = listFiles(dir, roots, 3);
       if (!entries.length) return { content: "No files found." };
       return { content: entries.map((e) => `${e.type === "dir" ? "[dir] " : ""}${e.path}`).join("\n") };
+    }
+    case "find_symbol": {
+      const entries = findSymbol(getSymbolIndex(root, roots), String(args.name || ""));
+      if (!entries.length) return { content: `No exported symbol named "${args.name}".` };
+      return { content: entries.map((e) => `${e.name} (${e.kind}) — ${e.file}`).join("\n") };
     }
     case "propose_edits": {
       const mods = Array.isArray(args.modifications) ? (args.modifications as CodeModification[]) : [];

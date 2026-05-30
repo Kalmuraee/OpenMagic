@@ -25,6 +25,7 @@ export type ClientMessageType =
   | "fs.grep"
   | "llm.chat"
   | "llm.cancel"
+  | "agent.run"
   | "provider.models"
   | "provider.testModel"
   | "project.ground"
@@ -100,6 +101,7 @@ export type ContentPart =
 
 export interface LlmContext {
   selectedElement?: ElementInfo;
+  selectedElements?: ElementInfo[]; // U3: additional elements when multi-selecting
   screenshot?: string; // base64 data URL
   networkLogs?: NetworkLogEntry[];
   consoleLogs?: ConsoleLogEntry[];
@@ -188,6 +190,7 @@ export interface OpenMagicConfig {
   planBeforeEdit?: boolean;
   useTools?: boolean;   // opt-in: native tool-calling for tool-capable providers (H11)
   nativeEdit?: boolean; // opt-in: CLI agents edit the tree natively, captured+reverted+reviewed (H9)
+  serverAgent?: boolean; // opt-in: run the investigate→edit loop server-side (H12)
   customModels?: Record<string, string[]>;
   preferredThinkingMode?: Record<string, string>;
   roots: string[];

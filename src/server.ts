@@ -21,6 +21,7 @@ import { handleLlmChat } from "./llm/proxy.js";
 import { coerceThinkingLevel } from "./llm/thinking.js";
 import { AbortRegistry } from "./abort-registry.js";
 import { verifyPatchGroup } from "./verify.js";
+import { extractAgentDirectives, runAgentLoop, type AgentContext } from "./llm/agent-loop.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
 import { applyPatchGroup, previewPatchGroup, pruneOldManifests, rollbackChain, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
@@ -79,6 +80,7 @@ const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
   "config.set": "config",
   "llm.chat": "llm",
   "llm.cancel": "llm",
+  "agent.run": "llm",
   "provider.models": "models",
   "provider.testModel": "models",
   "project.ground": "read",
@@ -441,6 +443,74 @@ async function handleMessage(
       break;
     }
 
+    case "agent.run": {
+      // H12: server-side investigate→edit loop. Same envelope as llm.chat
+      // (llm.chunk/llm.done/llm.error) so the toolbar consumes it identically;
+      // the difference is OpenMagic reads files / searches server-side across
+      // bounded steps instead of round-tripping each NEED_FILE through the browser.
+      const payload = msg.payload as LlmChatPayload;
+      const config = loadConfig();
+      const provider = payload.provider || config.provider || "openai";
+      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const providerMeta = MODEL_REGISTRY?.[provider];
+      if (!apiKey && !providerMeta?.local) {
+        sendError(ws, "config_error", "API key not configured", msg.id);
+        return;
+      }
+      const model = payload.model || config.model || MODEL_REGISTRY[provider]?.models[0]?.id || "gpt-4o";
+      const baseContext = payload.context || {};
+      if (baseContext.reasoningLevel === undefined) {
+        const pref = coerceThinkingLevel(config.preferredThinkingMode?.[provider]);
+        if (pref) baseContext.reasoningLevel = pref;
+      }
+      const root = roots[0] || process.cwd();
+      const reqId = `${state.connId}:${msg.id}`;
+      const controller = llmAbortRegistry.register(reqId);
+
+      // One model turn: send the prompt + accumulated context, parse the reply
+      // into edits + investigate directives.
+      const step = (loopCtx: AgentContext) => new Promise<{ text: string; modifications: any[]; needFiles: string[]; searchQueries: string[] }>((resolve) => {
+        const mergedFiles = [
+          ...((baseContext.files as any[]) || []),
+          ...loopCtx.files,
+        ];
+        const seen = new Set<string>();
+        const files = mergedFiles.filter((f) => (seen.has(f.path) ? false : (seen.add(f.path), true)));
+        const ctx = { ...baseContext, files, searchResults: loopCtx.searchResults.map((s) => ({ query: s.query, matches: [{ file: "search", lineNum: 0, line: s.result }] })) } as any;
+        handleLlmChat(
+          { provider, model, apiKey, messages: payload.messages, context: ctx, useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1", root },
+          (chunk) => send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } }),
+          (result) => {
+            const directives = extractAgentDirectives(result.content || "");
+            resolve({ text: result.content || "", modifications: (result.modifications as any[]) || [], ...directives });
+          },
+          () => resolve({ text: "", modifications: [], needFiles: [], searchQueries: [] }),
+          controller.signal
+        );
+      });
+
+      try {
+        const result = await runAgentLoop(
+          {
+            step,
+            readFile: async (p) => {
+              const r = readFileSafe(join(root, p), roots);
+              return "error" in r ? null : r.content.slice(0, 16000);
+            },
+            search: async (q) => grepFiles(q, root, roots).map((m) => `${m.file}:${m.lineNum}: ${m.line}`).join("\n"),
+            onEvent: (e) => { if (e.type === "investigate") send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: "" } }); },
+          },
+          { maxSteps: 6, signal: controller.signal }
+        );
+        send(ws, { id: msg.id, type: "llm.done", payload: { content: result.content, modifications: result.modifications, parseStatus: "clean" } });
+      } catch (e) {
+        send(ws, { id: msg.id, type: "llm.error", payload: { message: (e as Error).message } });
+      } finally {
+        llmAbortRegistry.complete(reqId);
+      }
+      break;
+    }
+
     case "config.get": {
       const config = loadConfig();
 
@@ -472,6 +542,7 @@ async function handleMessage(
           provider,
           model,
           planBeforeEdit: !!config.planBeforeEdit,
+          serverAgent: config.serverAgent === true || process.env.OPENMAGIC_SERVER_AGENT === "1",
           hasApiKey: !!(config.apiKeys?.[provider] || config.apiKey),
           roots: config.roots || roots,
           apiKeys: Object.fromEntries(

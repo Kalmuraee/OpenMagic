@@ -37,6 +37,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Eval (edit-success-rate)
+        run: npm run eval
+
       - name: Smoke test
         run: npm run test:smoke
 

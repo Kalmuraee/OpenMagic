@@ -1,0 +1,7 @@
+{
+  "name": "react: grounding surfaces the Hero component for the selected element",
+  "fixture": "react",
+  "prompt": "make the hero button bigger",
+  "selectedElement": { "componentHint": "Hero", "className": "cta", "tagName": "button" },
+  "expectGrounding": { "includes": ["src/components/Hero.tsx"] }
+}

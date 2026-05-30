@@ -36,7 +36,7 @@ try {
     "--no-open",
   ], {
     cwd: root,
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: { ...process.env, FORCE_COLOR: "0", OPENMAGIC_NO_UPDATE_CHECK: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

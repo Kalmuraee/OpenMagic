@@ -153,7 +153,8 @@ export class AnthropicToolDriver implements ToolDriver {
     const body = {
       model: this.model,
       max_tokens: resolveMaxOutput(this.modelInfo),
-      system: TOOL_SYSTEM_PROMPT,
+      // Cache the stable system prompt across tool-loop turns (Phase 4).
+      system: [{ type: "text", text: TOOL_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: this.messages,
       tools: buildAnthropicTools(),
       stream: false,

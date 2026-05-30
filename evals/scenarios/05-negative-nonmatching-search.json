@@ -1,0 +1,14 @@
+{
+  "name": "safety: a non-matching search is rejected and the file is left untouched",
+  "fixture": "vanilla",
+  "prompt": "edit code that isn't there",
+  "modifications": [
+    {
+      "file": "app.js",
+      "type": "edit",
+      "search": "const doesNotExistAnywhere = 123;",
+      "replace": "const doesNotExistAnywhere = 456;"
+    }
+  ],
+  "expect": { "applies": false, "file": "app.js", "contains": ["Sign up"] }
+}

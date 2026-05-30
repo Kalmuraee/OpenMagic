@@ -39,6 +39,12 @@ describe("executeServerTool", () => {
     const r = executeServerTool("list_dir", { path: "src" }, ROOT, [ROOT]);
     expect(r.content).toContain("app.ts");
   });
+  it("find_symbol locates the file exporting a symbol", () => {
+    writeFileSync(join(ROOT, "src/widget.tsx"), "export function PriceTag() { return null; }\n");
+    const r = executeServerTool("find_symbol", { name: "PriceTag" }, ROOT, [ROOT]);
+    expect(r.content).toContain("src/widget.tsx");
+    expect(r.content).toContain("PriceTag");
+  });
   it("propose_edits is terminal and returns the modifications", () => {
     const mods = [{ file: "src/app.ts", type: "edit", search: "hello", replace: "hi" }];
     const r = executeServerTool("propose_edits", { modifications: mods, explanation: "shorten" }, ROOT, [ROOT]);

@@ -20,6 +20,8 @@ OpenMagic injects a floating AI toolbar into your running web app via reverse pr
 Select any element, describe what you want, review the diff, approve — your code updates and HMR refreshes the page.
 No framework plugin. No IDE extension. No account. Bring your own API key.
 
+It's the **AI coding agent that edits your real source from the browser** — every change is **verified (typecheck/lint + runtime) and self-correcting**, with a **visual element editor** (live CSS/text/attribute preview) and a one-click **AI UI/UX design review**. Works with Next.js, Remix/React Router, Nuxt, SvelteKit, SolidStart, Angular, Astro, Vite, Vue, and plain static sites — across 14 providers (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, and more) and 70+ models.
+
 [Website](https://kalmuraee.github.io/OpenMagic/) &#183; [Quick Start](#quick-start) &#183; [How It Works](#how-it-works) &#183; [Providers](#supported-providers) &#183; [GitHub](https://github.com/Kalmuraee/OpenMagic)
 
 </div>
@@ -45,6 +47,18 @@ npx openmagic@latest
 ```
 
 Run this from your project folder so OpenMagic can find your source files and dev server. A proxied version of your app opens with the toolbar overlaid.
+
+Prefer a permanent install? Install it globally and run `openmagic` directly:
+
+```bash
+npm install -g openmagic      # install once
+openmagic                     # then run from any project folder
+openmagic --version           # check your version
+```
+
+OpenMagic checks npm on startup and prints a one-line notice when a newer version
+is available (with the right update command for how you launched it). Disable the
+check with `OPENMAGIC_NO_UPDATE_CHECK=1`.
 
 Requires Node.js 20.19 or newer.
 

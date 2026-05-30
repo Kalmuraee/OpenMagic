@@ -150,6 +150,16 @@ export const TOOLBAR_CSS = `
 .om-inline-edit-wrap { display: inline-flex; align-items: center; gap: 4px; }
 .om-inline-edit { background: rgba(255,255,255,0.06); border: 1px solid rgba(108,92,231,0.3); border-radius: 5px; color: #e0e0e0; font-size: 11px; padding: 2px 6px; max-width: 160px; }
 .om-inline-edit:focus { outline: none; border-color: #a29bfe; }
+/* U4: command palette */
+.om-cmdk { position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; background: rgba(10,10,20,0.45); backdrop-filter: blur(2px); }
+.om-cmdk-box { width: min(440px, 90vw); background: #15152a; border: 1px solid rgba(108,92,231,0.35); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow: hidden; }
+.om-cmdk-input { width: 100%; box-sizing: border-box; background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,0.08); color: #e0e0e0; font-size: 14px; padding: 12px 14px; }
+.om-cmdk-input:focus { outline: none; }
+.om-cmdk-list { max-height: 320px; overflow: auto; padding: 6px; }
+.om-cmdk-item { padding: 8px 10px; border-radius: 7px; color: #ccc; font-size: 13px; cursor: pointer; }
+.om-cmdk-item:hover { background: rgba(255,255,255,0.04); }
+.om-cmdk-active { background: rgba(108,92,231,0.25); color: #fff; }
+.om-cmdk-empty { padding: 12px; color: #666; font-size: 13px; text-align: center; }
 
 .om-prompt-input {
   flex: 1;

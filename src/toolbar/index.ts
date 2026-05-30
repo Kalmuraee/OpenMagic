@@ -5,6 +5,7 @@ import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs, getRuntimeErrors, scrapeErrorOverlay, summarizeRuntimeFailure } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { buildTextEditModification } from "./inline-edit.js";
+import { filterCommands, type Command } from "./command-palette.js";
 import { clearToolbarState, restoreToolbarState, saveToolbarState, savePendingRuntimeCheck, loadPendingRuntimeCheck, clearPendingRuntimeCheck } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
@@ -147,6 +148,8 @@ const state = {
   selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
   matchRetryRounds: 0,          // bounded re-prompt-on-failed-match counter (reset on each fresh prompt)
   lastPlan: "",                 // the approved plan text, fed into the edit pass (H15)
+  cmdkOpen: false,              // ⌘K command palette open (U4)
+  cmdkIndex: 0,                 // highlighted command index
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -335,6 +338,12 @@ function buildStaticDOM(): string {
         <button class="om-prompt-send" data-action="prompt-send">${ICON.send}</button>
         <input type="file" class="om-file-input om-hidden" accept="image/*" multiple />
       </div>
+      <div class="om-cmdk om-hidden" data-cmdk>
+        <div class="om-cmdk-box">
+          <input class="om-cmdk-input" type="text" placeholder="Type a command…" autocomplete="off" data-cmdk-input aria-label="Command palette" />
+          <div class="om-cmdk-list" data-cmdk-list></div>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -408,6 +417,27 @@ function attachGlobalEvents(root: HTMLElement) {
   });
   $promptInput.addEventListener("input", updatePromptContext);
 
+  // Command palette (U4): input filtering, keyboard nav, click-to-run, click-out.
+  const cmdkInput = root.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  if (cmdkInput) {
+    cmdkInput.addEventListener("input", () => { state.cmdkIndex = 0; renderCmdkList(cmdkInput.value); });
+    cmdkInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveCmdk(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveCmdk(-1); }
+      else if (e.key === "Enter") { e.preventDefault(); runCmdkSelected(); }
+      else if (e.key === "Escape") { e.preventDefault(); closeCmdk(); }
+    });
+  }
+  const cmdkOverlay = root.querySelector("[data-cmdk]") as HTMLElement | null;
+  if (cmdkOverlay) {
+    cmdkOverlay.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (target === cmdkOverlay) { closeCmdk(); return; } // click outside the box
+      const item = target.closest("[data-cmdk-run]") as HTMLElement | null;
+      if (item) { closeCmdk(); runCommand(item.getAttribute("data-cmdk-run") || ""); }
+    });
+  }
+
   // File input change handler
   const fileInput = root.querySelector(".om-file-input") as HTMLInputElement;
   if (fileInput) {
@@ -478,11 +508,10 @@ function attachGlobalEvents(root: HTMLElement) {
       }
       return;
     }
-    // Ctrl/Cmd + K: focus prompt input. Shift+K is kept as a compatibility shortcut.
+    // Ctrl/Cmd + K: open the command palette (U4). It includes "Focus the prompt".
     if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
-      if (!state.panelOpen) openPanel("chat");
-      $promptInput.focus();
+      if (state.cmdkOpen) closeCmdk(); else openCmdk();
       return;
     }
     // Ctrl/Cmd + Shift + Z: redo the last rolled-back patch group when available.
@@ -560,6 +589,78 @@ function patchFailureMessage(payload: any, fallback: string): string {
 
 const MAX_SELF_CORRECT = 2;
 const MAX_MATCH_RETRY = 2;
+
+// U4: ⌘K command palette ------------------------------------------------------
+const COMMANDS: Command[] = [
+  { id: "select", label: "Select an element", action: "select", keywords: ["pick", "inspect", "click"] },
+  { id: "chat", label: "Open chat", action: "open-chat", keywords: ["ask", "prompt"] },
+  { id: "focus", label: "Focus the prompt", action: "focus-prompt", keywords: ["type", "write"] },
+  { id: "screenshot", label: "Capture a screenshot", action: "screenshot", keywords: ["image", "snap"] },
+  { id: "settings", label: "Open settings", action: "open-settings", keywords: ["config", "provider", "api key", "model"] },
+  { id: "apply-all", label: "Apply all pending changes", action: "apply-all", keywords: ["accept", "save"] },
+  { id: "clear-element", label: "Clear the selected element", action: "clear-element", keywords: ["deselect"] },
+  { id: "clear-chat", label: "Clear the chat", action: "clear-chat", keywords: ["reset"] },
+  { id: "minimize", label: "Minimize the toolbar", action: "minimize", keywords: ["hide", "collapse"] },
+];
+
+function runCommand(action: string): void {
+  if (action === "open-chat") { openPanel("chat"); return; }
+  if (action === "open-settings") { openPanel("settings"); return; }
+  if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
+  if (action === "clear-element") { state.selectedElement = null; updatePromptContext(); return; }
+  // Route the rest through the real control if present, else the action handler.
+  const btn = shadow.querySelector(`[data-action="${action}"]`) as HTMLElement | null;
+  handleAction(action, btn || document.createElement("button"));
+}
+
+function openCmdk(): void {
+  state.cmdkOpen = true;
+  state.cmdkIndex = 0;
+  const overlay = shadow.querySelector("[data-cmdk]") as HTMLElement | null;
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  if (!overlay || !input) return;
+  overlay.classList.remove("om-hidden");
+  input.value = "";
+  renderCmdkList("");
+  input.focus();
+}
+
+function closeCmdk(): void {
+  state.cmdkOpen = false;
+  (shadow.querySelector("[data-cmdk]") as HTMLElement | null)?.classList.add("om-hidden");
+}
+
+function currentCmdkMatches(): Command[] {
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  return filterCommands(COMMANDS, input?.value || "");
+}
+
+function renderCmdkList(query: string): void {
+  const list = shadow.querySelector("[data-cmdk-list]") as HTMLElement | null;
+  if (!list) return;
+  const matches = filterCommands(COMMANDS, query);
+  if (state.cmdkIndex >= matches.length) state.cmdkIndex = Math.max(0, matches.length - 1);
+  list.innerHTML = matches.length
+    ? matches.map((c, i) =>
+        `<div class="om-cmdk-item${i === state.cmdkIndex ? " om-cmdk-active" : ""}" data-cmdk-run="${escapeHtml(c.action)}">${escapeHtml(c.label)}</div>`
+      ).join("")
+    : `<div class="om-cmdk-empty">No matching commands</div>`;
+}
+
+function moveCmdk(delta: number): void {
+  const count = currentCmdkMatches().length;
+  if (!count) return;
+  state.cmdkIndex = (state.cmdkIndex + delta + count) % count;
+  const input = shadow.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
+  renderCmdkList(input?.value || "");
+}
+
+function runCmdkSelected(): void {
+  const matches = currentCmdkMatches();
+  const cmd = matches[state.cmdkIndex];
+  closeCmdk();
+  if (cmd) runCommand(cmd.action);
+}
 
 /**
  * Phase 6: after an apply+reload, check whether the edit compiled but crashed the

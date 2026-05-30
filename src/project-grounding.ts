@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { listFiles, readFileSafe } from "./filesystem.js";
+import { findSymbol, getSymbolIndex } from "./symbol-index.js";
 
 export interface ProjectGroundRequest {
   pageUrl?: string;
@@ -97,6 +98,25 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
   for (const item of scored.slice(0, MAX_FILES)) {
     if (item.score <= 0) continue;
     selected.set(item.path, { score: item.score, reasons: new Set(item.reasons) });
+  }
+
+  // C1: symbol-index boost — resolve the selected component / prompt terms to the
+  // files that actually EXPORT them. Catches targets whose filename doesn't match
+  // the symbol (e.g. <PricingTable> exported from widgets.tsx), which pure
+  // filename/path heuristics miss.
+  const symbolIndex = getSymbolIndex(root, [root]);
+  const hint = request.selectedElement?.componentHint;
+  if (hint) {
+    for (const entry of findSymbol(symbolIndex, hint)) {
+      mergeSelection(selected, entry.file, entry.kind === "component" ? 28 : 18, `exports ${entry.name}`);
+    }
+  }
+  for (const token of tokens) {
+    for (const entry of findSymbol(symbolIndex, token)) {
+      if (entry.kind === "component" || entry.kind === "class" || entry.kind === "function") {
+        mergeSelection(selected, entry.file, 12, `exports ${entry.name}`);
+      }
+    }
   }
 
   for (const routePath of routePaths) {

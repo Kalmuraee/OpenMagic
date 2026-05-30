@@ -1,0 +1,7 @@
+{
+  "name": "symbol index: grounds a component whose filename does not match its name",
+  "fixture": "react",
+  "prompt": "make the pricing table wider",
+  "selectedElement": { "componentHint": "PricingTable", "className": "pricing", "tagName": "table" },
+  "expectGrounding": { "includes": ["src/widgets.tsx"] }
+}

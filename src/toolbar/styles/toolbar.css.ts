@@ -147,6 +147,9 @@ export const TOOLBAR_CSS = `
 .om-prompt-chip-tokens { color: #888; background: transparent; border: 1px solid rgba(255,255,255,0.06); font-size: 9px; }
 .om-prompt-chip-warn { color: #fdcb6e; border-color: rgba(253,203,110,0.18); }
 .om-fuzzy-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px; color: #fdcb6e; background: rgba(253,203,110,0.1); border: 1px solid rgba(253,203,110,0.2); vertical-align: middle; }
+.om-inline-edit-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.om-inline-edit { background: rgba(255,255,255,0.06); border: 1px solid rgba(108,92,231,0.3); border-radius: 5px; color: #e0e0e0; font-size: 11px; padding: 2px 6px; max-width: 160px; }
+.om-inline-edit:focus { outline: none; border-color: #a29bfe; }
 
 .om-prompt-input {
   flex: 1;

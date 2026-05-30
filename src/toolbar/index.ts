@@ -4,6 +4,7 @@ import { inspectElement, showHighlight, hideHighlight, type SelectedElement } fr
 import { captureScreenshotWithFeedback } from "./services/capture.js";
 import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
+import { buildTextEditModification } from "./inline-edit.js";
 import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
@@ -560,6 +561,47 @@ const MAX_SELF_CORRECT = 2;
 const MAX_MATCH_RETRY = 2;
 
 /**
+ * U2: apply a direct text edit. Grounds the project, tries to produce the code
+ * change deterministically (no LLM) by finding the old text verbatim in source;
+ * if that's unsafe/ambiguous, falls back to a focused LLM prompt. Either way the
+ * change flows through the existing diff-card → apply → verify pipeline.
+ */
+async function applyInlineTextEdit(oldText: string, newText: string): Promise<void> {
+  if (!oldText || oldText === newText || state.streaming) return;
+  openPanel("chat");
+  state.messages.push({ role: "user", content: `Change text "${oldText}" → "${newText}"` });
+  refreshPanelContent();
+  scrollChatToBottom();
+
+  let files: Array<{ path: string; content: string }> = [];
+  try {
+    const grounded = await ws.request("project.ground", {
+      pageUrl: window.location.href,
+      promptText: `${oldText} ${newText}`,
+      selectedElement: state.selectedElement,
+    });
+    files = (grounded?.payload?.files || []).map((f: any) => ({ path: f.path, content: f.content }));
+  } catch { /* grounding best-effort */ }
+
+  const mod = buildTextEditModification(files, oldText, newText);
+  if (mod) {
+    const groupId = Math.random().toString(36).slice(2);
+    const diffId = Math.random().toString(36).slice(2);
+    const diffPayload = JSON.stringify({ id: diffId, file: mod.file, search: mod.search, replace: mod.replace, groupId });
+    state.messages.push({ role: "assistant", content: `Direct text edit in \`${mod.file}\` — review and apply below.` });
+    state.messages.push({ role: "system", content: `__DIFF__${encodeBase64Utf8(diffPayload)}` });
+    updateApplyBar(1);
+    refreshPanelContent();
+    scrollChatToBottom();
+    return;
+  }
+
+  // Couldn't locate the text safely — let the model handle it with full context.
+  const tag = state.selectedElement?.tagName?.toLowerCase() || "element";
+  await sendPrompt(`Change the visible text of the selected <${tag}> from "${oldText}" to "${newText}".`, true);
+}
+
+/**
  * H3: when a search block doesn't match the file, don't dead-end. Re-read the
  * actual file(s), hand the model the real content + the failure reason, and ask
  * it to regenerate an exact search block. Bounded by its own counter. Returns
@@ -1027,6 +1069,13 @@ async function handleAction(action: string, target: HTMLElement) {
     }
     case "clear-element": state.selectedElement = null; updatePromptContext(); break;
     case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
+    case "apply-text-edit": {
+      const input = shadow.querySelector("[data-inline-edit-input]") as HTMLInputElement | null;
+      const oldText = (state.selectedElement?.textContent || "").trim();
+      const newText = (input?.value || "").trim();
+      void applyInlineTextEdit(oldText, newText);
+      break;
+    }
     case "minimize": {
       state.minimized = !state.minimized;
       const panel = shadow.querySelector(".om-panel") as HTMLElement;
@@ -1181,6 +1230,17 @@ function updatePromptContext() {
   if (state.selectedElement) {
     const selectedLabel = `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
     chips.push(`<span class="om-prompt-chip">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+
+    // U2: direct inline text editing for elements with short, single-line text.
+    const txt = (state.selectedElement.textContent || "").trim();
+    if (txt && txt.length <= 80 && !txt.includes("\n")) {
+      chips.push(
+        `<span class="om-inline-edit-wrap">` +
+        `<input class="om-inline-edit" type="text" value="${escapeHtml(txt)}" data-inline-edit-input aria-label="Edit element text" />` +
+        `<button class="om-btn om-btn-sm" data-action="apply-text-edit" title="Apply a direct text edit">Edit text</button>` +
+        `</span>`
+      );
+    }
   }
   if (state.screenshot) {
     chips.push(`<span class="om-prompt-chip">Screenshot <button class="om-prompt-chip-x" data-action="clear-screenshot">${ICON.x}</button></span>`);

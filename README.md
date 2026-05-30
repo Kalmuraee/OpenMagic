@@ -20,6 +20,8 @@ OpenMagic injects a floating AI toolbar into your running web app via reverse pr
 Select any element, describe what you want, review the diff, approve — your code updates and HMR refreshes the page.
 No framework plugin. No IDE extension. No account. Bring your own API key.
 
+It's the **AI coding agent that edits your real source from the browser** — every change is **verified (typecheck/lint + runtime) and self-correcting**, with a **visual element editor** (live CSS/text/attribute preview) and a one-click **AI UI/UX design review**. Works with Next.js, Remix/React Router, Nuxt, SvelteKit, SolidStart, Angular, Astro, Vite, Vue, and plain static sites — across 14 providers (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, and more) and 70+ models.
+
 [Website](https://kalmuraee.github.io/OpenMagic/) &#183; [Quick Start](#quick-start) &#183; [How It Works](#how-it-works) &#183; [Providers](#supported-providers) &#183; [GitHub](https://github.com/Kalmuraee/OpenMagic)
 
 </div>

@@ -598,16 +598,28 @@ const COMMANDS: Command[] = [
   { id: "screenshot", label: "Capture a screenshot", action: "screenshot", keywords: ["image", "snap"] },
   { id: "settings", label: "Open settings", action: "open-settings", keywords: ["config", "provider", "api key", "model"] },
   { id: "apply-all", label: "Apply all pending changes", action: "apply-all", keywords: ["accept", "save"] },
+  { id: "undo-last", label: "Undo the last applied change", action: "undo-last", keywords: ["revert", "rollback"] },
+  { id: "redo-last", label: "Redo the last reverted change", action: "redo-last", keywords: [] },
   { id: "clear-element", label: "Clear the selected element", action: "clear-element", keywords: ["deselect"] },
   { id: "clear-chat", label: "Clear the chat", action: "clear-chat", keywords: ["reset"] },
   { id: "minimize", label: "Minimize the toolbar", action: "minimize", keywords: ["hide", "collapse"] },
 ];
+
+// Click the most recent button matching any of the selectors (newest undo/redo).
+function clickLatest(selectors: string[]): void {
+  for (const sel of selectors) {
+    const els = shadow.querySelectorAll(sel);
+    if (els.length) { (els[els.length - 1] as HTMLElement).click(); return; }
+  }
+}
 
 function runCommand(action: string): void {
   if (action === "open-chat") { openPanel("chat"); return; }
   if (action === "open-settings") { openPanel("settings"); return; }
   if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
   if (action === "clear-element") { state.selectedElement = null; updatePromptContext(); return; }
+  if (action === "undo-last") { clickLatest(['[data-action="rollback-patch"]', '[data-action="undo-diff"]']); return; }
+  if (action === "redo-last") { clickLatest(['[data-action="redo-patch"]']); return; }
   // Route the rest through the real control if present, else the action handler.
   const btn = shadow.querySelector(`[data-action="${action}"]`) as HTMLElement | null;
   handleAction(action, btn || document.createElement("button"));

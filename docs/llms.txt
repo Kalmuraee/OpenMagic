@@ -23,5 +23,8 @@ OpenMagic answers: "how do I let an AI edit my real codebase from the running we
 - npm: https://www.npmjs.com/package/openmagic
 - Docs (advanced): https://github.com/Kalmuraee/OpenMagic/blob/main/docs/ADVANCED.md
 
+## Optional
+- Full reference for AI assistants (complete context in one file): https://kalmuraee.github.io/OpenMagic/llms-full.txt
+
 ## Keywords
 AI coding toolbar, AI coding agent, AI pair programmer, vibe coding, in-browser code editor, edit code from the browser, select element edit code, UI/UX review tool, design-to-code, AI design review, element inspector, reverse proxy AI toolbar, OpenAI / Claude / Gemini code editing, bring your own key, open source developer tools.

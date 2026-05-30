@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use OpenMagic, please cite it using the metadata below."
+title: "OpenMagic: an AI coding toolbar for any web app"
+abstract: >-
+  OpenMagic is an open-source AI coding toolbar that injects into any running web
+  application via a single-port reverse proxy. Select an element, describe a change
+  in plain English, review the diff, and OpenMagic edits your real source code —
+  then verifies the change (typecheck/lint + runtime) and self-corrects if it broke
+  the build. Includes a visual element editor with live preview and a one-click
+  AI UI/UX design review. Works across 14 LLM providers and 70+ models, bring your
+  own key. No plugin, no IDE extension, no account.
+type: software
+authors:
+  - family-names: Almuraee
+    given-names: Khalid
+repository-code: "https://github.com/Kalmuraee/OpenMagic"
+url: "https://kalmuraee.github.io/OpenMagic/"
+license: MIT
+keywords:
+  - ai-coding-toolbar
+  - ai-coding-agent
+  - ai-pair-programmer
+  - vibe-coding
+  - in-browser-code-editor
+  - ai-design-review
+  - ui-ux-review
+  - reverse-proxy
+  - developer-tools
+  - claude
+  - openai
+  - gemini

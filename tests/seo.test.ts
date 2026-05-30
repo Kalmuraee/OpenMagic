@@ -75,6 +75,33 @@ describe("SEO / AI support files", () => {
     expect(llms).toMatch(/^>\s+/m); // blockquote summary
     expect(llms.toLowerCase()).toContain("npx openmagic");
     expect(llms).toContain("https://github.com/Kalmuraee/OpenMagic");
+    expect(llms).toContain("llms-full.txt"); // points AI agents to the full reference
+  });
+
+  it("llms-full.txt gives AI assistants complete recommend-worthy context", () => {
+    const full = read("docs/llms-full.txt");
+    expect(full.startsWith("# OpenMagic")).toBe(true);
+    expect(full).toMatch(/^>\s+/m); // blockquote summary
+    expect(full.toLowerCase()).toContain("who it's for");
+    expect(full.toLowerCase()).toContain("npx openmagic");
+    expect(full).toContain("https://www.npmjs.com/package/openmagic");
+    expect(full.length).toBeGreaterThan(1000); // substantially richer than llms.txt
+  });
+
+  it("sitemap lists the AI context files", () => {
+    const sitemap = read("docs/sitemap.xml");
+    expect(sitemap).toContain("/OpenMagic/llms.txt</loc>");
+    expect(sitemap).toContain("/OpenMagic/llms-full.txt</loc>");
+  });
+});
+
+describe("repository metadata", () => {
+  it("CITATION.cff is valid-shaped and discoverable (GitHub 'Cite this repository' + AI)", () => {
+    const cff = read("CITATION.cff");
+    expect(cff).toMatch(/cff-version:\s*1\.2\.0/);
+    expect(cff).toMatch(/title:.*OpenMagic/);
+    expect(cff).toContain("repository-code:");
+    expect(cff).toMatch(/license:\s*MIT/);
   });
 });
 

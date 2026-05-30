@@ -64,6 +64,16 @@ Requires Node.js 20.19 or newer.
 
 ---
 
+## Use it to…
+
+- **Change a running web app by clicking an element** and describing the edit in plain English — no need to hunt for the file.
+- **Let an AI fix your UI without a designer** — one click audits hierarchy, spacing, contrast, accessibility, and consistency, then proposes brand-consistent fixes.
+- **Edit your real source code from the browser, safely** — every change is shown as a diff, verified against the build, auto-reverted if it breaks, and undoable.
+- **Tweak CSS, text, and attributes live**, see the result instantly, then push it to your codebase.
+- **Use one AI coding tool across every framework and any LLM** — React/Next.js, Vue/Nuxt, Svelte, Angular, Astro, and static sites; 14 providers and 70+ models with your own key.
+
+---
+
 ## Features
 
 | | Feature | Description |

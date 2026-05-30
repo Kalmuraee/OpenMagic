@@ -172,6 +172,19 @@ export const TOOLBAR_CSS = `
 .om-cmdk-item:hover { background: rgba(255,255,255,0.04); }
 .om-cmdk-active { background: rgba(var(--om-accent-rgb),0.25); color: #fff; }
 .om-cmdk-empty { padding: 12px; color: #666; font-size: 13px; text-align: center; }
+/* Visual element editor */
+.om-prompt-chip-edit { background: rgba(var(--om-accent-rgb),0.18); border: 0; color: #c4b5fd; cursor: pointer; font-size: 9px; padding: 1px 5px; border-radius: 4px; }
+.om-prompt-chip-edit:hover { background: rgba(var(--om-accent-rgb),0.3); }
+.om-edit { display: flex; flex-direction: column; gap: 6px; }
+.om-edit-target { font-family: 'SF Mono', Consolas, monospace; font-size: 11px; color: #a29bfe; background: rgba(var(--om-accent-rgb),0.08); padding: 5px 8px; border-radius: 6px; word-break: break-all; }
+.om-edit-hint { font-size: 10px; color: #777; margin-bottom: 4px; }
+.om-edit-section { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: #6b7280; margin-top: 8px; font-weight: 700; }
+.om-edit-row { display: flex; align-items: center; gap: 8px; }
+.om-edit-row-wide { margin-top: 4px; }
+.om-edit-label { flex: 0 0 92px; font-size: 11px; color: #888; font-family: 'SF Mono', Consolas, monospace; text-align: right; }
+.om-edit-input { flex: 1; min-width: 0; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 5px; color: #e0e0e0; font-size: 11px; padding: 4px 7px; }
+.om-edit-input:focus { outline: none; border-color: rgba(var(--om-accent-rgb),0.5); }
+.om-edit-actions { display: flex; gap: 6px; margin-top: 12px; position: sticky; bottom: 0; background: #111125; padding-top: 6px; }
 
 .om-prompt-input {
   flex: 1;

@@ -6,6 +6,7 @@ import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCaptur
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { buildTextEditModification } from "./inline-edit.js";
 import { filterCommands, type Command } from "./command-palette.js";
+import { EDITABLE_STYLE_PROPS, diffElementState, describeElementChanges, type ElementState } from "./element-editor.js";
 import { clearToolbarState, restoreToolbarState, saveToolbarState, savePendingRuntimeCheck, loadPendingRuntimeCheck, clearPendingRuntimeCheck } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
@@ -113,7 +114,7 @@ const CURRENT_VERSION = "0.43.2";
 const state = {
   connected: false,
   panelOpen: false,
-  activePanel: "" as "" | "chat" | "settings",
+  activePanel: "" as "" | "chat" | "settings" | "edit",
   selecting: false,
   selectedElement: null as SelectedElement | null, // primary (most recent) selection
   selectedElements: [] as SelectedElement[],        // U3: full multi-selection list
@@ -152,6 +153,9 @@ const state = {
   lastPlan: "",                 // the approved plan text, fed into the edit pass (H15)
   cmdkOpen: false,              // ⌘K command palette open (U4)
   cmdkIndex: 0,                 // highlighted command index
+  editTargetEl: null as HTMLElement | null,                 // live element being visually edited
+  editorOriginal: null as ElementState | null,              // snapshot at editor open (for diffing)
+  editorRevert: null as { attrs: Record<string, string>; text: string } | null, // for Discard
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -210,6 +214,26 @@ function init() {
 
   host.setAttribute("data-openmagic-ready", "true");
   host.addEventListener("openmagic:test-open-settings", () => openPanel("settings"));
+  // Test hook: select an element by CSS selector and open the visual editor.
+  host.addEventListener("openmagic:test-edit-element", (e: Event) => {
+    const selector = (e as CustomEvent).detail?.selector;
+    if (!selector) return;
+    state.selectedElement = { tagName: "el", cssSelector: selector, outerHTML: "" } as unknown as SelectedElement;
+    openElementEditor();
+  });
+  // Test hook: apply a live edit (the inputs live in a closed shadow root, so a
+  // browser test can't reach them; this exercises applyLiveEdit faithfully).
+  host.addEventListener("openmagic:test-live-edit", (e: Event) => {
+    const d = (e as CustomEvent).detail || {};
+    const fake = document.createElement("input");
+    if (d.kind === "style") fake.dataset.editStyle = d.name;
+    else if (d.kind === "text") fake.dataset.editText = "";
+    else if (d.kind === "class") fake.dataset.editClass = "";
+    else if (d.kind === "attribute") fake.dataset.editAttr = d.name;
+    else if (d.kind === "css") fake.dataset.editCustomCss = "";
+    fake.value = d.value ?? "";
+    applyLiveEdit(fake);
+  });
   document.body.appendChild(host);
 
   // Attach event delegation ONCE
@@ -420,6 +444,15 @@ function attachGlobalEvents(root: HTMLElement) {
   });
   $promptInput.addEventListener("input", updatePromptContext);
 
+  // Visual element editor: live-apply edits to the page as the user types.
+  $panelBody?.addEventListener("input", (e) => {
+    if (state.activePanel !== "edit") return;
+    const t = e.target as HTMLElement;
+    if (t.dataset.editStyle || t.dataset.editText !== undefined || t.dataset.editClass !== undefined || t.dataset.editAttr || t.dataset.editCustomCss !== undefined) {
+      applyLiveEdit(t);
+    }
+  });
+
   // Command palette (U4): input filtering, keyboard nav, click-to-run, click-out.
   const cmdkInput = root.querySelector("[data-cmdk-input]") as HTMLInputElement | null;
   if (cmdkInput) {
@@ -596,6 +629,7 @@ const MAX_MATCH_RETRY = 2;
 // U4: ⌘K command palette ------------------------------------------------------
 const COMMANDS: Command[] = [
   { id: "select", label: "Select an element", action: "select", keywords: ["pick", "inspect", "click"] },
+  { id: "edit-element", label: "Edit element (styles, text, attributes)", action: "edit-element", keywords: ["css", "style", "html", "properties", "visual"] },
   { id: "chat", label: "Open chat", action: "open-chat", keywords: ["ask", "prompt"] },
   { id: "focus", label: "Focus the prompt", action: "focus-prompt", keywords: ["type", "write"] },
   { id: "screenshot", label: "Capture a screenshot", action: "screenshot", keywords: ["image", "snap"] },
@@ -621,6 +655,7 @@ function runCommand(action: string): void {
   if (action === "open-settings") { openPanel("settings"); return; }
   if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
   if (action === "clear-element") { state.selectedElement = null; state.selectedElements = []; updatePromptContext(); return; }
+  if (action === "edit-element") { openElementEditor(); return; }
   if (action === "undo-last") { clickLatest(['[data-action="rollback-patch"]', '[data-action="undo-diff"]']); return; }
   if (action === "redo-last") { clickLatest(['[data-action="redo-patch"]']); return; }
   // Route the rest through the real control if present, else the action handler.
@@ -1250,6 +1285,9 @@ async function handleAction(action: string, target: HTMLElement) {
       void applyInlineTextEdit(oldText, newText);
       break;
     }
+    case "edit-element": openElementEditor(); break;
+    case "apply-element-edit": void applyElementEditToCode(); break;
+    case "discard-element-edit": revertElementEdits(); openPanel("chat"); break;
     case "minimize": {
       state.minimized = !state.minimized;
       const panel = shadow.querySelector(".om-panel") as HTMLElement;
@@ -1408,7 +1446,7 @@ function updatePromptContext() {
     const title = state.selectedElements.length > 1
       ? state.selectedElements.map((el) => el.cssSelector || el.tagName).join("\n")
       : "";
-    chips.push(`<span class="om-prompt-chip" title="${escapeHtml(title)}">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+    chips.push(`<span class="om-prompt-chip" title="${escapeHtml(title)}">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-edit" data-action="edit-element" title="Edit styles, text & attributes">edit</button> <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
 
     // U2: direct inline text editing for elements with short, single-line text.
     const txt = (state.selectedElement.textContent || "").trim();
@@ -1447,13 +1485,141 @@ function updatePromptContext() {
 
 // ── Panel Management ─────────────────────────────────────────────
 
-function openPanel(panel: "chat" | "settings") {
+// ── Visual element editor (live preview → confirm → code) ────────────────────
+
+function captureLiveElementState(el: HTMLElement): ElementState {
+  const cs = getComputedStyle(el);
+  const styles: Record<string, string> = {};
+  for (const p of EDITABLE_STYLE_PROPS) styles[p] = cs.getPropertyValue(p).trim();
+  const attributes: Record<string, string> = {};
+  for (const a of Array.from(el.attributes)) {
+    if (a.name === "style" || a.name === "class") continue;
+    attributes[a.name] = a.value;
+  }
+  return { styles, text: el.textContent || "", className: el.className, attributes };
+}
+
+function elementLabel(): string {
+  const el = state.selectedElement;
+  if (!el) return "element";
+  return el.cssSelector || `${el.tagName}${el.id ? "#" + el.id : ""}`;
+}
+
+function openElementEditor(): void {
+  const sel = state.selectedElement?.cssSelector;
+  let el: HTMLElement | null = null;
+  try { el = sel ? (document.querySelector(sel) as HTMLElement | null) : null; } catch { el = null; }
+  if (!el) {
+    // Can't resolve the live element — fall back to describing it via chat.
+    openPanel("chat");
+    return;
+  }
+  state.editTargetEl = el;
+  state.editorOriginal = captureLiveElementState(el);
+  const attrs: Record<string, string> = {};
+  for (const a of Array.from(el.attributes)) attrs[a.name] = a.value;
+  state.editorRevert = { attrs, text: el.textContent || "" };
+  $host?.setAttribute("data-openmagic-editing", elementLabel());
+  openPanel("edit");
+}
+
+// Live preview: apply an edit straight to the page element as the user types.
+function applyLiveEdit(target: HTMLElement): void {
+  const el = state.editTargetEl;
+  if (!el) return;
+  const value = (target as HTMLInputElement | HTMLTextAreaElement).value;
+  if (target.dataset.editStyle) {
+    if (value.trim()) el.style.setProperty(target.dataset.editStyle, value); else el.style.removeProperty(target.dataset.editStyle);
+  } else if (target.dataset.editText !== undefined) {
+    el.textContent = value;
+  } else if (target.dataset.editClass !== undefined) {
+    el.className = value;
+  } else if (target.dataset.editAttr) {
+    if (value) el.setAttribute(target.dataset.editAttr, value); else el.removeAttribute(target.dataset.editAttr);
+  } else if (target.dataset.editCustomCss !== undefined) {
+    // Parse "prop: value;" declarations and apply each.
+    for (const decl of value.split(";")) {
+      const idx = decl.indexOf(":");
+      if (idx === -1) continue;
+      const prop = decl.slice(0, idx).trim();
+      const val = decl.slice(idx + 1).trim();
+      if (prop && val) el.style.setProperty(prop, val);
+    }
+  }
+}
+
+function revertElementEdits(): void {
+  const el = state.editTargetEl;
+  const snap = state.editorRevert;
+  if (el && snap) {
+    for (const a of Array.from(el.attributes)) el.removeAttribute(a.name);
+    for (const [k, v] of Object.entries(snap.attrs)) { try { el.setAttribute(k, v); } catch { /* invalid attr name */ } }
+    el.textContent = snap.text;
+  }
+  state.editTargetEl = null;
+  state.editorOriginal = null;
+  state.editorRevert = null;
+  $host?.setAttribute("data-openmagic-editing", "");
+}
+
+async function applyElementEditToCode(): Promise<void> {
+  const el = state.editTargetEl;
+  const original = state.editorOriginal;
+  if (!el || !original) { openPanel("chat"); return; }
+  const changes = diffElementState(original, captureLiveElementState(el));
+  // Keep the live preview on the page until the source change applies + reloads.
+  state.editTargetEl = null;
+  state.editorOriginal = null;
+  state.editorRevert = null;
+  $host?.setAttribute("data-openmagic-editing", "");
+  if (!changes.length) { openPanel("chat"); return; }
+  openPanel("chat");
+  await sendPrompt(describeElementChanges(elementLabel(), changes), true);
+}
+
+function renderEditPanelHTML(): string {
+  const s = state.editorOriginal;
+  if (!s || !state.editTargetEl) {
+    return `<div class="om-status">Select an element first, then choose "Edit element".</div>`;
+  }
+  const styleInputs = EDITABLE_STYLE_PROPS.map((p) =>
+    `<label class="om-edit-row"><span class="om-edit-label">${escapeHtml(p)}</span>` +
+    `<input class="om-edit-input" data-edit-style="${escapeHtml(p)}" value="${escapeHtml(s.styles[p] || "")}" /></label>`
+  ).join("");
+  const attrRows = Object.entries(s.attributes).map(([name, val]) =>
+    `<label class="om-edit-row"><span class="om-edit-label">@${escapeHtml(name)}</span>` +
+    `<input class="om-edit-input" data-edit-attr="${escapeHtml(name)}" value="${escapeHtml(val)}" /></label>`
+  ).join("");
+
+  return `
+    <div class="om-edit">
+      <div class="om-edit-target">${escapeHtml(elementLabel())}</div>
+      <div class="om-edit-hint">Edits preview live on the page. "Apply to code" sends them to the LLM to change the source.</div>
+
+      <div class="om-edit-section">Content</div>
+      <label class="om-edit-row"><span class="om-edit-label">text</span><input class="om-edit-input" data-edit-text value="${escapeHtml(s.text.slice(0, 200))}" /></label>
+      <label class="om-edit-row"><span class="om-edit-label">class</span><input class="om-edit-input" data-edit-class value="${escapeHtml(s.className)}" /></label>
+
+      <div class="om-edit-section">Styles</div>
+      ${styleInputs}
+      <label class="om-edit-row om-edit-row-wide"><span class="om-edit-label">custom CSS</span><input class="om-edit-input" data-edit-custom-css placeholder="prop: value; …" /></label>
+
+      ${attrRows ? `<div class="om-edit-section">Attributes</div>${attrRows}` : ""}
+
+      <div class="om-edit-actions">
+        <button class="om-btn om-btn-sm" data-action="apply-element-edit">Apply to code</button>
+        <button class="om-btn-secondary om-btn-sm" data-action="discard-element-edit">Discard</button>
+      </div>
+    </div>`;
+}
+
+function openPanel(panel: "chat" | "settings" | "edit") {
   state.panelOpen = true;
   state.activePanel = panel;
   $host?.setAttribute("data-openmagic-panel", panel);
   $panel.classList.remove("om-hidden");
   const title = shadow.querySelector(".om-panel-title");
-  if (title) title.textContent = panel === "settings" ? "Settings" : "Chat";
+  if (title) title.textContent = panel === "settings" ? "Settings" : panel === "edit" ? "Edit element" : "Chat";
   refreshPanelContent();
   updatePillButtons();
 }
@@ -1477,6 +1643,8 @@ function togglePanel(panel: "chat" | "settings") {
 function refreshPanelContent() {
   if (state.activePanel === "settings") {
     $panelBody.innerHTML = renderSettingsHTML();
+  } else if (state.activePanel === "edit") {
+    $panelBody.innerHTML = renderEditPanelHTML();
   } else if (state.activePanel === "chat") {
     $panelBody.innerHTML = renderChatHTML();
     scrollChatToBottom();

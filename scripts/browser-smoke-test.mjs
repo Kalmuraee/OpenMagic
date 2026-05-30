@@ -67,11 +67,41 @@ try {
   const modelIds = await toolbar.getAttribute("data-openmagic-model-ids");
   if (!modelIds?.includes("gpt-5.5")) throw new Error("Server-provided model list did not include GPT-5.5");
 
+  // Visual element editor: open it on the fixture button and verify edits preview
+  // LIVE on the real element (the core of the feature). The editor UI lives in a
+  // CLOSED shadow root, so we drive it via test-event hooks and assert against the
+  // light-DOM element + host attributes (the same pattern as the settings check).
+  await page.evaluate(() => {
+    document.querySelector("openmagic-toolbar")?.dispatchEvent(
+      new CustomEvent("openmagic:test-edit-element", { detail: { selector: "button.primary" } })
+    );
+  });
+  await page.waitForFunction(() => {
+    const h = document.querySelector("openmagic-toolbar");
+    return h?.getAttribute("data-openmagic-panel") === "edit" && h?.getAttribute("data-openmagic-editing") === "button.primary";
+  }, null, { timeout: 10_000 });
+
+  // Live style edit → the real button's inline color updates instantly.
+  await page.evaluate(() => {
+    document.querySelector("openmagic-toolbar")?.dispatchEvent(
+      new CustomEvent("openmagic:test-live-edit", { detail: { kind: "style", name: "color", value: "rgb(255, 0, 0)" } })
+    );
+  });
+  await page.waitForFunction(() => document.querySelector("button.primary")?.style.color === "rgb(255, 0, 0)", null, { timeout: 10_000 });
+
+  // Live text edit → the real button's text updates instantly.
+  await page.evaluate(() => {
+    document.querySelector("openmagic-toolbar")?.dispatchEvent(
+      new CustomEvent("openmagic:test-live-edit", { detail: { kind: "text", value: "Joined!" } })
+    );
+  });
+  await page.waitForFunction(() => document.querySelector("button.primary")?.textContent === "Joined!", null, { timeout: 10_000 });
+
   if (consoleErrors.length) {
     throw new Error(`Browser console errors:\n${consoleErrors.join("\n")}`);
   }
 
-  console.log("OpenMagic browser smoke test passed");
+  console.log("OpenMagic browser smoke test passed (incl. live element-editor preview)");
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (cli && !cli.killed) cli.kill("SIGKILL");

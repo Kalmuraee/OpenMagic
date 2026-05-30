@@ -355,6 +355,21 @@ export const TOOLBAR_CSS = `
 .om-diff-ins .om-diff-sign { color: #00b894; }
 .om-diff-empty { background: rgba(255,255,255,0.01); color: #333; }
 .om-diff-more { display: block; padding: 4px 8px; color: #666; text-align: center; min-width: 460px; }
+/* Unified diff (renderLineDiff) — LCS-aligned, line-numbered, syntax-highlighted */
+.om-dl { display: grid; grid-template-columns: 30px 30px 14px 1fr; align-items: start; white-space: pre-wrap; word-break: break-word; padding: 0 6px; }
+.om-dl-no { color: #4a4a5a; text-align: right; padding-right: 6px; user-select: none; }
+.om-dl-sign { text-align: center; font-weight: bold; user-select: none; }
+.om-dl-code { white-space: pre-wrap; word-break: break-word; color: #b0b0c0; }
+.om-dl-context { }
+.om-dl-del { background: rgba(233,69,96,0.12); }
+.om-dl-del .om-dl-sign, .om-dl-del .om-dl-code { color: #fab1a0; }
+.om-dl-ins { background: rgba(0,184,148,0.12); }
+.om-dl-ins .om-dl-sign, .om-dl-ins .om-dl-code { color: #55efc4; }
+.om-dl-more { display: block; padding: 4px 8px; color: #666; text-align: center; }
+.om-tok-keyword { color: #c792ea; }
+.om-tok-string { color: #c3e88d; }
+.om-tok-comment { color: #6b7280; font-style: italic; }
+.om-tok-number { color: #f78c6c; }
 .om-diff-actions { display: flex; gap: 6px; }
 .om-btn-sm { padding: 4px 10px; font-size: 11px; border-radius: 6px; }
 .om-btn-secondary { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: #888; cursor: pointer; font-family: inherit; }

@@ -70,3 +70,33 @@ export function clearToolbarState(): void {
     sessionStorage.removeItem(STORAGE_KEY);
   } catch {}
 }
+
+// --- Phase 6: pending runtime-verify marker (survives the post-apply reload) ---
+// Kept in its own key so message pruning (which strips applied.patches) can't
+// drop it. The bridge reads this after reload to check whether the applied edit
+// crashed the app at runtime.
+export interface PendingRuntimeCheck {
+  groupId: string;
+  files: string[];
+  selfCorrectRounds: number;
+  prompt: string;
+}
+
+const RUNTIME_CHECK_KEY = "__om_runtime_check__";
+
+export function savePendingRuntimeCheck(check: PendingRuntimeCheck): void {
+  try { sessionStorage.setItem(RUNTIME_CHECK_KEY, JSON.stringify(check)); } catch {}
+}
+
+export function loadPendingRuntimeCheck(): PendingRuntimeCheck | null {
+  try {
+    const raw = sessionStorage.getItem(RUNTIME_CHECK_KEY);
+    return raw ? (JSON.parse(raw) as PendingRuntimeCheck) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingRuntimeCheck(): void {
+  try { sessionStorage.removeItem(RUNTIME_CHECK_KEY); } catch {}
+}

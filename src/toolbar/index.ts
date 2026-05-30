@@ -2,10 +2,10 @@ import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshotWithFeedback } from "./services/capture.js";
-import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
+import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs, getRuntimeErrors, scrapeErrorOverlay, summarizeRuntimeFailure } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { buildTextEditModification } from "./inline-edit.js";
-import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
+import { clearToolbarState, restoreToolbarState, saveToolbarState, savePendingRuntimeCheck, loadPendingRuntimeCheck, clearPendingRuntimeCheck } from "./state-persistence.js";
 
 declare const __OPENMAGIC_TOKEN__: string | undefined;
 
@@ -274,6 +274,7 @@ function init() {
         updatePillButtons();
         updateModelSwitcher();
         void refreshProviderModels(state.provider);
+        void checkRuntimeAfterReload(); // Phase 6: catch "compiled but crashed" edits
       })
       .catch(() => {
         state.connected = false;
@@ -561,6 +562,48 @@ const MAX_SELF_CORRECT = 2;
 const MAX_MATCH_RETRY = 2;
 
 /**
+ * Phase 6: after an apply+reload, check whether the edit compiled but crashed the
+ * app at runtime (uncaught error or framework error overlay). If so, revert the
+ * chain and self-correct with the runtime errors — the H6 typecheck gate runs
+ * before reload and can't see this. Bounded by the same self-correction budget.
+ */
+async function checkRuntimeAfterReload(): Promise<void> {
+  const pending = loadPendingRuntimeCheck();
+  if (!pending) return;
+  clearPendingRuntimeCheck(); // one-shot
+
+  // Let the freshly-reloaded app render and throw before we look.
+  await new Promise((r) => setTimeout(r, 1500));
+
+  const failure = summarizeRuntimeFailure(scrapeErrorOverlay(), getRuntimeErrors());
+  if (!failure) return; // healthy at runtime — nothing to do
+
+  try { await ws.request("fs.patch.rollback", { groupId: pending.groupId, chain: true }); } catch { /* manifest may be gone */ }
+  openPanel("chat");
+
+  if (pending.selfCorrectRounds < MAX_SELF_CORRECT && pending.prompt) {
+    state.selfCorrectRounds = pending.selfCorrectRounds + 1;
+    state.messages.push({
+      role: "assistant",
+      content: `The applied change compiled but crashed the app at runtime — reverted and re-attempting (self-correction ${state.selfCorrectRounds}/${MAX_SELF_CORRECT}).`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    const correction =
+      `Your previous edit to ${pending.files.join(", ")} compiled but crashed the running app and was reverted. ` +
+      `Fix these runtime errors and return corrected modifications:\n\n${failure}`;
+    await sendPrompt(correction, true, undefined, true);
+  } else {
+    state.messages.push({
+      role: "assistant",
+      content: `The applied change crashed the app at runtime and was reverted to the last working state. Runtime errors:\n\n${failure}`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+  }
+}
+
+/**
  * U2: apply a direct text edit. Grounds the project, tries to produce the code
  * change deterministically (no LLM) by finding the old text verbatim in source;
  * if that's unsafe/ambiguous, falls back to a focused LLM prompt. Either way the
@@ -644,7 +687,21 @@ async function repromptOnMatchFailure(files: string[], reason: string): Promise<
  * surface the failure. Passing/inconclusive verification falls through to reload.
  */
 async function verifyAndSettle(groupId: string, files: string[], reload: () => void): Promise<void> {
-  if (!state.verifyAfterApply || !files.length) { reload(); return; }
+  if (!files.length) { reload(); return; }
+
+  // Arm the Phase 6 runtime check for any apply→reload — a "compiled but crashed
+  // at runtime" edit is only detectable after the reload, in the browser.
+  const armRuntimeCheck = () => {
+    const lastUser = [...state.messages].reverse().find((m) => m.role === "user");
+    savePendingRuntimeCheck({
+      groupId,
+      files,
+      selfCorrectRounds: state.selfCorrectRounds,
+      prompt: typeof lastUser?.content === "string" ? lastUser.content : "",
+    });
+  };
+
+  if (!state.verifyAfterApply) { armRuntimeCheck(); reload(); return; }
 
   const statusEl = $panelBody.querySelector(".om-msg-system:last-child");
   if (statusEl) statusEl.innerHTML += ' <span class="om-spinner"></span> verifying…';
@@ -659,7 +716,8 @@ async function verifyAndSettle(groupId: string, files: string[], reload: () => v
   }
 
   if (verdict?.status !== "failed") {
-    // passed or inconclusive — the change stands
+    // passed or inconclusive — the change stands; arm the runtime check for after reload.
+    armRuntimeCheck();
     reload();
     return;
   }

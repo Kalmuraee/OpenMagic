@@ -219,6 +219,26 @@ export function clearRuntimeErrors(): void {
   runtimeErrors.length = 0;
 }
 
+/**
+ * Phase 6: condense a post-reload runtime failure into a short summary for the
+ * self-correct loop, or null if there's no failure signal. Inputs are already
+ * filtered to real signals — a framework error overlay and uncaught
+ * errors/rejections (not ordinary console logs).
+ */
+export function summarizeRuntimeFailure(
+  overlayText: string | null,
+  runtimeErrors: Array<{ type: string; message: string; source?: string; stack?: string }>
+): string | null {
+  const parts: string[] = [];
+  if (overlayText) parts.push(overlayText.slice(0, 1500));
+  for (const e of runtimeErrors) {
+    if (e.type === "overlay") continue; // already covered by overlayText
+    parts.push(`[${e.type}] ${e.message}${e.source ? ` (${e.source})` : ""}`);
+  }
+  const summary = parts.join("\n").trim();
+  return summary ? summary.slice(0, 2000) : null;
+}
+
 // --- Context Builder ---
 
 // Forward the whole captured element (H2: the prompt reads ~20 fields, not the 7

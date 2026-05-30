@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildContext } from "../src/toolbar/services/context-builder.js";
+import { buildContext, summarizeRuntimeFailure } from "../src/toolbar/services/context-builder.js";
 
 // The full set of element fields that src/llm/prompts.ts:buildContextParts reads.
 // buildContext must forward all of them or the prompt rules silently see undefined.
@@ -41,5 +41,25 @@ describe("buildContext — full element forwarding (H2)", () => {
     const ctx = buildContext(el, null);
     const forwarded = ctx.selectedElement as Record<string, string>;
     expect(forwarded.outerHTML.length).toBeLessThanOrEqual(8200);
+  });
+});
+
+describe("summarizeRuntimeFailure (Phase 6 bridge)", () => {
+  it("returns a summary when a framework error overlay is present", () => {
+    const s = summarizeRuntimeFailure("ReferenceError: foo is not defined\n  at Hero.tsx:3", []);
+    expect(s).toBeTruthy();
+    expect(s).toContain("foo is not defined");
+  });
+
+  it("returns a summary from uncaught runtime errors when there is no overlay", () => {
+    const s = summarizeRuntimeFailure(null, [
+      { type: "error", message: "Cannot read properties of undefined (reading 'map')" },
+    ]);
+    expect(s).toBeTruthy();
+    expect(s).toContain("Cannot read properties of undefined");
+  });
+
+  it("returns null when there is no runtime failure signal", () => {
+    expect(summarizeRuntimeFailure(null, [])).toBeNull();
   });
 });

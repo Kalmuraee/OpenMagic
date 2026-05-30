@@ -109,7 +109,7 @@ let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.44.1";
+const CURRENT_VERSION = "0.44.2";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {

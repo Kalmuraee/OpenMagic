@@ -81,11 +81,16 @@ jobs:
         if: steps.version-check.outputs.changed == 'true'
         run: npm audit --omit=dev
 
-      - name: Publish to npm
+      # OIDC trusted publishing requires a modern npm; Node 22 ships npm 10.x.
+      - name: Upgrade npm for OIDC trusted publishing (needs npm >= 11.5.1)
+        if: steps.version-check.outputs.changed == 'true'
+        run: npm install -g npm@latest
+
+      # No NODE_AUTH_TOKEN: with id-token:write + a configured trusted publisher,
+      # npm authenticates via GitHub OIDC. A stale token would override OIDC and 404.
+      - name: Publish to npm (OIDC trusted publishing + provenance)
         if: steps.version-check.outputs.changed == 'true'
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: steps.version-check.outputs.changed == 'true'

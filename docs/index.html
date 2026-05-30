@@ -54,6 +54,22 @@
     ]
   }
   </script>
+  <!-- FAQ structured data (rich results + AI chat Q&A retrieval) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      { "@type": "Question", "name": "What is OpenMagic?", "acceptedAnswer": { "@type": "Answer", "text": "OpenMagic is an open-source AI coding toolbar for any web application. Run npx openmagic in your project and a floating AI toolbar is injected into your running app via a single-port reverse proxy. Select any element, describe a change in plain English, review the diff, and OpenMagic edits your actual source code." } },
+      { "@type": "Question", "name": "How do I install OpenMagic?", "acceptedAnswer": { "@type": "Answer", "text": "Run it instantly with npx openmagic@latest, or install it globally with npm install -g openmagic and run openmagic from any project folder. Requires Node.js 20.19 or newer." } },
+      { "@type": "Question", "name": "Which AI providers and models does OpenMagic support?", "acceptedAnswer": { "@type": "Answer", "text": "14 providers and 70+ models, bring your own key: OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Mistral, Groq, Ollama, OpenRouter and more — plus local CLI agents (Claude Code, Codex, Gemini CLI)." } },
+      { "@type": "Question", "name": "Is it safe to let an AI change my code?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. You review every diff before it is applied, and each change is verified (typecheck/lint plus runtime) after it is written — if it breaks the build it is automatically reverted and the model self-corrects. Undo is durable and one-click." } },
+      { "@type": "Question", "name": "Which frameworks does OpenMagic work with?", "acceptedAnswer": { "@type": "Answer", "text": "Next.js, Remix / React Router, Nuxt, SvelteKit, SolidStart, Angular, Astro, Vite, Vue, and plain static sites. It maps the page URL to the right source file and indexes your components." } },
+      { "@type": "Question", "name": "Is OpenMagic free and open source?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — OpenMagic is MIT licensed and open source. You bring your own API key, so there is no subscription." } },
+      { "@type": "Question", "name": "Can OpenMagic review my UI/UX and improve the design?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. One click runs a UX/UI design review that audits the page (hierarchy, spacing, contrast, accessibility, consistency) against your detected design system and proposes brand-consistent fixes. A visual element editor also lets you change CSS, text and attributes with live preview before applying to code." } }
+    ]
+  }
+  </script>
   <link rel="sitemap" type="application/xml" href="sitemap.xml">
 
   <link rel="icon" type="image/png" href="logo.png">
@@ -1248,6 +1264,23 @@
           </tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="section-header">
+      <h2>FAQ</h2>
+      <p>Common questions about OpenMagic.</p>
+    </div>
+    <div style="max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px;">
+      <details><summary>What is OpenMagic?</summary><p>OpenMagic is an open-source AI coding toolbar for any web application. Run <code>npx openmagic</code> in your project and a floating AI toolbar is injected into your running app via a single-port reverse proxy. Select any element, describe a change in plain English, review the diff, and OpenMagic edits your actual source code.</p></details>
+      <details><summary>How do I install OpenMagic?</summary><p>Run it instantly with <code>npx openmagic@latest</code>, or install it globally with <code>npm install -g openmagic</code> and run <code>openmagic</code> from any project folder. Requires Node.js 20.19 or newer.</p></details>
+      <details><summary>Which AI providers and models does it support?</summary><p>14 providers and 70+ models, bring your own key: OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Mistral, Groq, Ollama, OpenRouter and more — plus local CLI agents (Claude Code, Codex, Gemini CLI).</p></details>
+      <details><summary>Is it safe to let an AI change my code?</summary><p>Yes. You review every diff before it is applied, and each change is verified (typecheck/lint plus runtime) after it is written — if it breaks the build it is automatically reverted and the model self-corrects. Undo is durable and one-click.</p></details>
+      <details><summary>Which frameworks does it work with?</summary><p>Next.js, Remix / React Router, Nuxt, SvelteKit, SolidStart, Angular, Astro, Vite, Vue, and plain static sites. It maps the page URL to the right source file and indexes your components.</p></details>
+      <details><summary>Is OpenMagic free and open source?</summary><p>Yes — OpenMagic is MIT licensed and open source. You bring your own API key, so there is no subscription.</p></details>
+      <details><summary>Can it review my UI/UX and improve the design?</summary><p>Yes. One click runs a UX/UI design review that audits the page against your detected design system and proposes brand-consistent fixes. A visual element editor also lets you change CSS, text and attributes with live preview before applying to code.</p></details>
     </div>
   </section>
 

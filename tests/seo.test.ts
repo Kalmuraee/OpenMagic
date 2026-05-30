@@ -42,6 +42,17 @@ describe("landing page SEO metadata (docs/index.html)", () => {
     expect(typeof data.description).toBe("string");
     expect(Array.isArray(data.sameAs)).toBe(true);
   });
+
+  it("embeds valid FAQPage structured data (AI/Q&A retrieval + rich results)", () => {
+    const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const faq = blocks.find((b) => b["@type"] === "FAQPage");
+    expect(faq, "FAQPage JSON-LD present").toBeTruthy();
+    expect(Array.isArray(faq.mainEntity)).toBe(true);
+    expect(faq.mainEntity.length).toBeGreaterThanOrEqual(5);
+    expect(faq.mainEntity[0].acceptedAnswer.text.length).toBeGreaterThan(20);
+    // the visible FAQ section must exist too (Google requires matching content)
+    expect(html).toContain('id="faq"');
+  });
 });
 
 describe("SEO / AI support files", () => {

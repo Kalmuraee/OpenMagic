@@ -1,7 +1,8 @@
 import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
-import { captureScreenshotWithFeedback } from "./services/capture.js";
+import { captureScreenshot, captureScreenshotWithFeedback } from "./services/capture.js";
+import { summarizeDesignTokens, collectStyleSamples, buildDesignReviewPrompt } from "./design-audit.js";
 import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs, getRuntimeErrors, scrapeErrorOverlay, summarizeRuntimeFailure } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { buildTextEditModification } from "./inline-edit.js";
@@ -221,6 +222,14 @@ function init() {
     state.selectedElement = { tagName: "el", cssSelector: selector, outerHTML: "" } as unknown as SelectedElement;
     openElementEditor();
   });
+  // Test hook: derive the page's design tokens and expose a summary (validates
+  // the brand/consistency extraction on a real rendered page).
+  host.addEventListener("openmagic:test-design-tokens", () => {
+    const t = summarizeDesignTokens(collectStyleSamples());
+    host.setAttribute("data-openmagic-design-tokens", JSON.stringify({
+      colors: t.colors.length, fonts: t.fontFamilies.length, sizes: t.fontSizes.length,
+    }));
+  });
   // Test hook: apply a live edit (the inputs live in a closed shadow root, so a
   // browser test can't reach them; this exercises applyLiveEdit faithfully).
   host.addEventListener("openmagic:test-live-edit", (e: Event) => {
@@ -326,6 +335,7 @@ function buildStaticDOM(): string {
         <button class="om-pill-btn" data-action="screenshot" title="Screenshot">${ICON.camera}</button>
         <button class="om-pill-btn" data-action="network" title="Network & Performance">${ICON.activity}</button>
         <span class="om-pill-divider"></span>
+        <button class="om-pill-btn" data-action="design-review" title="Review UI/UX & propose design fixes">${ICON.sparkle}</button>
         <button class="om-pill-btn" data-action="chat" title="Chat">${ICON.chat}</button>
         <button class="om-pill-btn" data-action="settings" title="Settings">${ICON.settings}</button>
         <button class="om-pill-btn" data-action="minimize" title="Minimize">${ICON.minus}</button>
@@ -629,6 +639,7 @@ const MAX_MATCH_RETRY = 2;
 // U4: ⌘K command palette ------------------------------------------------------
 const COMMANDS: Command[] = [
   { id: "select", label: "Select an element", action: "select", keywords: ["pick", "inspect", "click"] },
+  { id: "design-review", label: "Review UI/UX & propose design fixes", action: "design-review", keywords: ["design", "ux", "ui", "audit", "critique", "improve", "redesign", "brand"] },
   { id: "edit-element", label: "Edit element (styles, text, attributes)", action: "edit-element", keywords: ["css", "style", "html", "properties", "visual"] },
   { id: "chat", label: "Open chat", action: "open-chat", keywords: ["ask", "prompt"] },
   { id: "focus", label: "Focus the prompt", action: "focus-prompt", keywords: ["type", "write"] },
@@ -655,6 +666,7 @@ function runCommand(action: string): void {
   if (action === "open-settings") { openPanel("settings"); return; }
   if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
   if (action === "clear-element") { state.selectedElement = null; state.selectedElements = []; updatePromptContext(); return; }
+  if (action === "design-review") { void runDesignReview(); return; }
   if (action === "edit-element") { openElementEditor(); return; }
   if (action === "undo-last") { clickLatest(['[data-action="rollback-patch"]', '[data-action="undo-diff"]']); return; }
   if (action === "redo-last") { clickLatest(['[data-action="redo-patch"]']); return; }
@@ -1285,6 +1297,7 @@ async function handleAction(action: string, target: HTMLElement) {
       void applyInlineTextEdit(oldText, newText);
       break;
     }
+    case "design-review": void runDesignReview(); break;
     case "edit-element": openElementEditor(); break;
     case "apply-element-edit": void applyElementEditToCode(); break;
     case "discard-element-edit": revertElementEdits(); openPanel("chat"); break;
@@ -1484,6 +1497,33 @@ function updatePromptContext() {
 }
 
 // ── Panel Management ─────────────────────────────────────────────
+
+/**
+ * UX/UI review: capture the page (screenshot) + derive its design system, then
+ * ask a (vision) model to find issues and propose brand-consistent fixes. The
+ * proposal comes back as diff cards (preview) → Apply runs the verify→HMR loop,
+ * so the user sees the result and confirms.
+ */
+async function runDesignReview(): Promise<void> {
+  if (state.streaming) return;
+  openPanel("chat");
+
+  if (!selectedModelSupportsVision()) {
+    state.messages.push({
+      role: "system",
+      content: "Heads up: the current model isn't vision-capable, so the review will rely on the detected design tokens and source rather than the screenshot. Switch to a vision model for a visual critique.",
+    });
+    refreshPanelContent();
+  }
+
+  let screenshot: string | null = null;
+  try { screenshot = (await captureScreenshot()) ?? null; } catch { /* fall back to token-only review */ }
+
+  const tokens = summarizeDesignTokens(collectStyleSamples());
+  const prompt = buildDesignReviewPrompt(tokens, { pageTitle: document.title });
+  if (screenshot) state.screenshot = screenshot;
+  await sendPrompt(prompt, true);
+}
 
 // ── Visual element editor (live preview → confirm → code) ────────────────────
 

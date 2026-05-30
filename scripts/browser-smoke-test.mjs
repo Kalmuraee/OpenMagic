@@ -97,6 +97,18 @@ try {
   });
   await page.waitForFunction(() => document.querySelector("button.primary")?.textContent === "Joined!", null, { timeout: 10_000 });
 
+  // UX/UI review: verify the design-token extraction runs on the real page
+  // (the "brand/consistency" context fed to the design review).
+  await page.evaluate(() => {
+    document.querySelector("openmagic-toolbar")?.dispatchEvent(new CustomEvent("openmagic:test-design-tokens"));
+  });
+  await page.waitForFunction(() => {
+    const raw = document.querySelector("openmagic-toolbar")?.getAttribute("data-openmagic-design-tokens");
+    if (!raw) return false;
+    const t = JSON.parse(raw);
+    return t.colors > 0 && t.fonts > 0 && t.sizes > 0;
+  }, null, { timeout: 10_000 });
+
   if (consoleErrors.length) {
     throw new Error(`Browser console errors:\n${consoleErrors.join("\n")}`);
   }

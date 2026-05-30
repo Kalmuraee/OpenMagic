@@ -35,6 +35,15 @@ describe("buildContext — full element forwarding (H2)", () => {
     expect(buildContext(null, null).selectedElement).toBeUndefined();
   });
 
+  it("forwards a multi-selection (U3) only when more than one element is selected", () => {
+    const a = fullElement(); a.cssSelector = ".a";
+    const b = fullElement(); b.cssSelector = ".b";
+    expect(buildContext(a, null, [a]).selectedElements).toBeUndefined(); // single → omitted
+    const multi = buildContext(a, null, [a, b]).selectedElements as any[];
+    expect(multi).toHaveLength(2);
+    expect(multi.map((e) => e.cssSelector)).toEqual([".a", ".b"]);
+  });
+
   it("caps very large outerHTML to keep the prompt bounded", () => {
     const el = fullElement();
     el.outerHTML = "x".repeat(20000);

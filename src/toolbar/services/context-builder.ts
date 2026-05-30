@@ -256,10 +256,16 @@ function forwardElement(el: SelectedElement): Record<string, unknown> {
 
 export function buildContext(
   selectedElement: SelectedElement | null,
-  screenshot: string | null
+  screenshot: string | null,
+  selectedElements?: SelectedElement[]
 ) {
   return {
     selectedElement: selectedElement ? forwardElement(selectedElement) : undefined,
+    // U3: forward the full multi-selection (only when more than one) so the model
+    // can reason about all chosen elements, not just the primary.
+    selectedElements: selectedElements && selectedElements.length > 1
+      ? selectedElements.map(forwardElement)
+      : undefined,
     screenshot: screenshot || undefined,
     networkLogs: getNetworkLogs().map((l) => ({
       method: l.method,

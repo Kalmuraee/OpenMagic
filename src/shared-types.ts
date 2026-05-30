@@ -101,6 +101,7 @@ export type ContentPart =
 
 export interface LlmContext {
   selectedElement?: ElementInfo;
+  selectedElements?: ElementInfo[]; // U3: additional elements when multi-selecting
   screenshot?: string; // base64 data URL
   networkLogs?: NetworkLogEntry[];
   consoleLogs?: ConsoleLogEntry[];

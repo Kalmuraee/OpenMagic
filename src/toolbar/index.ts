@@ -115,7 +115,8 @@ const state = {
   panelOpen: false,
   activePanel: "" as "" | "chat" | "settings",
   selecting: false,
-  selectedElement: null as SelectedElement | null,
+  selectedElement: null as SelectedElement | null, // primary (most recent) selection
+  selectedElements: [] as SelectedElement[],        // U3: full multi-selection list
   screenshot: null as string | null,
   messages: [] as { role: "user" | "assistant" | "system"; content: string }[],
   streaming: false,
@@ -619,7 +620,7 @@ function runCommand(action: string): void {
   if (action === "open-chat") { openPanel("chat"); return; }
   if (action === "open-settings") { openPanel("settings"); return; }
   if (action === "focus-prompt") { if (!state.panelOpen) openPanel("chat"); $promptInput.focus(); return; }
-  if (action === "clear-element") { state.selectedElement = null; updatePromptContext(); return; }
+  if (action === "clear-element") { state.selectedElement = null; state.selectedElements = []; updatePromptContext(); return; }
   if (action === "undo-last") { clickLatest(['[data-action="rollback-patch"]', '[data-action="undo-diff"]']); return; }
   if (action === "redo-last") { clickLatest(['[data-action="redo-patch"]']); return; }
   // Route the rest through the real control if present, else the action handler.
@@ -1240,7 +1241,7 @@ async function handleAction(action: string, target: HTMLElement) {
       });
       break;
     }
-    case "clear-element": state.selectedElement = null; updatePromptContext(); break;
+    case "clear-element": state.selectedElement = null; state.selectedElements = []; updatePromptContext(); break;
     case "clear-screenshot": state.screenshot = null; updatePromptContext(); break;
     case "apply-text-edit": {
       const input = shadow.querySelector("[data-inline-edit-input]") as HTMLInputElement | null;
@@ -1401,8 +1402,13 @@ async function refreshProviderModels(provider: string) {
 function updatePromptContext() {
   const chips: string[] = [];
   if (state.selectedElement) {
-    const selectedLabel = `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
-    chips.push(`<span class="om-prompt-chip">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
+    const selectedLabel = state.selectedElements.length > 1
+      ? `${state.selectedElements.length} elements`
+      : `${state.selectedElement.tagName}${state.selectedElement.id ? "#" + state.selectedElement.id : ""}`;
+    const title = state.selectedElements.length > 1
+      ? state.selectedElements.map((el) => el.cssSelector || el.tagName).join("\n")
+      : "";
+    chips.push(`<span class="om-prompt-chip" title="${escapeHtml(title)}">${escapeHtml(selectedLabel)} <button class="om-prompt-chip-x" data-action="clear-element">${ICON.x}</button></span>`);
 
     // U2: direct inline text editing for elements with short, single-line text.
     const txt = (state.selectedElement.textContent || "").trim();
@@ -1862,7 +1868,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
   openPanel("chat");
 
   // Build context — includes page info, selected element, screenshot, network/console logs
-  const context: any = contextOverride || buildContext(state.selectedElement, state.screenshot);
+  const context: any = contextOverride || buildContext(state.selectedElement, state.screenshot, state.selectedElements);
   context.pageUrl = context.pageUrl || window.location.href;
   context.pageTitle = context.pageTitle || document.title;
 
@@ -2686,7 +2692,20 @@ function enterSelectMode() {
     e.stopPropagation();
     const t = e.target as HTMLElement;
     if (t.closest("openmagic-toolbar") || t.dataset?.openmagic) return;
-    state.selectedElement = inspectElement(t);
+    const el = inspectElement(t);
+    // U3: hold Shift/Cmd/Ctrl to add to the selection and keep picking; a plain
+    // click replaces the selection and exits select mode (the common case).
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    if (additive) {
+      if (!state.selectedElements.some((s) => s.cssSelector === el.cssSelector)) {
+        state.selectedElements.push(el);
+      }
+      state.selectedElement = el;
+      updatePromptContext();
+      return; // stay in select mode to add more
+    }
+    state.selectedElements = [el];
+    state.selectedElement = el;
     exitSelectMode();
     updatePromptContext();
     $promptInput.focus();

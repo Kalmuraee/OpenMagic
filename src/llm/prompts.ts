@@ -122,6 +122,13 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
     parts.selectedElement = JSON.stringify(elementData, null, 2);
   }
 
+  // U3: a concise summary of every selected element when multi-selecting.
+  if ((context as any).selectedElements?.length) {
+    parts.selectedElementsSummary = ((context as any).selectedElements as any[])
+      .map((el, i) => `${i + 1}. <${el.tagName}${el.id ? "#" + el.id : ""}> ${el.cssSelector || ""} ${(el.textContent || "").slice(0, 60)}`.trim())
+      .join("\n");
+  }
+
   if (context.files?.length) {
     parts.files = context.files;
   }
@@ -148,6 +155,7 @@ export function buildUserMessage(
   userPrompt: string,
   context: {
     selectedElement?: string;
+    selectedElementsSummary?: string;
     screenshot?: string;
     files?: Array<{ path: string; content: string }>;
     fileContent?: string;
@@ -187,6 +195,10 @@ export function buildUserMessage(
   // Selected element — full context including selector, styles, ancestry
   if (context.selectedElement) {
     parts.push(`## Selected Element\n\`\`\`json\n${context.selectedElement}\n\`\`\``);
+  }
+
+  if (context.selectedElementsSummary) {
+    parts.push(`## All Selected Elements (multi-select)\n\`\`\`\n${context.selectedElementsSummary}\n\`\`\``);
   }
 
   if (context.networkLogs) {

@@ -136,6 +136,7 @@ const state = {
   modelTestStatus: "" as "" | "testing" | "success" | "error",
   modelTestMessage: "",
   planBeforeEdit: false,
+  serverAgent: false,          // H12: run the investigate→edit loop server-side (opt-in)
   networkCapture: false,       // whether network panel is showing
   attachments: [] as string[], // base64 image data URLs attached to next message
   groundedFiles: [] as string[], // last grounded file paths for context chips
@@ -245,6 +246,7 @@ function init() {
           MODEL_REGISTRY = { ...MODEL_REGISTRY, ...msg.payload.providers };
         }
         state.planBeforeEdit = !!msg.payload?.planBeforeEdit;
+        state.serverAgent = !!msg.payload?.serverAgent;
 
         // Store detected CLI agents from server
         state.detectedClis = msg.payload?.detectedClis || [];
@@ -2270,8 +2272,11 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
     while (iters++ < MAX_TOTAL_ITERS) {
       state.streamContent = "";
 
+      // H12: when the server-side agent loop is enabled, route the edit pass
+      // through agent.run (same envelope) so file-reads/searches happen
+      // server-side; otherwise the browser runs the investigate loop below.
       const result = await ws.stream(
-        "llm.chat",
+        state.serverAgent ? "agent.run" : "llm.chat",
         {
           provider: state.provider,
           model: state.model,

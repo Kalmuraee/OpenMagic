@@ -1,0 +1,14 @@
+{
+  "name": "vanilla: exact edit changes the CTA label",
+  "fixture": "vanilla",
+  "prompt": "change the button to say Join now",
+  "modifications": [
+    {
+      "file": "app.js",
+      "type": "edit",
+      "search": "  btn.textContent = 'Sign up';",
+      "replace": "  btn.textContent = 'Join now';"
+    }
+  ],
+  "expect": { "applies": true, "file": "app.js", "contains": ["Join now"], "notContains": ["Sign up"] }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "react: whitespace-tolerant edit applies despite missing indentation",
+  "fixture": "react",
+  "prompt": "add the primary class to the hero button",
+  "modifications": [
+    {
+      "file": "src/components/Hero.tsx",
+      "type": "edit",
+      "search": "<button className=\"cta\">Get started</button>",
+      "replace": "<button className=\"cta primary\">Get started</button>"
+    }
+  ],
+  "expect": { "applies": true, "file": "src/components/Hero.tsx", "contains": ["cta primary"] }
+}

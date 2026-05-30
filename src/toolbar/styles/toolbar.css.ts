@@ -347,7 +347,14 @@ export const TOOLBAR_CSS = `
 .om-msg-assistant { background: rgba(255,255,255,0.02); color: #aaa; margin-right: 36px; border-bottom-left-radius: 3px; border: 1px solid rgba(255,255,255,0.03); }
 .om-msg-system { background: rgba(var(--om-accent-rgb), 0.05); color: #888; font-size: 11px; text-align: center; padding: 5px 8px; border-radius: 6px; }
 
-.om-chat-empty { color: #333; text-align: center; padding: 32px 16px; font-size: 12px; line-height: 1.6; }
+.om-chat-empty { color: #888; text-align: center; padding: 28px 18px; font-size: 12px; line-height: 1.6; }
+.om-onboard-title { color: #a29bfe; font-weight: 700; font-size: 13px; margin-bottom: 12px; }
+.om-onboard-steps { list-style: none; text-align: left; max-width: 280px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.om-onboard-steps li { display: flex; align-items: center; gap: 8px; color: #b0b0c0; }
+.om-onboard-steps li b { color: #e0e0e0; font-weight: 600; }
+.om-onboard-steps svg { color: var(--om-accent); flex-shrink: 0; }
+.om-onboard-tip { margin-top: 16px; color: #666; font-size: 11px; }
+.om-onboard-tip kbd { background: rgba(var(--om-accent-rgb),0.15); border: 1px solid rgba(var(--om-accent-rgb),0.25); border-radius: 4px; padding: 1px 5px; color: #c4b5fd; font-size: 10px; }
 
 .om-spinner { width: 12px; height: 12px; border: 2px solid rgba(var(--om-accent-rgb),0.12); border-top-color: var(--om-accent); border-radius: 50%; animation: om-spin 0.6s linear infinite; display: inline-block; vertical-align: -1px; margin-right: 5px; }
 @keyframes om-spin { to { transform: rotate(360deg); } }

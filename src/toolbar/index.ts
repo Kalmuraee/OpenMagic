@@ -1686,7 +1686,15 @@ function renderChatHTML(): string {
     ? `<div class="om-msg om-msg-assistant"><span class="om-spinner"></span> Generating response...</div>` : "";
 
   const empty = !state.messages.length && !state.streaming
-    ? `<div class="om-chat-empty">Select an element or type below to start</div>` : "";
+    ? `<div class="om-chat-empty">
+        <div class="om-onboard-title">Make a change in 3 steps</div>
+        <ol class="om-onboard-steps">
+          <li>${ICON.crosshair} <b>Select</b> an element on the page</li>
+          <li>${ICON.chat} <b>Describe</b> the change you want</li>
+          <li>Review the diff and <b>Apply</b> — it's verified automatically</li>
+        </ol>
+        <div class="om-onboard-tip">Tip: press <kbd>⌘K</kbd> for the command palette</div>
+      </div>` : "";
 
   return `<div class="om-chat-messages">${empty}${msgs}${streamHtml}</div>`;
 }

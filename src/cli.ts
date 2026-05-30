@@ -221,19 +221,35 @@ function waitForPortClose(port: number, timeoutMs: number = 10000): Promise<bool
  * Returns true if the process was killed and the port freed.
  */
 function killPortProcess(port: number): boolean {
+  const pids = findListenerPids(port);
+  for (const pid of pids) {
+    try { process.kill(pid, "SIGTERM"); } catch {}
+  }
+  return pids.length > 0;
+}
+
+// PIDs listening on a TCP port. Uses lsof on POSIX and netstat on Windows so
+// port cleanup works cross-platform (previously lsof-only → silent no-op on win32).
+function findListenerPids(port: number): number[] {
   try {
+    if (process.platform === "win32") {
+      const out = execSync(`netstat -ano -p tcp`, { encoding: "utf-8", timeout: 3000 });
+      const pids = new Set<number>();
+      for (const line of out.split("\n")) {
+        if (!/LISTENING/i.test(line)) continue;
+        if (!new RegExp(`[:.]${port}\\b`).test(line)) continue;
+        const pid = parseInt(line.trim().split(/\s+/).pop() || "", 10);
+        if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+      }
+      return [...pids];
+    }
     const pidOutput = execSync(`lsof -i :${port} -sTCP:LISTEN -t 2>/dev/null`, {
       encoding: "utf-8",
       timeout: 3000,
     }).trim();
-    if (!pidOutput) return false;
-    const pids = pidOutput.split("\n").map((p) => p.trim()).filter(Boolean);
-    for (const pid of pids) {
-      try { process.kill(parseInt(pid, 10), "SIGTERM"); } catch {}
-    }
-    return pids.length > 0;
+    return pidOutput.split("\n").map((p) => parseInt(p.trim(), 10)).filter((p) => Number.isInteger(p) && p > 0);
   } catch {
-    return false;
+    return [];
   }
 }
 

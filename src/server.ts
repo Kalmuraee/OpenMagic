@@ -18,9 +18,12 @@ import type {
   OpenMagicConfig,
 } from "./shared-types.js";
 import { handleLlmChat } from "./llm/proxy.js";
+import { coerceThinkingLevel } from "./llm/thinking.js";
+import { AbortRegistry } from "./abort-registry.js";
+import { verifyPatchGroup } from "./verify.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
-import { applyPatchGroup, previewPatchGroup, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
+import { applyPatchGroup, previewPatchGroup, pruneOldManifests, rollbackChain, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
 import { groundProject, type ProjectGroundRequest } from "./project-grounding.js";
 import { testProviderModel } from "./llm/provider-test.js";
 
@@ -51,7 +54,12 @@ console.info = (...a: any[]) => { captureServerLog("info", ...a); _origInfo(...a
 
 interface ClientState {
   authenticated: boolean;
+  connId: string;
 }
+
+// Tracks in-flight LLM requests so they can be cancelled on llm.cancel / disconnect.
+const llmAbortRegistry = new AbortRegistry();
+let connCounter = 0;
 
 export type OperationCategory = "auth" | "read" | "write" | "delete" | "config" | "llm" | "debug" | "models";
 
@@ -65,10 +73,12 @@ const OPERATION_CATEGORIES: Record<string, OperationCategory> = {
   "fs.patch.preview": "write",
   "fs.patch.apply": "write",
   "fs.patch.rollback": "write",
+  "fs.patch.verify": "write",
   "fs.delete": "delete",
   "config.get": "config",
   "config.set": "config",
   "llm.chat": "llm",
+  "llm.cancel": "llm",
   "provider.models": "models",
   "provider.testModel": "models",
   "project.ground": "read",
@@ -97,6 +107,10 @@ export function attachOpenMagic(
   handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean;
   handleUpgrade: (req: http.IncomingMessage, socket: any, head: Buffer) => boolean;
 } {
+
+  // Drop undo manifests left over from sessions more than 7 days ago, while
+  // keeping recent ones so a crashed session's edits can still be rolled back.
+  pruneOldManifests(7 * 24 * 60 * 60 * 1000);
 
   // Request handler for /__openmagic__/ paths — returns true if handled
   function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
@@ -133,7 +147,8 @@ export function attachOpenMagic(
       ws.close(4003, "Forbidden origin");
       return;
     }
-    clientStates.set(ws, { authenticated: false });
+    const connId = String(++connCounter);
+    clientStates.set(ws, { authenticated: false, connId });
 
     ws.on("message", async (data) => {
       let msg: WsMessage;
@@ -164,6 +179,10 @@ export function attachOpenMagic(
     });
 
     ws.on("close", () => {
+      // Cancel any in-flight LLM work for this connection so server-side
+      // fetch()/CLI children don't keep running (and editing files) after the
+      // toolbar tab is gone.
+      llmAbortRegistry.abortByPrefix(`${connId}:`);
       clientStates.delete(ws);
     });
   });
@@ -310,16 +329,39 @@ async function handleMessage(
     }
 
     case "fs.patch.rollback": {
-      const payload = msg.payload as { groupId?: string } | undefined;
+      const payload = msg.payload as { groupId?: string; chain?: boolean } | undefined;
       if (!payload?.groupId) {
         sendError(ws, "invalid_payload", "Missing groupId", msg.id);
         break;
       }
-      const result = rollbackPatchGroup(roots[0] || process.cwd(), payload.groupId);
+      const root = roots[0] || process.cwd();
+      const result = payload.chain
+        ? rollbackChain(root, payload.groupId)
+        : rollbackPatchGroup(root, payload.groupId);
       if (!result.ok) {
         sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
       } else {
         send(ws, { id: msg.id, type: "fs.patch.rolledback", payload: result });
+      }
+      break;
+    }
+
+    case "fs.patch.verify": {
+      const payload = msg.payload as { files?: string[]; timeoutMs?: number } | undefined;
+      const files = Array.isArray(payload?.files) ? payload!.files : [];
+      // Cancellable like llm.chat: a closed tab / explicit cancel kills the spawned
+      // typecheck so it doesn't keep running.
+      const reqId = `${state.connId}:${msg.id}`;
+      const controller = llmAbortRegistry.register(reqId);
+      try {
+        const result = await verifyPatchGroup(roots[0] || process.cwd(), {
+          files,
+          timeoutMs: payload?.timeoutMs,
+          signal: controller.signal,
+        });
+        send(ws, { id: msg.id, type: "fs.patch.verified", payload: result });
+      } finally {
+        llmAbortRegistry.complete(reqId);
       }
       break;
     }
@@ -350,24 +392,52 @@ async function handleMessage(
         return;
       }
 
+      // Apply the user's saved per-provider thinking preference (was previously
+      // stored but never used) unless the request already specified one.
+      const llmContext = payload.context || {};
+      if (llmContext.reasoningLevel === undefined) {
+        const pref = coerceThinkingLevel(config.preferredThinkingMode?.[provider]);
+        if (pref) llmContext.reasoningLevel = pref;
+      }
+
+      const reqId = `${state.connId}:${msg.id}`;
+      const controller = llmAbortRegistry.register(reqId);
       await handleLlmChat(
         {
           provider,
           model: payload.model || config.model || MODEL_REGISTRY[provider]?.models[0]?.id || "gpt-4o",
           apiKey,
           messages: payload.messages,
-          context: payload.context,
+          context: llmContext,
+          // H11: opt-in native tool-calling (config flag or env), off by default.
+          useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1",
+          // H9: opt-in CLI native-edit (config flag or env), off by default.
+          nativeEdit: config.nativeEdit === true || process.env.OPENMAGIC_NATIVE_EDIT === "1",
+          root: roots[0],
         },
         (chunk) => {
           send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } });
         },
         (result) => {
+          llmAbortRegistry.complete(reqId);
           send(ws, { id: msg.id, type: "llm.done", payload: result });
         },
         (error) => {
+          llmAbortRegistry.complete(reqId);
           send(ws, { id: msg.id, type: "llm.error", payload: { message: error } });
-        }
+        },
+        controller.signal
       );
+      llmAbortRegistry.complete(reqId);
+      break;
+    }
+
+    case "llm.cancel": {
+      // Abort the in-flight request with the given id. The waiting client-side
+      // stream is resolved locally by ws-client, so no response is required.
+      const payload = msg.payload as { id?: string } | undefined;
+      if (payload?.id) llmAbortRegistry.abort(`${state.connId}:${payload.id}`);
+      send(ws, { id: msg.id, type: "llm.done", payload: { content: "", modifications: [], cancelled: true } });
       break;
     }
 

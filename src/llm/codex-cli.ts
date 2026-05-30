@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChatMessage, LlmContext } from "../shared-types.js";
-import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextParts } from "./prompts.js";
 
 /**
  * OpenAI Codex CLI adapter.
@@ -16,8 +16,9 @@ export async function chatCodexCli(
   messages: ChatMessage[],
   context: LlmContext,
   onChunk: (chunk: string) => void,
-  onDone: (result: { content: string }) => void,
-  onError: (error: string) => void
+  onDone: (result: { content: string; truncated?: boolean }) => void,
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   const userPrompt =
@@ -26,7 +27,8 @@ export async function chatCodexCli(
       : "Help me with this element.";
 
   const contextParts = buildContextParts(context);
-  const fullPrompt = `${SYSTEM_PROMPT}\n\n${buildUserMessage(userPrompt, contextParts)}`;
+  const systemText = context.nativeEdit ? NATIVE_EDIT_INSTRUCTION : SYSTEM_PROMPT;
+  const fullPrompt = `${systemText}\n\n${buildUserMessage(userPrompt, contextParts)}`;
 
   // `codex exec` is the non-interactive subcommand (no TTY required)
   // --full-auto: auto-approve actions (alias for --sandbox workspace-write)
@@ -44,6 +46,12 @@ export async function chatCodexCli(
 
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
+
+  let aborted = false;
+  if (signal) {
+    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
+    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+  }
 
   let fullContent = "";
   let buffer = "";
@@ -82,6 +90,7 @@ export async function chatCodexCli(
   });
 
   proc.on("close", (code) => {
+    if (aborted) return; // client cancelled — stay silent
     // Process remaining buffer
     if (buffer.trim()) {
       try {

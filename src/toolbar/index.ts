@@ -2,7 +2,7 @@ import { TOOLBAR_CSS } from "./styles/toolbar.css.js";
 import * as ws from "./services/ws-client.js";
 import { inspectElement, showHighlight, hideHighlight, type SelectedElement } from "./services/dom-inspector.js";
 import { captureScreenshotWithFeedback } from "./services/capture.js";
-import { installNetworkCapture, installConsoleCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
+import { installNetworkCapture, installConsoleCapture, installRuntimeErrorCapture, buildContext, getNetworkLogs, getConsoleLogs } from "./services/context-builder.js";
 import { decodeBase64Utf8, encodeBase64Utf8, escapeHtml, renderLineDiff, renderMarkdown } from "./render-utils.js";
 import { clearToolbarState, restoreToolbarState, saveToolbarState } from "./state-persistence.js";
 
@@ -142,6 +142,10 @@ const state = {
   lastRedoPatch: null as RedoPatchRequest | null,
   sessionEstimatedCost: 0,
   minimized: false,
+  verifyAfterApply: true,       // run the project's typecheck/lint after applying a patch
+  selfCorrectRounds: 0,         // bounded self-correction counter (reset on each fresh prompt)
+  matchRetryRounds: 0,          // bounded re-prompt-on-failed-match counter (reset on each fresh prompt)
+  lastPlan: "",                 // the approved plan text, fed into the edit pass (H15)
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -219,6 +223,7 @@ function init() {
 
   installNetworkCapture();
   installConsoleCapture();
+  installRuntimeErrorCapture();
   checkForUpdates();
 
   // Connect to server — same origin (single port)
@@ -551,6 +556,100 @@ function patchFailureMessage(payload: any, fallback: string): string {
   return failed?.reason ? `${failed.file || "Patch"}: ${failed.reason}` : fallback;
 }
 
+const MAX_SELF_CORRECT = 2;
+const MAX_MATCH_RETRY = 2;
+
+/**
+ * H3: when a search block doesn't match the file, don't dead-end. Re-read the
+ * actual file(s), hand the model the real content + the failure reason, and ask
+ * it to regenerate an exact search block. Bounded by its own counter. Returns
+ * true if a re-prompt was issued (caller should then suppress the raw error).
+ */
+async function repromptOnMatchFailure(files: string[], reason: string): Promise<boolean> {
+  if (state.matchRetryRounds >= MAX_MATCH_RETRY || state.streaming) return false;
+  state.matchRetryRounds++;
+
+  const root = state.roots[0] || "";
+  const actual: string[] = [];
+  for (const f of files.slice(0, 3)) {
+    try {
+      const r = await ws.request("fs.read", { path: root ? `${root}/${f}` : f }).catch(() => null);
+      const content = String(r?.payload?.content || "");
+      if (content) actual.push(`### ${f}\n${content.slice(0, 8000)}`);
+    } catch { /* file may not exist */ }
+  }
+  if (!actual.length) return false; // nothing to show — let the caller surface the error
+
+  state.messages.push({
+    role: "assistant",
+    content: `That edit didn't match the file (${reason}). Re-reading the current source and retrying…`,
+  });
+  refreshPanelContent();
+  scrollChatToBottom();
+
+  const correction =
+    `Your previous edit could not be applied: ${reason}. The search block did not match the file exactly. ` +
+    `Here is the current content — copy the search block EXACTLY from it (preserving whitespace and indentation) ` +
+    `and return corrected modifications:\n\n${actual.join("\n\n")}`;
+  await sendPrompt(correction, true, undefined, true);
+  return true;
+}
+
+/**
+ * H6: the verification gate. After a patch group is applied, run the project's
+ * own typecheck/lint. If the edit broke the build, revert it and either hand the
+ * errors back to the model for a bounded self-correction, or (budget spent)
+ * surface the failure. Passing/inconclusive verification falls through to reload.
+ */
+async function verifyAndSettle(groupId: string, files: string[], reload: () => void): Promise<void> {
+  if (!state.verifyAfterApply || !files.length) { reload(); return; }
+
+  const statusEl = $panelBody.querySelector(".om-msg-system:last-child");
+  if (statusEl) statusEl.innerHTML += ' <span class="om-spinner"></span> verifying…';
+
+  let verdict: any;
+  try {
+    const res = await ws.request("fs.patch.verify", { files });
+    verdict = res?.payload;
+  } catch {
+    reload(); // verification itself couldn't run — don't block the edit
+    return;
+  }
+
+  if (verdict?.status !== "failed") {
+    // passed or inconclusive — the change stands
+    reload();
+    return;
+  }
+
+  // The edit broke verification. Revert the whole self-correction chain so we
+  // return to the last known-good state, then re-engage the model with the errors.
+  try { await ws.request("fs.patch.rollback", { groupId, chain: true }); } catch {}
+  const errorText = (verdict.errors || []).join("\n").slice(0, 2000) || "verification failed";
+
+  if (state.selfCorrectRounds < MAX_SELF_CORRECT) {
+    state.selfCorrectRounds++;
+    state.messages.push({
+      role: "assistant",
+      content: `That change failed verification and was reverted (self-correction ${state.selfCorrectRounds}/${MAX_SELF_CORRECT}). Re-checking against the errors…`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    const correction =
+      `Your previous edit to ${files.join(", ")} failed the project's type/lint check and was reverted. ` +
+      `Return corrected modifications that resolve these errors:\n\n${errorText}`;
+    await sendPrompt(correction, true, undefined, true);
+  } else {
+    state.messages.push({
+      role: "assistant",
+      content: `The change still failed verification after ${MAX_SELF_CORRECT} attempts, so it was reverted to the last working state. Errors:\n\n${errorText}`,
+    });
+    refreshPanelContent();
+    scrollChatToBottom();
+    reload();
+  }
+}
+
 async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
   let patch: FilePatch | null = null;
   try {
@@ -579,6 +678,10 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
     const preview = await ws.request("fs.patch.preview", { patches: [patch] });
     if (!preview?.payload?.ok) {
       const applyError = patchFailureMessage(preview?.payload, `Could not preview ${patch.file}`);
+      // H3: re-prompt with the real file content instead of dead-ending.
+      if (!(applyDiff as any)._batchMode && await repromptOnMatchFailure([patch.file], applyError)) {
+        return { ok: false, file: patch.file, error: applyError };
+      }
       state.messages.push({ role: "system", content: applyError });
       refreshPanelContent();
       scrollChatToBottom();
@@ -596,7 +699,10 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
 
     const groupId = result.payload.groupId || "";
     const idx = card?.dataset.diffIdx;
-    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file], patches: [patch] }));
+    // H14: surface non-exact (fuzzy) match confidence so the user can scrutinize it.
+    const confidence = (result.payload.changes || preview.payload.changes || [])
+      .find((c: any) => c.file === patch.file)?.confidence;
+    const appliedPayload = encodeBase64Utf8(JSON.stringify({ groupId, files: [patch.file], patches: [patch], confidence }));
     const message = `__APPLIED__${appliedPayload}`;
     if (idx !== undefined) state.messages[parseInt(idx)] = { role: "system", content: message };
     else state.messages.push({ role: "system", content: message });
@@ -604,11 +710,11 @@ async function applyDiff(target: HTMLElement): Promise<ApplyDiffResult> {
     refreshPanelContent();
     scrollChatToBottom();
 
-    // Auto-reload page after 1.5s so user sees the change
-    // (HMR-based dev servers handle this automatically, but static servers don't)
-    // Skip reload during batch apply-all (batchMode flag)
+    // Verify the edit, then auto-reload so the user sees the change.
+    // (HMR-based dev servers handle reload automatically, static servers don't.)
+    // Skip during batch apply-all (batchMode handles verify/reload once at the end).
     if (!(applyDiff as any)._batchMode) {
-      setTimeout(() => { window.location.reload(); }, 1500);
+      await verifyAndSettle(groupId, [patch.file], () => setTimeout(() => { window.location.reload(); }, 1500));
     }
 
     return { ok: true, file: patch.file, groupId };
@@ -772,7 +878,13 @@ async function handleAction(action: string, target: HTMLElement) {
     case "confirm-plan": {
       try {
         const prompt = decodeBase64Utf8(target.dataset.prompt || "");
-        void sendPrompt(prompt, true);
+        // H15: feed the approved plan into the edit pass (as part of the user turn,
+        // so it reaches CLI providers too) instead of silently re-deriving it.
+        const plan = state.lastPlan?.trim();
+        const editText = plan
+          ? `Approved implementation plan:\n${plan}\n\nImplement exactly this plan for the request: ${prompt}`
+          : prompt;
+        void sendPrompt(editText, true);
       } catch {}
       break;
     }
@@ -830,7 +942,10 @@ async function handleAction(action: string, target: HTMLElement) {
       try {
         const preview = await ws.request("fs.patch.preview", { patches });
         if (!preview?.payload?.ok) {
-          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${patchFailureMessage(preview?.payload, "Could not preview patch group")}` });
+          const reason = patchFailureMessage(preview?.payload, "Could not preview patch group");
+          // H3: re-prompt with the real file content instead of dead-ending.
+          if (await repromptOnMatchFailure(patches.map((p) => p.file), reason)) break;
+          state.messages.push({ role: "system", content: `Batch apply failed before writing. ${reason}` });
           refreshPanelContent();
           break;
         }
@@ -853,7 +968,7 @@ async function handleAction(action: string, target: HTMLElement) {
         }
         hideApplyBar();
         refreshPanelContent();
-        setTimeout(() => { window.location.reload(); }, 1500);
+        await verifyAndSettle(result.payload.groupId || "", files, () => setTimeout(() => { window.location.reload(); }, 1500));
       } catch (e: any) {
         state.messages.push({ role: "system", content: `Batch apply failed before writing. ${e.message}` });
         refreshPanelContent();
@@ -1301,7 +1416,11 @@ function renderChatHTML(): string {
         const applied = JSON.parse(decodeBase64Utf8(m.content.slice(11)));
         const files = Array.isArray(applied.files) ? applied.files : [];
         const label = files.length === 1 ? files[0] : `${files.length} files`;
-        return `<div class="om-msg om-msg-system">Applied patch group to ${escapeHtml(label)}. <button class="om-undo-btn" data-action="rollback-patch" data-group-id="${escapeHtml(applied.groupId || "")}">Rollback</button></div>`;
+        const conf = typeof applied.confidence === "number" ? applied.confidence : undefined;
+        const confNote = (conf !== undefined && conf < 1)
+          ? ` <span class="om-fuzzy-badge" title="Applied via fuzzy match — verify the result">~${Math.round(conf * 100)}% match</span>`
+          : "";
+        return `<div class="om-msg om-msg-system">Applied patch group to ${escapeHtml(label)}.${confNote} <button class="om-undo-btn" data-action="rollback-patch" data-group-id="${escapeHtml(applied.groupId || "")}">Rollback</button></div>`;
       } catch {
         return `<div class="om-msg om-msg-system">Applied patch group</div>`;
       }
@@ -1472,9 +1591,13 @@ async function retryPrompt(target: HTMLElement) {
   }
 }
 
-async function sendPrompt(overrideText?: string, skipPlan = false, contextOverride?: any) {
+async function sendPrompt(overrideText?: string, skipPlan = false, contextOverride?: any, isSelfCorrect = false) {
   const text = (overrideText ?? $promptInput.value).trim();
   if (!text || state.streaming) return;
+
+  // A fresh, user-initiated prompt resets the self-correction budget; a
+  // self-correction re-prompt must NOT, or the loop would never terminate.
+  if (!isSelfCorrect) { state.selfCorrectRounds = 0; state.matchRetryRounds = 0; }
 
   if (!state.provider || (!state.hasApiKey && !MODEL_REGISTRY[state.provider]?.local)) {
     openPanel("settings");
@@ -1533,6 +1656,7 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
       selectedElement: state.selectedElement,
     });
     const files = grounded?.payload?.files;
+    if (grounded?.payload?.conventions) context.repoConventions = grounded.payload.conventions; // H15
     if (Array.isArray(files) && files.length) {
       context.files = files.map((file: any) => ({ path: file.path, content: file.content }));
       state.groundedFiles = files.map((file: any) => file.path);
@@ -1892,13 +2016,19 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
     model: state.model,
   };
 
-  // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry
-  const MAX_RETRIES = 4;
-  let retryCount = 0;
+  // Auto-retry loop: if LLM says "NEED_FILE: path" or "SEARCH_FILES:", read and retry.
+  // H10: NEED_FILE and SEARCH_FILES get separate budgets so reading files doesn't
+  // starve codebase searches (and vice versa); a total cap guards against loops.
+  const MAX_NEED_FILE = 5;
+  const MAX_SEARCH = 4;
+  const MAX_TOTAL_ITERS = 10;
+  let needFileCount = 0;
+  let searchCount = 0;
+  let iters = 0;
   const retriedFiles = new Set<string>(); // prevent re-reading same file
 
   try {
-    while (retryCount <= MAX_RETRIES) {
+    while (iters++ < MAX_TOTAL_ITERS) {
       state.streamContent = "";
 
       const result = await ws.stream(
@@ -1945,10 +2075,10 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
         || decodedContent.match(/(?:source\s+(?:file|code)\s+(?:for|of|at))\s+[`"']?([a-zA-Z0-9_/.@-]+\.[a-z]{1,5})[`"']?/i)
         || responseContent.match(/NEED_FILE:\s*\\?"?([^\s"\\}\]]+)"?/)
       );
-      if (needFileMatch && retryCount < MAX_RETRIES && !retriedFiles.has(needFileMatch[1].trim())) {
+      if (needFileMatch && needFileCount < MAX_NEED_FILE && !retriedFiles.has(needFileMatch[1].trim())) {
         const neededFile = needFileMatch[1].trim();
         retriedFiles.add(neededFile);
-        retryCount++;
+        needFileCount++;
 
         // Show transient status (update the spinner, don't add permanent messages)
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
@@ -1984,6 +2114,12 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
             } else {
               context.files.push({ path: neededFile, content: fullContent });
             }
+            // Keep the grounded-files state in sync with context so the chips and
+            // later prompts don't diverge from what was actually sent (hardening).
+            if (!state.groundedFiles.includes(neededFile)) {
+              state.groundedFiles.push(neededFile);
+              state.groundedFileReasons[neededFile] = ["requested via NEED_FILE"];
+            }
           } else {
             state.messages.push({ role: "system", content: `Could not read ${neededFile}` });
             break;
@@ -2003,10 +2139,10 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
       );
       // Prevent infinite loop: skip if we already searched for this pattern
       const alreadySearched = (context as any).searchResults?.some((s: any) => s.query === searchMatch?.[1]);
-      if (searchMatch && retryCount < MAX_RETRIES && !alreadySearched) {
+      if (searchMatch && searchCount < MAX_SEARCH && !alreadySearched) {
         const pattern = searchMatch[1];
         const searchPath = searchMatch[2] || "";
-        retryCount++;
+        searchCount++;
 
         const spinnerEl = $panelBody.querySelector(".om-msg-assistant:last-child");
         if (spinnerEl) spinnerEl.innerHTML = `<span class="om-spinner"></span> ${escapeHtml(`Searching: "${pattern}"...`)}`;
@@ -2030,8 +2166,31 @@ async function sendPrompt(overrideText?: string, skipPlan = false, contextOverri
         .replace(/^NEED_FILE:\s*\S+\s*/gm, "")
         .replace(/^SEARCH_FILES:\s*"[^"]*"(?:\s+in\s+\S+)?\s*/gm, "")
         .trim();
+
+      // H5: be honest about how the response parsed. A stream cut mid-array looks
+      // identical to "no change" — don't present a salvaged/truncated/failed parse
+      // as success when there's nothing to apply.
+      const parseStatus = result?.parseStatus as
+        | "clean" | "salvaged" | "truncated" | "failed" | undefined;
+      const parseUnreliable = !!parseStatus && parseStatus !== "clean";
+      if (parseUnreliable && !hasRealModifications) {
+        const why = parseStatus === "truncated"
+          ? "The response was cut off before it finished — the edits are incomplete."
+          : parseStatus === "salvaged"
+          ? "I could only partially read the response, so the proposed edits were lost."
+          : "I couldn't parse a usable response.";
+        const tail = (parseStatus !== "failed" && displayContent) ? `\n\n${displayContent}` : "";
+        state.messages.push({ role: "assistant", content: `${why}${tail}` });
+        state.messages.push({ role: "system", content: `__RETRY__${encodeBase64Utf8(text)}` });
+        break;
+      }
+
       if (!displayContent) {
         displayContent = "I couldn't determine the exact change from the available files. Try selecting a more specific element or giving more detail.";
+      }
+      if (parseUnreliable) {
+        // Some edits parsed but the stream may be incomplete — keep what we got, but warn.
+        displayContent = `(Heads up — the response may have been cut off, so double-check the edits below.)\n\n${displayContent}`;
       }
       state.messages.push({ role: "assistant", content: displayContent });
 
@@ -2130,7 +2289,9 @@ async function runPlanBeforeEdit(text: string) {
         scrollChatToBottom();
       }
     );
-    state.messages.push({ role: "assistant", content: result?.content || state.streamContent || "Plan generated." });
+    const planText = result?.content || state.streamContent || "";
+    state.lastPlan = planText; // H15: fed into the edit pass on confirm
+    state.messages.push({ role: "assistant", content: planText || "Plan generated." });
     state.messages.push({ role: "system", content: `__PLAN_CONFIRM__${encodeBase64Utf8(text)}` });
   } catch (e: any) {
     state.messages.push({ role: "system", content: `Plan failed: ${e.message}` });

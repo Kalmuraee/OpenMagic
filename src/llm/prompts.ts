@@ -31,6 +31,7 @@ You MUST respond with valid JSON in this exact format:
 
 ## Rules
 1. If the user is asking a QUESTION (not requesting a change), respond with {"modifications":[],"explanation":"your answer here"}. Only propose modifications when the user explicitly wants something changed.
+1b. If the request is genuinely ambiguous (multiple plausible files/targets and getting it wrong would edit the wrong code), respond with {"modifications":[],"explanation":"a short clarifying question"} instead of guessing. Follow the Repo Conventions block when present.
 2. NEVER use delete+create to modify an existing file. Always use edit with search/replace. Only use create for genuinely new files that don't exist yet.
 3. Copy the search string EXACTLY from the grounded source files — do not retype, reformat, or change whitespace/indentation
 4. Include 3-5 lines of surrounding context in the search field to ensure uniqueness
@@ -46,8 +47,15 @@ You MUST respond with valid JSON in this exact format:
 14. Use cssVariables to leverage existing design tokens (var(--color-primary)) instead of hardcoding hex values.
 15. Check activeBreakpoints to know which responsive breakpoint is active. Suggest responsive-aware changes.
 16. Check visibilityState — the element may be scrolled out of view, hidden, or inside a scrollable container; parentScrollContainer identifies the nearest scrolling ancestor.
-17. Always preserve existing code style, conventions, and indentation
-18. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
+17. If Runtime Errors are present, they are uncaught exceptions or framework error-overlay output from the live app — they usually point directly at the bug. Prioritize fixing them and use the stack/source location to find the file.
+18. Always preserve existing code style, conventions, and indentation
+19. ALWAYS respond with valid JSON only — no text before or after the JSON object`;
+
+// H9: plain instruction for CLI agents in native-edit mode. They edit the working
+// tree directly (we capture + revert + route through review), so NO JSON contract.
+export const NATIVE_EDIT_INSTRUCTION = `You are OpenMagic, working directly in the developer's codebase with full file access.
+Make the requested change by editing the project's files directly. Investigate as needed, keep changes minimal, and match the existing code style and conventions.
+Do NOT output JSON or diffs — just edit the files. When finished, briefly summarize what you changed.`;
 
 export function buildContextParts(context: LlmContext): Parameters<typeof buildUserMessage>[1] {
   const parts: Parameters<typeof buildUserMessage>[1] = {};
@@ -118,10 +126,16 @@ export function buildContextParts(context: LlmContext): Parameters<typeof buildU
     parts.files = context.files;
   }
   if (context.projectTree) parts.projectTree = context.projectTree;
+  if ((context as any).repoConventions) parts.repoConventions = (context as any).repoConventions;
   if ((context as any).pageUrl) parts.pageUrl = (context as any).pageUrl;
   if ((context as any).pageTitle) parts.pageTitle = (context as any).pageTitle;
   if (context.networkLogs) parts.networkLogs = context.networkLogs.map(l => `${l.method} ${l.url} → ${l.status || "pending"}`).join("\n");
   if (context.consoleLogs) parts.consoleLogs = context.consoleLogs.map(l => `[${l.level}] ${l.args.join(" ")}`).join("\n");
+  if (context.runtimeErrors?.length) {
+    parts.runtimeErrors = context.runtimeErrors
+      .map(e => `[${e.type}] ${e.message}${e.source ? ` (${e.source})` : ""}${e.stack ? `\n${e.stack}` : ""}`)
+      .join("\n\n");
+  }
   if ((context as any).searchResults?.length) {
     parts.searchResults = (context as any).searchResults.map(
       (s: any) => `Search: "${s.query}"\n${s.matches.map((m: any) => `  ${m.file}:${m.lineNum}: ${m.line}`).join("\n")}`
@@ -140,7 +154,9 @@ export function buildUserMessage(
     filePath?: string;
     networkLogs?: string;
     consoleLogs?: string;
+    runtimeErrors?: string;
     projectTree?: string;
+    repoConventions?: string;
     pageUrl?: string;
     pageTitle?: string;
     searchResults?: string;
@@ -155,6 +171,10 @@ export function buildUserMessage(
 
   if (context.projectTree) {
     parts.push(`## Project Structure\n\`\`\`\n${context.projectTree}\n\`\`\``);
+  }
+
+  if (context.repoConventions) {
+    parts.push(`## Repo Conventions (match these)\n\`\`\`\n${context.repoConventions}\n\`\`\``);
   }
 
   // Grounded source files
@@ -175,6 +195,10 @@ export function buildUserMessage(
 
   if (context.consoleLogs) {
     parts.push(`## Console Output\n\`\`\`\n${context.consoleLogs}\n\`\`\``);
+  }
+
+  if (context.runtimeErrors) {
+    parts.push(`## Runtime Errors (uncaught — likely the bug to fix)\n\`\`\`\n${context.runtimeErrors}\n\`\`\``);
   }
 
   if (context.searchResults) {

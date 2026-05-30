@@ -1,6 +1,7 @@
-import type { ChatMessage, ContentPart, LlmContext } from "../shared-types.js";
+import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
+import { mapOpenAiEffort, resolveMaxOutput, resolveReasoningLevel } from "./thinking.js";
 
 interface OpenAICompatibleRequest {
   model: string;
@@ -18,10 +19,11 @@ export function buildOpenAICompatibleRequest(
   provider: string,
   model: string,
   messages: ChatMessage[],
-  context: LlmContext
+  context: LlmContext,
+  modelInfoOverride?: ModelInfo
 ): OpenAICompatibleRequest {
   const providerConfig = MODEL_REGISTRY[provider];
-  const modelInfo = providerConfig?.models.find((m) => m.id === model);
+  const modelInfo = modelInfoOverride ?? providerConfig?.models.find((m) => m.id === model);
 
   const apiMessages: OpenAICompatibleRequest["messages"] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -70,20 +72,19 @@ export function buildOpenAICompatibleRequest(
     stream: true,
   };
 
+  // Allow the model its full output budget (was hardcoded to 4096), so multi-file
+  // edits don't get cut off mid-JSON. max_tokens is a ceiling, not a reservation.
+  const maxOut = resolveMaxOutput(modelInfo);
   if (usesCompletionTokens) {
-    body.max_completion_tokens = 4096;
+    body.max_completion_tokens = maxOut;
   } else {
-    body.max_tokens = 4096;
+    body.max_tokens = maxOut;
   }
 
-  if (modelInfo?.thinking?.supported && modelInfo.thinking.paramType === "level") {
-    body.reasoning_effort = modelInfo.thinking.defaultLevel || "medium";
-    const limit = Math.min(modelInfo.maxOutput, 16384);
-    if (usesCompletionTokens) {
-      body.max_completion_tokens = limit;
-    } else {
-      body.max_tokens = limit;
-    }
+  if (modelInfo?.thinking?.paramType === "level") {
+    const level = resolveReasoningLevel(context, modelInfo);
+    const effort = level ? mapOpenAiEffort(level) : undefined;
+    if (effort) body.reasoning_effort = effort;
   }
 
   return body;
@@ -96,8 +97,9 @@ export async function chatOpenAICompatible(
   messages: ChatMessage[],
   context: LlmContext,
   onChunk: (chunk: string) => void,
-  onDone: (result: { content: string }) => void,
-  onError: (error: string) => void
+  onDone: (result: { content: string; truncated?: boolean }) => void,
+  onError: (error: string) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   const providerConfig = MODEL_REGISTRY[provider];
   if (!providerConfig) {
@@ -125,6 +127,7 @@ export async function chatOpenAICompatible(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -149,6 +152,7 @@ export async function chatOpenAICompatible(
     const decoder = new TextDecoder();
     let fullContent = "";
     let buffer = "";
+    let truncated = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -170,14 +174,17 @@ export async function chatOpenAICompatible(
             fullContent += delta;
             onChunk(delta);
           }
+          // Output budget hit before the model finished — content is incomplete.
+          if (parsed.choices?.[0]?.finish_reason === "length") truncated = true;
         } catch {
           // Skip malformed chunks
         }
       }
     }
 
-    onDone({ content: fullContent });
+    onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
+    if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     onError(`Request failed: ${(e as Error).message}`);
   }
 }

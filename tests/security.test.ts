@@ -18,6 +18,13 @@ describe("security", () => {
     expect(validateToken("wrong-token")).toBe(false);
   });
 
+  it("rejects a token of the wrong length without throwing (constant-time path)", () => {
+    const token = generateSessionToken();
+    expect(validateToken(token.slice(0, 32))).toBe(false);
+    expect(validateToken(token + "extra")).toBe(false);
+    expect(validateToken("")).toBe(false);
+  });
+
   it("getSessionToken returns current token", () => {
     const token = generateSessionToken();
     expect(getSessionToken()).toBe(token);

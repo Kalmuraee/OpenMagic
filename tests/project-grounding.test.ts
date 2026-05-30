@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { detectFramework, groundProject } from "../src/project-grounding.js";
+import { detectFramework, detectRepoConventions, groundProject } from "../src/project-grounding.js";
 
 const ROOT = join(process.cwd(), ".test-grounding-root");
 
@@ -25,6 +25,33 @@ afterEach(() => {
 describe("project grounding", () => {
   it("detects the framework", () => {
     expect(detectFramework(ROOT)).toBe("next");
+  });
+
+  it("summarizes repo conventions (H15)", () => {
+    const conventions = detectRepoConventions(ROOT);
+    expect(conventions).toContain("Framework: next");
+    expect(conventions).toContain("Components live in: src/components/");
+    expect(conventions).toContain("TypeScript:");
+    // also surfaced on the ground result
+    const result = groundProject(ROOT, { pageUrl: "http://localhost/dashboard", promptText: "dashboard" });
+    expect(result.conventions).toContain("Framework: next");
+  });
+
+  it("marks truncated files instead of silently slicing them (H10)", () => {
+    const big = "export const data = '" + "x".repeat(20000) + "';\n// dashboard card marker\n";
+    writeFileSync(join(ROOT, "src/components/DashboardCard.tsx"), big);
+
+    const result = groundProject(ROOT, {
+      pageUrl: "http://localhost:4567/dashboard",
+      promptText: "make dashboard card responsive",
+      selectedElement: { componentHint: "DashboardCard", className: "dashboard-card" },
+      contextBudget: 100000,
+    });
+
+    const card = result.files.find((f) => f.path === "src/components/DashboardCard.tsx");
+    expect(card?.truncated).toBe(true);
+    expect(card?.content).toContain("[TRUNCATED");
+    expect(card?.content).toContain("NEED_FILE: src/components/DashboardCard.tsx");
   });
 
   it("grounds route, component, import, and CSS files with reasons", () => {

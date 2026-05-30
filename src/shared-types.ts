@@ -20,9 +20,11 @@ export type ClientMessageType =
   | "fs.patch.preview"
   | "fs.patch.apply"
   | "fs.patch.rollback"
+  | "fs.patch.verify"
   | "fs.list"
   | "fs.grep"
   | "llm.chat"
+  | "llm.cancel"
   | "provider.models"
   | "provider.testModel"
   | "project.ground"
@@ -73,6 +75,7 @@ export type ServerMessageType =
   | "fs.patch.previewed"
   | "fs.patch.applied"
   | "fs.patch.rolledback"
+  | "fs.patch.verified"
   | "fs.tree"
   | "fs.grep.result"
   | "provider.models.result"
@@ -100,8 +103,13 @@ export interface LlmContext {
   screenshot?: string; // base64 data URL
   networkLogs?: NetworkLogEntry[];
   consoleLogs?: ConsoleLogEntry[];
+  runtimeErrors?: RuntimeErrorEntry[];
   files?: FileContext[];
   projectTree?: string;
+  // Per-request thinking controls (override registry defaults when present).
+  reasoningLevel?: ThinkingLevel;   // for paramType "level" providers
+  thinkingBudget?: number;          // for paramType "budget" providers (token count)
+  nativeEdit?: boolean;             // H9: CLI agent edits files directly (plain prompt, no JSON contract)
 }
 
 export interface ElementInfo {
@@ -134,6 +142,14 @@ export interface ConsoleLogEntry {
   timestamp: number;
 }
 
+export interface RuntimeErrorEntry {
+  type: "error" | "unhandledrejection" | "overlay";
+  message: string;
+  source?: string;
+  stack?: string;
+  timestamp: number;
+}
+
 export interface FileContext {
   path: string;
   content: string;
@@ -155,6 +171,13 @@ export interface LlmResponse {
   explanation: string;
 }
 
+// How confident we are in the structured response we parsed back from the model:
+//  - clean:     a complete, valid JSON object was parsed
+//  - truncated: the stream was cut mid-JSON and we repaired the braces/strings
+//  - salvaged:  only the explanation could be regex-recovered (modifications lost)
+//  - failed:    nothing parseable was found
+export type ParseStatus = "clean" | "salvaged" | "truncated" | "failed";
+
 // --- Config ---
 
 export interface OpenMagicConfig {
@@ -163,6 +186,8 @@ export interface OpenMagicConfig {
   apiKey?: string;
   apiKeys?: Record<string, string>; // per-provider key storage
   planBeforeEdit?: boolean;
+  useTools?: boolean;   // opt-in: native tool-calling for tool-capable providers (H11)
+  nativeEdit?: boolean; // opt-in: CLI agents edit the tree natively, captured+reverted+reviewed (H9)
   customModels?: Record<string, string[]>;
   preferredThinkingMode?: Record<string, string>;
   roots: string[];

@@ -153,22 +153,97 @@ describe("patch apply", () => {
     expect(readFileSync(join(ROOT, "indent.ts"), "utf-8")).toContain("\tif (ready) {\n\t\treturn two();\n\t}");
   });
 
-  it("applies fuzzy replacement for a high-confidence near match", () => {
-    writeFileSync(join(ROOT, "fuzzy.ts"), "export function total() {\n  return price + tax;\n}\n");
+  it("applies fuzzy replacement for a genuinely high-confidence near match", () => {
+    // Long block with a single-character typo ("shippin" vs "shipping") → similarity
+    // well above the 0.92 gate, so it should still apply.
+    const actual =
+      "export function computeOrderSummary(items) {\n" +
+      "  const subtotal = items.reduce((a, b) => a + b.price, 0);\n" +
+      "  return subtotal + tax + shipping;\n" +
+      "}\n";
+    writeFileSync(join(ROOT, "fuzzy.ts"), actual);
 
     const result = applyPatchGroup(ROOT, {
       patches: [
         {
           type: "replace",
           file: "fuzzy.ts",
+          search:
+            "export function computeOrderSummary(items) {\n" +
+            "  const subtotal = items.reduce((a, b) => a + b.price, 0);\n" +
+            "  return subtotal + tax + shippin;\n" +
+            "}",
+          replace:
+            "export function computeOrderSummary(items) {\n" +
+            "  const subtotal = items.reduce((a, b) => a + b.price, 0);\n" +
+            "  return subtotal + tax + shipping + discount;\n" +
+            "}",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.changes[0].confidence).toBeGreaterThanOrEqual(0.92);
+    expect(readFileSync(join(ROOT, "fuzzy.ts"), "utf-8")).toContain("subtotal + tax + shipping + discount");
+  });
+
+  it("rejects a borderline fuzzy match below the confidence gate (H14)", () => {
+    // Short block, two-character difference ("taxes" vs "tax") → ~0.88 similarity,
+    // below the raised 0.92 gate. Previously this applied; now it must be refused.
+    writeFileSync(join(ROOT, "borderline.ts"), "export function total() {\n  return price + tax;\n}\n");
+
+    const result = applyPatchGroup(ROOT, {
+      patches: [
+        {
+          type: "replace",
+          file: "borderline.ts",
           search: "export function total() {\n  return price + taxes;\n}",
           replace: "export function total() {\n  return price + shipping + tax;\n}",
         },
       ],
     });
 
-    expect(result.ok).toBe(true);
-    expect(readFileSync(join(ROOT, "fuzzy.ts"), "utf-8")).toContain("price + shipping + tax");
+    expect(result.ok).toBe(false);
+    expect(result.applied).toBe(false);
+    // file untouched
+    expect(readFileSync(join(ROOT, "borderline.ts"), "utf-8")).toContain("return price + tax;");
+  });
+
+  it("refuses fuzzy matching entirely for multi-hunk groups (H14)", () => {
+    const a =
+      "export function computeOrderSummary(items) {\n" +
+      "  const subtotal = items.reduce((acc, b) => acc + b.price, 0);\n" +
+      "  return subtotal + tax + shipping;\n" +
+      "}\n";
+    writeFileSync(join(ROOT, "multi-a.ts"), a);
+    writeFileSync(join(ROOT, "multi-b.ts"), "const flag = true;\n");
+
+    const result = applyPatchGroup(ROOT, {
+      patches: [
+        // exact match — fine on its own
+        { type: "replace", file: "multi-b.ts", search: "const flag = true;", replace: "const flag = false;" },
+        // would be a high-confidence fuzzy match in isolation, but this is a 2-replace group
+        {
+          type: "replace",
+          file: "multi-a.ts",
+          search:
+            "export function computeOrderSummary(items) {\n" +
+            "  const subtotal = items.reduce((acc, b) => acc + b.price, 0);\n" +
+            "  return subtotal + tax + shippin;\n" +
+            "}",
+          replace:
+            "export function computeOrderSummary(items) {\n" +
+            "  const subtotal = items.reduce((acc, b) => acc + b.price, 0);\n" +
+            "  return subtotal + tax + shipping + discount;\n" +
+            "}",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.applied).toBe(false);
+    // nothing applied — the exact-match hunk must not have been written either
+    expect(readFileSync(join(ROOT, "multi-b.ts"), "utf-8")).toContain("const flag = true;");
   });
 
   it("handles unicode and blank lines in replacement blocks", () => {

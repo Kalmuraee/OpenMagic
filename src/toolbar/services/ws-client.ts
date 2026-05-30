@@ -4,6 +4,7 @@ let ws: WebSocket | null = null;
 let handlers: Map<string, MessageHandler> = new Map();
 let globalHandlers: ((msg: any) => void)[] = [];
 let messageQueue: { id: string; data: string; type: string }[] = [];
+const activeStreamIds = new Set<string>();
 let connected = false;
 let shouldReconnect = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -165,10 +166,19 @@ export function stream(
     // may pause for minutes while reading files or thinking between turns.
     // 5 min idle = generous enough for multi-turn agents.
     const IDLE_MS = 300000;
+    activeStreamIds.add(id);
     let timeout = setTimeout(onTimeout, IDLE_MS);
-    function onTimeout() {
+    function cleanup() {
+      clearTimeout(timeout);
       handlers.delete(id);
+      activeStreamIds.delete(id);
+    }
+    function onTimeout() {
+      cleanup();
       messageQueue = messageQueue.filter((queued) => queued.id !== id);
+      // Tell the server to abort the underlying fetch / CLI child so it doesn't
+      // keep running (and burning tokens) after we've given up on this stream.
+      send({ id: generateId(), type: "llm.cancel", payload: { id } });
       reject(new Error("Stream timeout"));
     }
     function resetTimeout() {
@@ -181,18 +191,30 @@ export function stream(
         resetTimeout();
         onChunk(msg.payload?.delta || "");
       } else if (msg.type === "llm.done") {
-        clearTimeout(timeout);
-        handlers.delete(id);
+        cleanup();
         resolve(msg.payload);
       } else if (msg.type === "llm.error" || msg.type === "error") {
-        clearTimeout(timeout);
-        handlers.delete(id);
+        cleanup();
         reject(new Error(msg.payload?.message || "Stream error"));
       }
     });
 
     send({ id, type, payload });
   });
+}
+
+/**
+ * Cancel every in-flight stream: tell the server to abort the underlying work
+ * and reject the local promises. Used when the user stops generation or the
+ * panel is torn down.
+ */
+export function cancelAllStreams(): void {
+  for (const id of activeStreamIds) {
+    send({ id: generateId(), type: "llm.cancel", payload: { id } });
+    const handler = handlers.get(id);
+    if (handler) handler({ type: "llm.error", id, payload: { message: "Cancelled" } });
+  }
+  activeStreamIds.clear();
 }
 
 export function onMessage(handler: (msg: any) => void): () => void {

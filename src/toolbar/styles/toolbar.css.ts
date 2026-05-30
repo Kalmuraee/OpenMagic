@@ -146,6 +146,7 @@ export const TOOLBAR_CSS = `
 .om-prompt-chip-x:hover { opacity: 1; }
 .om-prompt-chip-tokens { color: #888; background: transparent; border: 1px solid rgba(255,255,255,0.06); font-size: 9px; }
 .om-prompt-chip-warn { color: #fdcb6e; border-color: rgba(253,203,110,0.18); }
+.om-fuzzy-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px; color: #fdcb6e; background: rgba(253,203,110,0.1); border: 1px solid rgba(253,203,110,0.2); vertical-align: middle; }
 
 .om-prompt-input {
   flex: 1;

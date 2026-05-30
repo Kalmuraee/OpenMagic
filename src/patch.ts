@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { deleteFileSafe, isPathSafe, readFileSafe, writeFileSafe } from "./filesystem.js";
 
 export type FilePatch =
@@ -10,6 +11,9 @@ export type FilePatch =
 export interface PatchGroupRequest {
   patches: FilePatch[];
   dryRun?: boolean;
+  // Links a self-correction round to the group it is fixing, so the whole chain
+  // can be rolled back to the original (pre-first-edit) content. See rollbackChain.
+  parentGroupId?: string;
 }
 
 export interface PatchPreviewChange {
@@ -44,6 +48,7 @@ interface PlannedPatch {
 interface PatchManifest {
   groupId: string;
   timestamp: number;
+  parentGroupId?: string;
   files: Array<{
     path: string;
     existed: boolean;
@@ -52,6 +57,65 @@ interface PatchManifest {
 }
 
 const manifests = new Map<string, PatchManifest>();
+
+// Manifests are persisted to disk so undo survives a restart/crash. The dir is
+// env-overridable for tests; otherwise it lives under the user's config dir.
+function manifestDir(): string {
+  return process.env.OPENMAGIC_MANIFEST_DIR || join(homedir(), ".openmagic", "manifests");
+}
+
+function manifestPath(groupId: string): string {
+  return join(manifestDir(), `${groupId}.json`);
+}
+
+function persistManifest(manifest: PatchManifest): void {
+  try {
+    mkdirSync(manifestDir(), { recursive: true });
+    const tmp = `${manifestPath(manifest.groupId)}.tmp`;
+    writeFileSync(tmp, JSON.stringify(manifest), "utf-8");
+    renameSync(tmp, manifestPath(manifest.groupId));
+  } catch {
+    // Disk persistence is best-effort — the in-memory map still allows undo
+    // within this process even if the home dir is read-only.
+  }
+}
+
+function loadManifest(groupId: string): PatchManifest | undefined {
+  const mem = manifests.get(groupId);
+  if (mem) return mem;
+  try {
+    return JSON.parse(readFileSync(manifestPath(groupId), "utf-8")) as PatchManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+function forgetManifest(groupId: string): void {
+  manifests.delete(groupId);
+  try { unlinkSync(manifestPath(groupId)); } catch { /* already gone */ }
+}
+
+/** Drop persisted manifests older than maxAgeMs (called on startup). */
+export function pruneOldManifests(maxAgeMs: number): void {
+  try {
+    for (const file of readdirSync(manifestDir())) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const manifest = JSON.parse(readFileSync(join(manifestDir(), file), "utf-8")) as PatchManifest;
+        if (Date.now() - (manifest.timestamp || 0) > maxAgeMs) unlinkSync(join(manifestDir(), file));
+      } catch {
+        unlinkSync(join(manifestDir(), file)); // unreadable/corrupt → drop
+      }
+    }
+  } catch {
+    // no manifest dir yet — nothing to prune
+  }
+}
+
+// Trigram-similarity floor for the riskiest (fuzzy) match tier. Deliberately
+// high: below this we refuse rather than guess. Exact/whitespace/indentation
+// tiers (confidence >= 0.9) are unaffected.
+export const FUZZY_MIN_CONFIDENCE = 0.92;
 
 export function previewPatch(root: string, patch: FilePatch): PatchPreviewResult {
   const planned = planPatches(root, [patch]);
@@ -84,6 +148,7 @@ export function applyPatchGroup(root: string, request: PatchGroupRequest): Patch
   const manifest: PatchManifest = {
     groupId,
     timestamp: Date.now(),
+    parentGroupId: request.parentGroupId,
     files: planned.map((item) => ({
       path: item.path,
       existed: item.existed,
@@ -101,12 +166,14 @@ export function applyPatchGroup(root: string, request: PatchGroupRequest): Patch
     }
 
     if (!result.ok) {
-      rollbackApplied(root, applied);
+      const rollback = rollbackApplied(root, applied);
+      const reason = (result.error || "Patch write failed") +
+        (rollback.ok ? "" : ` (rollback also failed: ${rollback.errors.join("; ")})`);
       return {
         ok: false,
         applied: false,
         changes: planned.map((plannedItem) => plannedItem === item
-          ? { ...plannedItem.change, ok: false, reason: result.error || "Patch write failed" }
+          ? { ...plannedItem.change, ok: false, reason }
           : plannedItem.change),
       };
     }
@@ -115,11 +182,12 @@ export function applyPatchGroup(root: string, request: PatchGroupRequest): Patch
   }
 
   manifests.set(groupId, manifest);
+  persistManifest(manifest);
   return { ...preview, groupId, applied: true };
 }
 
 export function rollbackPatchGroup(root: string, groupId: string): { ok: boolean; error?: string; groupId: string; files?: string[] } {
-  const manifest = manifests.get(groupId);
+  const manifest = loadManifest(groupId);
   if (!manifest) return { ok: false, groupId, error: "Patch group not found" };
 
   for (const file of manifest.files) {
@@ -132,8 +200,32 @@ export function rollbackPatchGroup(root: string, groupId: string): { ok: boolean
     }
   }
 
-  manifests.delete(groupId);
+  forgetManifest(groupId);
   return { ok: true, groupId, files: manifest.files.map((file) => file.path) };
+}
+
+/**
+ * Roll back a self-correction chain to the last-working (pre-first-edit) state.
+ * Starting from the latest group, undo it then walk parentGroupId pointers,
+ * undoing each — so each manifest restores the content captured before its round.
+ */
+export function rollbackChain(root: string, groupId: string): { ok: boolean; error?: string; groupId: string; files?: string[] } {
+  const visited = new Set<string>();
+  const files: string[] = [];
+  let current: string | undefined = groupId;
+
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const manifest = loadManifest(current);
+    if (!manifest) break;
+    const parent = manifest.parentGroupId;
+    const rb = rollbackPatchGroup(root, current);
+    if (!rb.ok) return { ok: false, groupId, error: rb.error };
+    if (rb.files) files.push(...rb.files);
+    current = parent;
+  }
+
+  return { ok: true, groupId, files: [...new Set(files)] };
 }
 
 export function clearPatchManifests(): void {
@@ -142,6 +234,12 @@ export function clearPatchManifests(): void {
 
 function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
   const stagedContent = new Map<string, { existed: boolean; content: string; originalContent: string }>();
+
+  // Fuzzy (trigram) matching is the only non-deterministic tier. In a multi-hunk
+  // group a single wrong fuzzy match can silently corrupt one file while others
+  // apply cleanly, so we only permit it when the group has a single replace.
+  const replaceCount = patches.filter((p) => p.type === "replace").length;
+  const allowFuzzy = replaceCount <= 1;
 
   return patches.map((patch) => {
     const path = resolvePatchPath(root, patch.file);
@@ -214,7 +312,7 @@ function planPatches(root: string, patches: FilePatch[]): PlannedPatch[] {
       };
     }
 
-    const match = findReplacement(base.content, patch.search, patch.replace);
+    const match = findReplacement(base.content, patch.search, patch.replace, allowFuzzy);
     if (!match.ok) {
       return {
         patch,
@@ -274,7 +372,8 @@ function loadBaseContent(
 function findReplacement(
   content: string,
   search: string,
-  replace: string
+  replace: string,
+  allowFuzzy = true
 ): { ok: true; start: number; end: number; confidence: number; replace?: string } | { ok: false; reason: string } {
   if (!search) return { ok: false, reason: "Replace patch is missing search text" };
 
@@ -307,9 +406,15 @@ function findReplacement(
     return { ...indentation.match, ok: true, confidence: 0.9 };
   }
 
+  if (!allowFuzzy) {
+    return { ok: false, reason: "No exact/whitespace/indentation match; fuzzy matching is disabled for multi-hunk patch groups" };
+  }
+
   const fuzzy = fuzzyLineMatch(content, search);
   if (!fuzzy) return { ok: false, reason: "No matching code found" };
-  if (fuzzy.confidence < 0.8) return { ok: false, reason: `Low-confidence fuzzy match (${fuzzy.confidence.toFixed(2)})` };
+  if (fuzzy.confidence < FUZZY_MIN_CONFIDENCE) {
+    return { ok: false, reason: `Low-confidence fuzzy match (${fuzzy.confidence.toFixed(2)} < ${FUZZY_MIN_CONFIDENCE}); refusing to guess` };
+  }
 
   return { ok: true, start: fuzzy.start, end: fuzzy.end, confidence: fuzzy.confidence };
 }
@@ -462,16 +567,22 @@ function trigrams(value: string): Set<string> {
   return result;
 }
 
-function rollbackApplied(root: string, applied: PlannedPatch[]): void {
+function rollbackApplied(root: string, applied: PlannedPatch[]): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
   for (const item of [...applied].reverse()) {
     try {
       if (item.existed) {
-        writeFileSafe(item.path, item.originalContent, [root]);
+        const r = writeFileSafe(item.path, item.originalContent, [root]);
+        if (!r.ok) errors.push(r.error || `failed to restore ${item.path}`);
       } else if (existsSync(item.path)) {
-        deleteFileSafe(item.path, [root]);
+        const r = deleteFileSafe(item.path, [root]);
+        if (!r.ok) errors.push(r.error || `failed to remove ${item.path}`);
       }
-    } catch {}
+    } catch (e) {
+      errors.push((e as Error).message);
+    }
   }
+  return { ok: errors.length === 0, errors };
 }
 
 function createGroupId(): string {

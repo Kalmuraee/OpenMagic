@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { buildOpenAICompatibleRequest } from "../src/llm/openai.js";
 import { classifyProviderResponse } from "../src/llm/provider-test.js";
+import { MODEL_REGISTRY } from "../src/llm/registry.js";
 import type { ChatMessage, LlmContext } from "../src/shared-types.js";
 
 const messages: ChatMessage[] = [{ role: "user", content: "Fix the page" }];
 const screenshotContext: LlmContext = { screenshot: "data:image/png;base64,abc" };
+
+function maxOutputOf(provider: string, modelId: string): number {
+  return MODEL_REGISTRY[provider].models.find((m) => m.id === modelId)!.maxOutput;
+}
 
 describe("provider request construction", () => {
   it("does not include image payloads for non-vision models", () => {
@@ -21,18 +26,22 @@ describe("provider request construction", () => {
     expect(body.reasoning_effort).toBe("medium");
   });
 
-  it("keeps DeepSeek V4 Flash in non-thinking mode by default", () => {
+  it("keeps DeepSeek V4 Flash in non-thinking mode but lifts its output cap to maxOutput", () => {
     const body = buildOpenAICompatibleRequest("deepseek", "deepseek-v4-flash", messages, {});
 
-    expect(body.max_tokens).toBe(4096);
+    // H13: output budget raised from the old hardcoded 4096 to the model's real cap.
+    expect(body.max_tokens).toBe(maxOutputOf("deepseek", "deepseek-v4-flash"));
+    expect(body.max_tokens).toBeGreaterThan(4096);
     expect(body.reasoning_effort).toBeUndefined();
   });
 
-  it("uses DeepSeek V4 Pro thinking defaults", () => {
+  it("uses DeepSeek V4 Pro thinking defaults and the full output cap", () => {
     const body = buildOpenAICompatibleRequest("deepseek", "deepseek-v4-pro", messages, {});
 
     expect(body.reasoning_effort).toBe("high");
-    expect(body.max_tokens).toBe(16384);
+    // H13: was hardcoded to 16384; now the model's real maxOutput.
+    expect(body.max_tokens).toBe(maxOutputOf("deepseek", "deepseek-v4-pro"));
+    expect(body.max_tokens).toBeGreaterThan(16384);
   });
 });
 

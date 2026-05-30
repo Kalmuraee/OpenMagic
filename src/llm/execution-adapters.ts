@@ -15,8 +15,9 @@ export interface ExecutionAdapter {
     messages: ChatMessage[],
     context: LlmContext,
     onChunk: (chunk: string) => void,
-    onDone: (result: { content: string }) => void,
-    onError: (error: string) => void
+    onDone: (result: { content: string; truncated?: boolean }) => void,
+    onError: (error: string) => void,
+    signal?: AbortSignal
   ) => Promise<void>;
 }
 
@@ -40,24 +41,24 @@ export function getExecutionAdapter(provider: string): ExecutionAdapter | null {
     return {
       id: "claude-code-cli",
       provider,
-      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError) =>
-        chatClaudeCode(messages, context, onChunk, onDone, onError),
+      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError, signal) =>
+        chatClaudeCode(messages, context, onChunk, onDone, onError, signal),
     };
   }
   if (provider === "codex-cli") {
     return {
       id: "codex-cli",
       provider,
-      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError) =>
-        chatCodexCli(messages, context, onChunk, onDone, onError),
+      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError, signal) =>
+        chatCodexCli(messages, context, onChunk, onDone, onError, signal),
     };
   }
   if (provider === "gemini-cli") {
     return {
       id: "gemini-cli",
       provider,
-      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError) =>
-        chatGeminiCli(messages, context, onChunk, onDone, onError),
+      chat: (_model, _apiKey, messages, context, onChunk, onDone, onError, signal) =>
+        chatGeminiCli(messages, context, onChunk, onDone, onError, signal),
     };
   }
   if (provider === "anthropic") {
@@ -70,8 +71,8 @@ export function getExecutionAdapter(provider: string): ExecutionAdapter | null {
     return {
       id: "openai-compatible-chat-completions",
       provider,
-      chat: (model, apiKey, messages, context, onChunk, onDone, onError) =>
-        chatOpenAICompatible(provider, model, apiKey, messages, context, onChunk, onDone, onError),
+      chat: (model, apiKey, messages, context, onChunk, onDone, onError, signal) =>
+        chatOpenAICompatible(provider, model, apiKey, messages, context, onChunk, onDone, onError, signal),
     };
   }
   return null;

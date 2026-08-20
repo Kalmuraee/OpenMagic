@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { createRequire } from "node:module";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -234,27 +233,59 @@ export async function diagnoseProject({
 }
 
 async function diagnosePlaywrightBrowser(root) {
-  try {
-    const requireFromRoot = createRequire(join(root, "package.json"));
-    const moduleUrl = pathToFileURL(requireFromRoot.resolve("@playwright/test")).href;
-    const { chromium } = await import(moduleUrl);
-    const executable = chromium.executablePath();
-    if (executable && existsSync(executable)) {
-      return pass("playwright", "Playwright browser", `Chromium is installed at ${compactHome(executable)}`);
-    }
+  const packagePath = join(root, "node_modules", "@playwright", "test", "package.json");
+  if (!existsSync(packagePath)) {
     return warn(
       "playwright",
       "Playwright browser",
-      "Chromium is not installed",
-      "Run: npx playwright install chromium"
+      "@playwright/test is not installed",
+      "Run: npm ci"
+    );
+  }
+
+  const browserRoot = playwrightBrowserRoots(root).find(hasChromiumDirectory);
+  if (browserRoot) {
+    return pass("playwright", "Playwright browser", `Chromium is installed under ${compactHome(browserRoot)}`);
+  }
+
+  return warn(
+    "playwright",
+    "Playwright browser",
+    "Chromium was not found in the configured or platform-default cache",
+    "Run: npx playwright install chromium"
+  );
+}
+
+function playwrightBrowserRoots(root) {
+  const configured = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const roots = [];
+
+  if (configured === "0") {
+    roots.push(join(root, "node_modules", "playwright-core", ".local-browsers"));
+  } else if (configured) {
+    roots.push(resolve(root, configured));
+  } else if (process.platform === "darwin") {
+    roots.push(join(homedir(), "Library", "Caches", "ms-playwright"));
+  } else if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+    roots.push(join(localAppData, "ms-playwright"));
+  } else {
+    roots.push(join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ms-playwright"));
+  }
+
+  roots.push(join(root, "node_modules", "playwright-core", ".local-browsers"));
+  return [...new Set(roots)];
+}
+
+function hasChromiumDirectory(root) {
+  if (!existsSync(root)) return false;
+  try {
+    return readdirSync(root, { withFileTypes: true }).some((entry) =>
+      entry.isDirectory()
+      && (entry.name.startsWith("chromium-") || entry.name.startsWith("chromium_headless_shell-"))
     );
   } catch {
-    return warn(
-      "playwright",
-      "Playwright browser",
-      "Could not load @playwright/test or locate Chromium",
-      "Run: npm ci && npx playwright install chromium"
-    );
+    return false;
   }
 }
 

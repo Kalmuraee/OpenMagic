@@ -6,12 +6,14 @@ PRs are welcome. Bug fixes, new providers, UI work, docs, whatever you've got.
 
 ## Local setup
 
-OpenMagic requires Node.js 20.19 or newer.
+OpenMagic requires Node.js 20.19 or newer. Contributors can use the checked-in `.nvmrc` to select the recommended Node.js 22 release.
 
 ```bash
 git clone https://github.com/Kalmuraee/OpenMagic.git
 cd OpenMagic
-npm install
+nvm use              # optional; reads .nvmrc
+npm ci
+npm run doctor       # validates the local toolchain and explains any fixes
 npm run build
 ```
 
@@ -22,6 +24,25 @@ node dist/cli.js --port 3000
 ```
 
 Your app opens at `localhost:4567` with the toolbar injected.
+
+### Fast feedback loop
+
+Use the smallest check that matches the change you are making:
+
+```bash
+npm run test:watch   # focused Vitest feedback while coding
+npm run check:quick  # typecheck + lint + unit tests
+npm run check:all    # release-level suite, including evals, smoke tests, browser, and package checks
+```
+
+`npm run doctor` is dependency-free and can diagnose a checkout even before `npm ci` succeeds. It checks the Node version, lockfiles, dependencies, build output, Playwright Chromium, and Git metadata, and prints an exact remediation command when something is missing.
+
+```bash
+npm run doctor -- --json          # machine-readable output for agents and automation
+npm run doctor -- --strict        # also fail when warnings are present
+npm run doctor -- --no-browser    # skip the Playwright Chromium probe
+npm run doctor -- --cwd ../other  # diagnose another checkout
+```
 
 ---
 
@@ -64,6 +85,9 @@ tests/
 ├── detect.test.ts
 ├── filesystem.test.ts
 └── security.test.ts
+scripts/
+├── dev-doctor.mjs          # Dependency-free contributor diagnostics
+└── dev-doctor.selftest.mjs # Built-in Node.js self-tests for the doctor
 ```
 
 ### Why it works this way
@@ -130,13 +154,17 @@ TypeScript strict mode is on and ESLint is configured locally. Run `npm run lint
 ## Testing
 
 ```bash
-npm test           # vitest
-npm run build      # build CLI + toolbar
-npm run typecheck  # type check
-npm run lint       # eslint
-npm run test:smoke # proxy and toolbar injection smoke test
+npm run doctor      # environment diagnostics
+npm run test:watch  # interactive unit-test loop
+npm run check:quick # typecheck + lint + unit tests
+npm test            # Vitest + doctor self-tests
+npm run build       # build CLI + toolbar
+npm run typecheck   # type check
+npm run lint        # eslint
+npm run test:smoke  # proxy and toolbar injection smoke test
 npm run test:browser # Playwright toolbar smoke test
-npm run check:pack # npm package dry run
+npm run check:pack  # npm package dry run
+npm run check:all   # complete release-level suite
 ```
 
 Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for server-side logic (filesystem, config, security, detection, provider catalogs). The smoke tests cover the built proxy, toolbar injection, toolbar bundle syntax, and the browser-injected settings/model selector path; still test complex toolbar UX manually when changing UI behavior.
@@ -147,17 +175,16 @@ Tests are in `tests/` using [vitest](https://vitest.dev/). Write tests for serve
 
 1. Fork the repo and branch from `main`
 2. Make your changes. One feature or fix per PR.
-3. Check that everything passes:
+3. Run the fast local gate while iterating:
    ```bash
-   npm run build
-   npm test
-   npm run typecheck
-   npm run lint
-   npm run test:smoke
-   npm run test:browser
+   npm run check:quick
    ```
-4. If you changed proxy, toolbar, or LLM logic, test manually with a dev server
-5. Fill out the PR template and submit against `main`
+4. Before requesting review, run the complete suite:
+   ```bash
+   npm run check:all
+   ```
+5. If you changed proxy, toolbar, or LLM logic, test manually with a dev server
+6. Fill out the PR template and submit against `main`
 
 ### Commit messages
 

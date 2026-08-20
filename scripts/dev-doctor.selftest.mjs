@@ -50,6 +50,27 @@ test("reports actionable failures for an unprepared fixture", async () => {
   }
 });
 
+test("detects a hermetic Playwright Chromium install without importing project code", async () => {
+  const root = createFixture({ build: true, dependencies: true, nvmrc: true });
+  const previousBrowsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  try {
+    mkdirSync(join(root, "node_modules", "@playwright", "test"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "@playwright", "test", "package.json"), "{}\n");
+    mkdirSync(
+      join(root, "node_modules", "playwright-core", ".local-browsers", "chromium-1234"),
+      { recursive: true }
+    );
+    process.env.PLAYWRIGHT_BROWSERS_PATH = "0";
+
+    const report = await diagnoseProject({ cwd: root, nodeVersion: "22.0.0", probeBrowser: true });
+    assert.equal(report.checks.find((check) => check.id === "playwright")?.status, "pass");
+  } finally {
+    if (previousBrowsersPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    else process.env.PLAYWRIGHT_BROWSERS_PATH = previousBrowsersPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("summarizes status counts", () => {
   assert.deepEqual(
     summarizeChecks([{ status: "pass" }, { status: "warn" }, { status: "fail" }, { status: "info" }]),

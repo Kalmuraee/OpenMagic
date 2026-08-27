@@ -1,0 +1,157 @@
+name: Finalize Full Audit Fixes
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  final-validation:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Assert transformed source exists
+        run: |
+          test -f src/root-resolver.ts
+          test -f src/multi-root-patch.ts
+          test -f tests/audit-regressions.test.ts
+          test ! -f scripts/apply-full-audit-fixes.py
+          test ! -f .github/workflows/source-snapshot.yml
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full validation
+        run: |
+          set -o pipefail
+          {
+            npm run build
+            npm run typecheck
+            npm run lint
+            npm test
+            npm run eval
+            npm run test:smoke
+            npx playwright install --with-deps chromium
+            npm run test:browser
+            npm run check:pack
+            npm audit --omit=dev
+          } 2>&1 | tee /tmp/audit-validation.log
+
+      - name: Write progress report
+        run: |
+          cat > AUDIT_PROGRESS.md <<'EOF'
+          # OpenMagic full-audit remediation progress
+
+          ## Status
+
+          All findings from the 2026-08-27 code/runtime audit have been addressed in this branch and the full Linux validation gate completed before this report was committed.
+
+          ## Completed remediation
+
+          - [x] OM-001 — Provider-bound API keys; legacy key migration without cross-provider fallback.
+          - [x] OM-002 — Shutdown only terminates dev servers started by this OpenMagic process.
+          - [x] OM-003 — HTTP 4xx/5xx root routes no longer cause a live external server to be killed.
+          - [x] OM-004 — Process-path ownership uses path boundaries rather than unsafe prefix matching.
+          - [x] OM-005 — Dev/install command execution no longer depends on `/bin/sh`; Windows command shims supported.
+          - [x] OM-006 — CLI adapters remain pending until child exit and cancellation kills the process tree.
+          - [x] OM-007 — Native-edit capture runs only after the CLI agent has completed.
+          - [x] OM-008 — CLI agents execute in the configured project root.
+          - [x] OM-009 — Ignored-file native edits are rejected from capture.
+          - [x] OM-010 — Native edits run in an isolated temporary Git worktree, preserving concurrent user work.
+          - [x] OM-011 — Git commands use argument arrays instead of shell-built command strings.
+          - [x] OM-012 — Atomic writes preserve executable/read modes.
+          - [x] OM-013 — Visual text editing preserves descendant DOM nodes and event listeners.
+          - [x] OM-014 — Non-HTML API errors pass through unchanged.
+          - [x] OM-015 — Gemini thinking configuration uses the provider-supported request shape.
+          - [x] OM-016 — Reads, writes, grounding, patches, rollback and verification resolve across multiple roots.
+          - [x] OM-017 — Backups are isolated per OpenMagic process/session.
+          - [x] OM-018 — Manifest directories/files use private permissions.
+          - [x] OM-019 — CLI ports are validated before network operations.
+          - [x] OM-020 — Every configured verification gate runs; gate timeouts/spawn failures fail closed.
+          - [x] OM-021 — Browser runtime verification observes a five-second post-reload window.
+          - [x] OM-022 — Multiple attached images are carried in provider request context.
+          - [x] OM-023 — Screenshot cloning preserves text nodes.
+          - [x] OM-024 — Gemini streaming flushes its final decoder/buffer record; provider lifecycle tests guard completion.
+          - [x] OM-025 — Sanitized conversation context remains available to provider orchestration.
+          - [x] OM-026 — File tools support exact paged reads rather than misleading silent truncation.
+          - [x] OM-027 — Missing/cyclic rollback chains fail before partial restoration.
+          - [x] OM-028 — Durable snapshots preserve raw bytes, BOM/line endings and file mode.
+          - [x] OM-029 — Symlink replacement is refused rather than silently converting the link to a regular file.
+          - [x] OM-030 — Encoded HTML is passed through intact instead of mixing compressed bytes with plaintext injection.
+          - [x] OM-031 — Vite is not misclassified as Vue; grounding includes additional common web-source formats.
+          - [x] OM-032 — Static projects use `index.html` as an SPA history fallback for extensionless routes.
+          - [x] OM-033 — Landing-page release label is synchronized to v0.44.2.
+
+          ## Validation gate
+
+          - Build
+          - TypeScript typecheck
+          - ESLint
+          - Unit/integration tests
+          - Edit-success evaluation
+          - CLI smoke test
+          - Chromium browser smoke test
+          - npm package dry-run inspection
+          - Production dependency audit
+          - Added Windows and macOS CI validation jobs for build/typecheck/lint/tests/smoke
+
+          ## Release note
+
+          No npm release is performed by this branch. Merge and versioning remain an explicit maintainer decision after pull-request CI and review.
+          EOF
+          sed -i 's/^          //' AUDIT_PROGRESS.md
+
+      - name: Commit report and remove temporary finalizer
+        run: |
+          rm -f .github/workflows/audit-finalize.yml .audit-fix-tool-ready
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: add full audit remediation progress report"
+          git push origin HEAD:fix/full-audit-20260827
+
+      - name: Create or update pull request
+        run: |
+          BODY_FILE=/tmp/pr-body.md
+          cat > "$BODY_FILE" <<'EOF'
+          ## Summary
+
+          Resolves the complete OpenMagic safety, reliability, proxy, provider, multi-root, filesystem, native-agent, browser-editing, and validation audit.
+
+          See `AUDIT_PROGRESS.md` for the issue-by-issue completion matrix.
+
+          ## Validation
+
+          - Build, typecheck, lint
+          - Unit/integration suite and edit-success evaluation
+          - CLI and Chromium browser smoke tests
+          - npm package inspection and production dependency audit
+          - Cross-platform CI jobs for Windows and macOS
+
+          ## Release behavior
+
+          This PR does not publish a release. Versioning and npm publication remain explicit after review and merge.
+          EOF
+          if gh pr view fix/full-audit-20260827 --repo Kalmuraee/OpenMagic >/dev/null 2>&1; then
+            gh pr edit fix/full-audit-20260827 --repo Kalmuraee/OpenMagic --title "fix: resolve full OpenMagic safety and reliability audit" --body-file "$BODY_FILE"
+            gh pr ready fix/full-audit-20260827 --repo Kalmuraee/OpenMagic || true
+          else
+            gh pr create --repo Kalmuraee/OpenMagic --base main --head fix/full-audit-20260827 --title "fix: resolve full OpenMagic safety and reliability audit" --body-file "$BODY_FILE"
+          fi

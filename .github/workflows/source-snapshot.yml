@@ -14,11 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Archive repository
-        run: tar -C .. --exclude=OpenMagic/.git -czf /tmp/openmagic-source.tgz OpenMagic
-      - name: Upload source snapshot
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+      - name: Archive dependencies
+        run: tar -czf /tmp/openmagic-node-modules.tgz node_modules
+      - name: Upload dependency snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: openmagic-source
-          path: /tmp/openmagic-source.tgz
+          name: openmagic-node-modules
+          path: /tmp/openmagic-node-modules.tgz
           retention-days: 1

@@ -1,6 +1,7 @@
 
 import { existsSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { toPortablePath } from "./path-utils.js";
 
 export interface ResolvedProjectPath {
   root: string;
@@ -62,7 +63,7 @@ export function resolveProjectPath(
     const root = roots.find((candidate) => isPathWithinRoot(absolutePath, candidate));
     if (!root) return { error: "Path is outside configured project roots" };
     if (options.mustExist && !existsSync(absolutePath)) return { error: "File not found" };
-    const relativePath = relative(root, absolutePath);
+    const relativePath = toPortablePath(relative(root, absolutePath));
     return { root, absolutePath, relativePath, displayPath: displayPathFor(root, relativePath, roots) };
   }
 
@@ -82,7 +83,7 @@ export function resolveProjectPath(
   if (existing.length > 1) return { error: `Ambiguous path exists in multiple roots: ${requestedPath}` };
   if (existing.length === 1) {
     const item = existing[0];
-    const relativePath = relative(item.root, item.absolutePath);
+    const relativePath = toPortablePath(relative(item.root, item.absolutePath));
     return { ...item, relativePath, displayPath: displayPathFor(item.root, relativePath, roots) };
   }
 
@@ -92,7 +93,7 @@ export function resolveProjectPath(
       .filter((item) => isPathWithinRoot(item.absolutePath, item.root) && existsSync(dirname(item.absolutePath)));
     if (parentMatches.length === 1) {
       const item = parentMatches[0];
-      const relativePath = relative(item.root, item.absolutePath);
+      const relativePath = toPortablePath(relative(item.root, item.absolutePath));
       return { ...item, relativePath, displayPath: displayPathFor(item.root, relativePath, roots) };
     }
     if (parentMatches.length > 1 && roots.length > 1) {
@@ -104,6 +105,6 @@ export function resolveProjectPath(
   const absolutePath = resolve(root, requested);
   if (!isPathWithinRoot(absolutePath, root)) return { error: "Path is outside configured project roots" };
   if (options.mustExist) return { error: "File not found" };
-  const relativePath = relative(root, absolutePath);
+  const relativePath = toPortablePath(relative(root, absolutePath));
   return { root, absolutePath, relativePath, displayPath: displayPathFor(root, relativePath, roots) };
 }

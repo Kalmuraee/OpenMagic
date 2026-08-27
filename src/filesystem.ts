@@ -19,6 +19,7 @@ import { join, resolve, relative, dirname, extname, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import type { FileEntry } from "./shared-types.js";
+import { toPortablePath } from "./path-utils.js";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -402,7 +403,7 @@ export function listFiles(
       }
       if (stat.isSymbolicLink()) continue;
 
-      const relPath = relative(rootPath, fullPath);
+      const relPath = toPortablePath(relative(rootPath, fullPath));
 
       if (stat.isDirectory()) {
         entries.push({ path: relPath, type: "dir", name: item });
@@ -472,7 +473,7 @@ export function grepFiles(
           for (let i = 0; i < lines.length && fileMatches < 5; i++) {
             if (lines[i].toLowerCase().includes(lowerPattern)) {
               results.push({
-                file: relative(searchRoot, fullPath),
+                file: toPortablePath(relative(searchRoot, fullPath)),
                 lineNum: i + 1,
                 line: lines[i].trim().slice(0, 200),
               });

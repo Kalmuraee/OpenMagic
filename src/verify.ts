@@ -30,7 +30,7 @@ export function detectVerifyScript(root: string): { script: string } | null {
 }
 
 export function attributeToTouched(output: string, files: string[]): boolean {
-  const haystack = output.toLowerCase();
+  const haystack = output.toLowerCase().replace(/\\/g, "/");
   return files.some((file) => {
     const full = file.toLowerCase().replace(/\\/g, "/");
     const base = basename(file).toLowerCase();
@@ -69,15 +69,52 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+export interface NpmInvocation {
+  command: string;
+  args: string[];
+}
+
+export function getNpmInvocation(
+  script: string,
+  platform: NodeJS.Platform = process.platform,
+): NpmInvocation | { error: string } {
+  if (!/^[A-Za-z0-9:_-]+$/.test(script)) return { error: "Invalid npm script name" };
+  if (platform === "win32") {
+    return {
+      command: process.env.ComSpec || process.env.COMSPEC || "cmd.exe",
+      args: ["/d", "/s", "/c", `npm run --silent ${script}`],
+    };
+  }
+  return { command: "npm", args: ["run", "--silent", script] };
+}
+
 export function runVerifyScript(root: string, script: string, timeoutMs: number, signal?: AbortSignal): Promise<RunScriptResult> {
   return new Promise((resolve) => {
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawn(npm, ["run", "--silent", script], {
-      cwd: root,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
-      detached: process.platform !== "win32",
-    });
+    const invocation = getNpmInvocation(script);
+    if ("error" in invocation) {
+      resolve({ code: null, output: "", timedOut: false, aborted: false, spawnError: invocation.error });
+      return;
+    }
+
+    let child: ChildProcess;
+    try {
+      child = spawn(invocation.command, invocation.args, {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolve({
+        code: null,
+        output: "",
+        timedOut: false,
+        aborted: false,
+        spawnError: (error as Error).message,
+      });
+      return;
+    }
     let output = "";
     let settled = false;
     const cap = (chunk: Buffer) => {

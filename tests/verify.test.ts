@@ -6,6 +6,7 @@ import {
   attributeToTouched,
   verifyTouchedFiles,
   runVerifyScript,
+  getNpmInvocation,
   verifyPatchGroup,
 } from "../src/verify.js";
 
@@ -62,6 +63,20 @@ describe("verifyTouchedFiles", () => {
     writeFileSync(join(ROOT, "ok.json"), JSON.stringify({ a: 1 }));
     writeFileSync(join(ROOT, "code.ts"), "const x: number = 1;");
     expect(verifyTouchedFiles(ROOT, ["ok.json", "code.ts"]).ok).toBe(true);
+  });
+});
+
+describe("getNpmInvocation", () => {
+  it("uses cmd.exe without spawning a .cmd file directly on Windows", () => {
+    const invocation = getNpmInvocation("typecheck", "win32");
+    expect("error" in invocation).toBe(false);
+    if ("error" in invocation) return;
+    expect(invocation.command.toLowerCase()).toContain("cmd");
+    expect(invocation.args).toEqual(["/d", "/s", "/c", "npm run --silent typecheck"]);
+  });
+
+  it("rejects unsafe script names before invoking a shell", () => {
+    expect(getNpmInvocation("lint && whoami", "win32")).toEqual({ error: "Invalid npm script name" });
   });
 });
 

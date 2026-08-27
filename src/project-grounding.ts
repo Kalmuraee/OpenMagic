@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { listFiles, readFileSafe } from "./filesystem.js";
+import { toPortablePath } from "./path-utils.js";
 import { findSymbol, getSymbolIndex } from "./symbol-index.js";
 
 export interface ProjectGroundRequest {
@@ -163,7 +164,11 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
       // search-match failures on the cut region. The model can request the rest
       // via NEED_FILE (which has its own retry budget). Reserve room for the
       // marker so the file still fits within the budget.
-      const marker = `\n// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
+      const verboseMarker = `
+// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
+      const compactMarker = `
+// [TRUNCATED — NEED_FILE: ${item.path}]`;
+      const marker = verboseMarker.length <= cap ? verboseMarker : compactMarker.slice(0, cap);
       const room = Math.max(0, cap - marker.length);
       content = read.content.slice(0, room) + marker;
     } else {
@@ -358,7 +363,7 @@ function localImportCandidates(root: string, file: string, allPaths: string[], a
   for (const imp of imports) {
     let base = "";
     if (imp.startsWith("./") || imp.startsWith("../")) {
-      base = relative(root, join(root, dir, imp));
+      base = toPortablePath(relative(root, join(root, dir, imp)));
     } else {
       base = resolveAliasImport(imp, aliases);
       if (!base) continue;

@@ -1,0 +1,75 @@
+name: Apply Windows CI fixes
+
+on:
+  push:
+    branches:
+      - release/v0.45.0-audit-remediation
+
+concurrency:
+  group: openmagic-windows-ci-remediation
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: release/v0.45.0-audit-remediation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Apply deterministic remediation
+        run: python scripts/apply-windows-ci-fixes.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Edit-success evaluation
+        run: npm run eval
+
+      - name: CLI smoke test
+        run: npm run test:smoke
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run test:browser
+
+      - name: Inspect package contents
+        run: npm run check:pack
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: Publish validated source changes
+        run: |
+          rm scripts/apply-windows-ci-fixes.py
+          git config user.name "OpenMagic CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: make audit remediation portable on Windows"
+          git push origin HEAD:release/v0.45.0-audit-remediation

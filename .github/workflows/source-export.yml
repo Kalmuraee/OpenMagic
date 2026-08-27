@@ -15,10 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Archive source
-        run: tar --exclude=.git -czf ../openmagic-source.tgz .
+        run: |
+          tar --exclude=.git -czf "$RUNNER_TEMP/openmagic-source.tgz" .
+          cp "$RUNNER_TEMP/openmagic-source.tgz" openmagic-source.tgz
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
           name: openmagic-source
-          path: ../openmagic-source.tgz
+          path: openmagic-source.tgz
           retention-days: 1

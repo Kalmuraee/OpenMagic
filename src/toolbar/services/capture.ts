@@ -172,10 +172,18 @@ function cloneWithStyles(source: HTMLElement, depth: number, maxDepth: number): 
     }
     clone.setAttribute("style", css);
 
-    // Clone children with depth limit
-    for (let i = 0; i < source.children.length && i < 20; i++) {
-      const child = cloneWithStyles(source.children[i] as HTMLElement, depth + 1, maxDepth);
-      if (child) clone.appendChild(child);
+    // Clone element AND text nodes. Iterating `children` discarded the visible
+    // text of headings, buttons, labels and paragraphs from screenshots.
+    let cloned = 0;
+    for (const node of Array.from(source.childNodes)) {
+      if (cloned >= 40) break;
+      if (node.nodeType === Node.TEXT_NODE) {
+        clone.appendChild(document.createTextNode(node.textContent || ""));
+        cloned++;
+      } else if (node instanceof HTMLElement) {
+        const child = cloneWithStyles(node, depth + 1, maxDepth);
+        if (child) { clone.appendChild(child); cloned++; }
+      }
     }
 
     return clone;

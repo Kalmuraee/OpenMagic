@@ -92,16 +92,15 @@ describe("proxy injection", () => {
     });
   });
 
-  it("wraps non-HTML server errors with toolbar HTML", async () => {
+  it("preserves non-HTML server errors unchanged", async () => {
     await withProxy(async (url) => {
       const response = await fetch(`${url}/bad`);
       const body = await response.text();
 
       expect(response.status).toBe(500);
-      expect(response.headers.get("content-type")).toContain("text/html");
-      expect(body).toContain("Error 500");
-      expect(body).toContain("&lt;boom>");
-      expect(body).toContain("/__openmagic__/toolbar.js");
+      expect(response.headers.get("content-type")).toContain("text/plain");
+      expect(body).toBe("<boom>");
+      expect(body).not.toContain("/__openmagic__/toolbar.js");
     });
   });
 });

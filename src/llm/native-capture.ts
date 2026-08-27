@@ -1,22 +1,12 @@
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodeModification } from "../shared-types.js";
 
-/**
- * H9: capture a CLI agent's native edits via git, then REVERT the working tree.
- *
- * CLI agents (Claude Code / Codex / Gemini) are full edit-capable harnesses. The
- * old path forced them through the JSON-diff contract and re-applied with a lossy
- * fuzzy matcher (a double-apply). Here we instead let them edit the tree natively,
- * diff the result against the clean baseline, revert, and route the diff through
- * the normal review→apply→verify pipeline. This reclaims their multi-turn ability
- * WITHOUT the write-before-approve security regression — files are reverted before
- * the user reviews. Off by default; requires a git repo with a clean tree.
- */
-
 function gitOut(root: string, args: string[]): string {
-  return execSync(`git ${args.join(" ")}`, {
+  return execFileSync("git", args, {
     cwd: root,
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -25,68 +15,85 @@ function gitOut(root: string, args: string[]): string {
 }
 
 export function isGitRepo(root: string): boolean {
-  try {
-    return gitOut(root, ["rev-parse", "--is-inside-work-tree"]).trim() === "true";
-  } catch {
-    return false;
-  }
+  try { return gitOut(root, ["rev-parse", "--is-inside-work-tree"]).trim() === "true"; }
+  catch { return false; }
 }
 
 export function isWorkingTreeClean(root: string): boolean {
-  try {
-    return gitOut(root, ["status", "--porcelain"]).trim() === "";
-  } catch {
-    return false;
-  }
+  try { return gitOut(root, ["status", "--porcelain", "--untracked-files=all"]).trim() === ""; }
+  catch { return false; }
 }
 
-/**
- * Eligible only when native edits can be cleanly attributed and reverted: a git
- * repo whose working tree is clean (so every post-agent change is the agent's).
- */
 export function isNativeEditEligible(root: string): boolean {
   return isGitRepo(root) && isWorkingTreeClean(root);
 }
 
-/**
- * Collect the agent's changes as CodeModifications (whole-file edits / creates)
- * then reset the tree back to the clean baseline.
- */
-export function captureAndRevert(root: string): CodeModification[] {
-  const mods: CodeModification[] = [];
+export interface NativeEditSession {
+  sourceRoot: string;
+  workspace: string;
+  tempRoot: string;
+  closed: boolean;
+}
 
+export function createNativeEditSession(root: string): NativeEditSession {
+  if (!isNativeEditEligible(root)) {
+    throw new Error("Native edit requires a Git repository with a clean working tree");
+  }
+  const tempRoot = mkdtempSync(join(tmpdir(), "openmagic-native-edit-"));
+  const workspace = join(tempRoot, "worktree");
   try {
-    // Tracked files changed vs HEAD (staged or unstaged).
-    const changed = gitOut(root, ["diff", "HEAD", "--name-only"]).split("\n").map((s) => s.trim()).filter(Boolean);
-    for (const file of changed) {
-      let before = "";
-      try { before = gitOut(root, ["show", `HEAD:${file}`]); } catch { before = ""; }
-      const abs = join(root, file);
-      if (existsSync(abs)) {
-        const after = readFileSync(abs, "utf-8");
-        if (after !== before) mods.push({ file, type: "edit", search: before, replace: after });
-      } else {
-        // tracked file the agent deleted
-        mods.push({ file, type: "delete" });
-      }
-    }
+    gitOut(root, ["worktree", "add", "--detach", workspace, "HEAD"]);
+    return { sourceRoot: root, workspace, tempRoot, closed: false };
+  } catch (error) {
+    rmSync(tempRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
 
-    // New untracked files.
-    const untracked = gitOut(root, ["ls-files", "--others", "--exclude-standard"]).split("\n").map((s) => s.trim()).filter(Boolean);
-    for (const file of untracked) {
-      const abs = join(root, file);
-      if (existsSync(abs)) {
-        mods.push({ file, type: "create", content: readFileSync(abs, "utf-8") });
-      }
-    }
-  } catch {
-    // capture failed — fall through to revert so we never leave the tree dirty
+function statusEntries(workspace: string): Array<{ code: string; file: string }> {
+  const output = gitOut(workspace, ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"]);
+  return output.split("\n").filter(Boolean).map((line) => ({ code: line.slice(0, 2), file: line.slice(3).trim() }));
+}
+
+export function captureNativeEditSession(session: NativeEditSession): CodeModification[] {
+  if (session.closed) throw new Error("Native edit session is already closed");
+  const ignored = statusEntries(session.workspace).filter((entry) => entry.code === "!!");
+  if (ignored.length) {
+    throw new Error(`Agent modified ignored files; refusing to capture: ${ignored.slice(0, 5).map((entry) => entry.file).join(", ")}`);
   }
 
-  // Revert to the clean baseline (tracked + untracked) so the user reviews from
-  // a known state and the proposed edits apply through the normal pipeline.
-  try { gitOut(root, ["reset", "--hard", "HEAD"]); } catch { /* best effort */ }
-  try { gitOut(root, ["clean", "-fd"]); } catch { /* best effort */ }
+  const modifications: CodeModification[] = [];
+  const changed = gitOut(session.workspace, ["diff", "HEAD", "--name-only", "--"]).split("\n").map((line) => line.trim()).filter(Boolean);
+  for (const file of changed) {
+    let before = "";
+    try { before = gitOut(session.workspace, ["show", `HEAD:${file}`]); } catch {}
+    const absolute = join(session.workspace, file);
+    if (existsSync(absolute)) {
+      const after = readFileSync(absolute, "utf-8");
+      if (after !== before) modifications.push({ file, type: "edit", search: before, replace: after });
+    } else {
+      modifications.push({ file, type: "delete" });
+    }
+  }
 
-  return mods;
+  const untracked = gitOut(session.workspace, ["ls-files", "--others", "--exclude-standard"]).split("\n").map((line) => line.trim()).filter(Boolean);
+  for (const file of untracked) {
+    const absolute = join(session.workspace, file);
+    if (existsSync(absolute)) modifications.push({ file, type: "create", content: readFileSync(absolute, "utf-8") });
+  }
+  return modifications;
+}
+
+export function closeNativeEditSession(session: NativeEditSession): void {
+  if (session.closed) return;
+  session.closed = true;
+  try { gitOut(session.sourceRoot, ["worktree", "remove", "--force", session.workspace]); } catch {}
+  try { gitOut(session.sourceRoot, ["worktree", "prune"]); } catch {}
+  rmSync(session.tempRoot, { recursive: true, force: true });
+}
+
+// Kept for internal compatibility, but deliberately non-destructive: direct
+// capture of the user's checkout is no longer supported.
+export function captureAndRevert(_root: string): CodeModification[] {
+  throw new Error("Direct checkout capture is disabled; use an isolated native edit session");
 }

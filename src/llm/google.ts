@@ -29,16 +29,12 @@ export function buildGoogleRequest(
         { text: enrichedContent },
       ];
 
-      if (context.screenshot) {
-        const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
+      const images = [...new Set([context.screenshot, ...(context.attachments || [])].filter((value): value is string => !!value))];
+      for (const image of images) {
+        const mimeMatch = image.match(/^data:(image\/[a-z0-9.+-]+);base64,/i);
         const mimeType = mimeMatch?.[1] || "image/png";
-        const base64Data = context.screenshot.replace(/^data:image\/[a-z+]+;base64,/, "");
-        parts.push({
-          inline_data: {
-            mime_type: mimeType,
-            data: base64Data,
-          },
-        });
+        const base64Data = image.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+        parts.push({ inline_data: { mime_type: mimeType, data: base64Data } });
       }
 
       contents.push({ role, parts });
@@ -70,7 +66,12 @@ export function buildGoogleRequest(
     generationConfig,
   };
   if (thinkingLevel) {
-    body.thinkingConfig = { thinkingLevel };
+    if (model.startsWith("gemini-2.5")) {
+      const budget = thinkingLevel === "none" ? 0 : thinkingLevel === "low" ? 1024 : thinkingLevel === "medium" ? 4096 : 8192;
+      generationConfig.thinkingConfig = { thinkingBudget: budget };
+    } else {
+      generationConfig.thinkingConfig = { thinkingLevel };
+    }
   }
 
   return body;
@@ -148,6 +149,21 @@ export async function chatGoogle(
       }
     }
 
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const finalLine = buffer.trim();
+      const data = finalLine.startsWith("data: ") ? finalLine.slice(6).trim() : "";
+      if (data) {
+        try {
+          const parsed = JSON.parse(data);
+          const parts = parsed.candidates?.[0]?.content?.parts || [];
+          for (const part of parts) {
+            if (typeof part?.text === "string") { fullContent += part.text; onChunk(part.text); }
+          }
+          if (parsed.candidates?.[0]?.finishReason === "MAX_TOKENS") truncated = true;
+        } catch {}
+      }
+    }
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
     if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled

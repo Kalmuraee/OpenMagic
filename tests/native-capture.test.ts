@@ -1,78 +1,72 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+
+import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isGitRepo, isWorkingTreeClean, captureAndRevert } from "../src/llm/native-capture.js";
+import {
+  captureNativeEditSession,
+  closeNativeEditSession,
+  createNativeEditSession,
+  isGitRepo,
+  isNativeEditEligible,
+  isWorkingTreeClean,
+} from "../src/llm/native-capture.js";
 
-const ROOT = join(process.cwd(), ".test-native-root");
-
-function git(args: string) {
-  execSync(`git -c user.email=t@t.co -c user.name=t ${args}`, { cwd: ROOT, stdio: "ignore" });
+const dirs: string[] = [];
+function repo(): string {
+  const root = mkdtempSync(join(tmpdir(), "om-native-test-"));
+  dirs.push(root);
+  execFileSync("git", ["init"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+  writeFileSync(join(root, "a.txt"), "one\n");
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "-m", "base"], { cwd: root });
+  return root;
 }
+afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
-beforeEach(() => {
-  rmSync(ROOT, { recursive: true, force: true });
-  mkdirSync(ROOT, { recursive: true });
-  git("init -q");
-  writeFileSync(join(ROOT, "app.ts"), "export const value = 1;\n");
-  git("add -A");
-  git("commit -q -m initial");
-});
-afterEach(() => rmSync(ROOT, { recursive: true, force: true }));
+describe("isolated native capture", () => {
+  it("detects repository and cleanliness", () => {
+    const root = repo();
+    expect(isGitRepo(root)).toBe(true);
+    expect(isWorkingTreeClean(root)).toBe(true);
+    expect(isNativeEditEligible(root)).toBe(true);
+  });
 
-describe("git helpers", () => {
-  it("detects a git repo and a non-repo", () => {
-    expect(isGitRepo(ROOT)).toBe(true);
-    // tmpdir is outside any git work tree
-    const nonRepo = mkdtempSync(join(tmpdir(), "om-nonrepo-"));
+  it("blocks a dirty source checkout", () => {
+    const root = repo();
+    writeFileSync(join(root, "a.txt"), "dirty\n");
+    expect(isNativeEditEligible(root)).toBe(false);
+    expect(() => createNativeEditSession(root)).toThrow(/clean working tree/);
+  });
+
+  it("captures tracked and untracked changes without modifying source", () => {
+    const root = repo();
+    const session = createNativeEditSession(root);
     try {
-      expect(isGitRepo(nonRepo)).toBe(false);
+      writeFileSync(join(session.workspace, "a.txt"), "two\n");
+      writeFileSync(join(session.workspace, "new.txt"), "new\n");
+      const mods = captureNativeEditSession(session);
+      expect(mods.map((mod) => mod.type).sort()).toEqual(["create", "edit"]);
+      expect(readFileSync(join(root, "a.txt"), "utf-8")).toBe("one\n");
     } finally {
-      rmSync(nonRepo, { recursive: true, force: true });
+      closeNativeEditSession(session);
     }
   });
 
-  it("reports a clean vs dirty working tree", () => {
-    expect(isWorkingTreeClean(ROOT)).toBe(true);
-    writeFileSync(join(ROOT, "app.ts"), "export const value = 2;\n");
-    expect(isWorkingTreeClean(ROOT)).toBe(false);
-  });
-});
-
-describe("captureAndRevert", () => {
-  it("captures an edit to a tracked file and reverts the working tree", () => {
-    // simulate a CLI agent editing a tracked file
-    writeFileSync(join(ROOT, "app.ts"), "export const value = 42;\n");
-
-    const mods = captureAndRevert(ROOT);
-
-    const edit = mods.find((m) => m.file === "app.ts");
-    expect(edit).toBeTruthy();
-    expect(edit!.type).toBe("edit");
-    expect(edit!.search).toBe("export const value = 1;\n");
-    expect(edit!.replace).toBe("export const value = 42;\n");
-
-    // working tree reverted to the committed state
-    expect(readFileSync(join(ROOT, "app.ts"), "utf-8")).toBe("export const value = 1;\n");
-    expect(isWorkingTreeClean(ROOT)).toBe(true);
-  });
-
-  it("captures a newly created file as a create and removes it on revert", () => {
-    writeFileSync(join(ROOT, "new.ts"), "export const added = true;\n");
-
-    const mods = captureAndRevert(ROOT);
-
-    const create = mods.find((m) => m.file === "new.ts");
-    expect(create).toBeTruthy();
-    expect(create!.type).toBe("create");
-    expect(create!.content).toBe("export const added = true;\n");
-
-    // the file is gone after revert (we'll re-create it through the review pipeline)
-    expect(existsSync(join(ROOT, "new.ts"))).toBe(false);
-  });
-
-  it("returns no modifications when the agent changed nothing", () => {
-    expect(captureAndRevert(ROOT)).toEqual([]);
+  it("refuses ignored-file modifications", () => {
+    const root = repo();
+    writeFileSync(join(root, ".gitignore"), ".env\n");
+    execFileSync("git", ["add", ".gitignore"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "ignore env"], { cwd: root });
+    const session = createNativeEditSession(root);
+    try {
+      writeFileSync(join(session.workspace, ".env"), "SECRET=x\n");
+      expect(() => captureNativeEditSession(session)).toThrow(/ignored files/);
+    } finally {
+      closeNativeEditSession(session);
+    }
   });
 });

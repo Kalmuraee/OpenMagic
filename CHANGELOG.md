@@ -2,6 +2,25 @@
 
 All notable changes to OpenMagic are documented here.
 
+## [0.45.0] - 2026-08-27
+
+### Security and safety
+- Isolated API credentials by provider and safely migrated legacy configuration.
+- Prevented shutdown from terminating externally managed development servers.
+- Moved native CLI-agent edits into isolated Git worktrees with complete cancellation and capture.
+- Preserved file modes and raw bytes, and refused unsafe symbolic-link replacement.
+
+### Reliability
+- Added durable transactional rollback with complete-chain validation.
+- Implemented root-aware file, grounding, patch, rollback, verification and tool operations.
+- Preserved non-HTML errors and compressed upstream responses.
+- Corrected reasoning requests, multi-image serialization and final SSE-event handling.
+- Hardened nested-DOM editing, screenshot capture, SPA routing and framework grounding.
+
+### Validation
+- Added regressions for the complete OM-001 through OM-033 audit.
+- Expanded CI to Linux, macOS and Windows.
+
 ## [0.24.0] - 2026-03-27
 ### Added
 - Undo button on applied diffs (restore from backup)

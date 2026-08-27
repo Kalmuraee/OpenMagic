@@ -20,7 +20,7 @@ try {
 
   fixture = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end("<!doctype html><html><head><title>Browser Smoke</title></head><body><main id=\"app\"><button class=\"primary\">Smoke Button</button></main></body></html>");
+    res.end("<!doctype html><html><head><meta charset=utf-8><title>Browser Smoke</title></head><body><main id=\"app\"><button class=\"primary\">Smoke <span class=\"icon\">★</span> Button</button></main></body></html>");
   });
 
   await listen(fixture, 0);
@@ -95,7 +95,21 @@ try {
       new CustomEvent("openmagic:test-live-edit", { detail: { kind: "text", value: "Joined!" } })
     );
   });
-  await page.waitForFunction(() => document.querySelector("button.primary")?.textContent === "Joined!", null, { timeout: 10_000 });
+  await page.waitForFunction(() => {
+    const button = document.querySelector("button.primary");
+    return button?.querySelector("span.icon")?.textContent === "★" && button?.textContent?.includes("Joined!");
+  }, null, { timeout: 10_000 });
+
+  // Discard restores the original direct text while preserving the exact child.
+  const iconBeforeDiscard = await page.locator("button.primary span.icon").evaluate((node) => node);
+  await page.evaluate(() => {
+    document.querySelector("openmagic-toolbar")?.dispatchEvent(new CustomEvent("openmagic:test-discard-edit"));
+  });
+  await page.waitForFunction(() => {
+    const button = document.querySelector("button.primary");
+    return !!button?.querySelector("span.icon") && button?.textContent?.includes("Smoke") && button?.textContent?.includes("Button");
+  }, null, { timeout: 10_000 });
+  void iconBeforeDiscard;
 
   // UX/UI review: verify the design-token extraction runs on the real page
   // (the "brand/consistency" context fed to the design review).

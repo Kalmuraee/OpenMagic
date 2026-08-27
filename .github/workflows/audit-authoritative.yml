@@ -1,0 +1,141 @@
+name: Build Clean Audit Remediation Source
+
+on:
+  push:
+    branches:
+      - release/v0.45.0-audit-remediation
+  workflow_dispatch:
+
+concurrency:
+  group: openmagic-clean-audit-remediation
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  transform-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: release/v0.45.0-audit-remediation
+
+      - name: Preserve audited transformation inputs
+        run: |
+          mkdir -p /tmp/openmagic-audit
+          cp .github/workflows/audit-authoritative.yml /tmp/openmagic-audit/
+          cp scripts/apply-full-audit-fixes.py /tmp/openmagic-audit/
+          cp scripts/apply-audit-base-adjustments.py /tmp/openmagic-audit/
+          cp scripts/apply-audit-followup.py /tmp/openmagic-audit/
+          cp scripts/apply-multiroot-runtime-followup.py /tmp/openmagic-audit/
+          cp scripts/apply-release-compatibility.py /tmp/openmagic-audit/
+          sed -i "0,/old_read_tool = '''/s//old_read_tool = r'''/" /tmp/openmagic-audit/apply-full-audit-fixes.py
+
+      - name: Build the deterministic v0.45.0 source tree from current main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+          python /tmp/openmagic-audit/apply-full-audit-fixes.py
+          python /tmp/openmagic-audit/apply-audit-base-adjustments.py
+          python /tmp/openmagic-audit/apply-audit-followup.py
+          python /tmp/openmagic-audit/apply-multiroot-runtime-followup.py
+          python /tmp/openmagic-audit/apply-release-compatibility.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/toolbar/index.ts")
+          text = path.read_text(encoding="utf-8")
+          early = "\n".join([
+              "function init() {",
+              "",
+              '  $host.addEventListener("openmagic:test-discard-edit", () => {',
+              "    revertElementEdits();",
+              '    openPanel("chat");',
+              "  });",
+              '  if (document.querySelector("openmagic-toolbar")) return;',
+          ])
+          if early not in text:
+              raise SystemExit("Early discard-edit hook not found")
+          text = text.replace(
+              early,
+              "\n".join([
+                  "function init() {",
+                  '  if (document.querySelector("openmagic-toolbar")) return;',
+              ]),
+              1,
+          )
+          hook = "\n".join([
+              '  host.addEventListener("openmagic:test-discard-edit", () => {',
+              "    revertElementEdits();",
+              '    openPanel("chat");',
+              "  });",
+          ]) + "\n"
+          marker = "  document.body.appendChild(host);"
+          if marker not in text:
+              raise SystemExit("Toolbar append marker not found")
+          path.write_text(text.replace(marker, hook + marker, 1), encoding="utf-8")
+
+          smoke_path = Path("scripts/browser-smoke-test.mjs")
+          smoke = smoke_path.read_text(encoding="utf-8")
+          old_head = '<html><head><title>Browser Smoke</title></head>'
+          new_head = '<html><head><meta charset=utf-8><title>Browser Smoke</title></head>'
+          if old_head not in smoke:
+              raise SystemExit("Browser smoke fixture head not found")
+          smoke_path.write_text(smoke.replace(old_head, new_head, 1), encoding="utf-8")
+          PY
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Production build
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Edit-success evaluation
+        run: npm run eval
+
+      - name: CLI smoke test
+        run: npm run test:smoke
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run test:browser
+
+      - name: Inspect npm package
+        run: npm run check:pack
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: Publish validated source without workflow-file changes
+        run: |
+          git checkout origin/main -- .github/workflows/ci.yml
+          mkdir -p .github/workflows
+          cp /tmp/openmagic-audit/audit-authoritative.yml .github/workflows/audit-authoritative.yml
+          rm -f scripts/apply-full-audit-fixes.py
+          rm -f scripts/apply-audit-base-adjustments.py
+          rm -f scripts/apply-audit-followup.py
+          rm -f scripts/apply-multiroot-runtime-followup.py
+          rm -f scripts/apply-release-compatibility.py
+          git config user.name "OpenMagic Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "release: OpenMagic v0.45.0 full audit remediation"
+          git push --force origin HEAD:release/v0.45.0-audit-remediation

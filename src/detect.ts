@@ -1,6 +1,7 @@
 import { createConnection } from "node:net";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { isSameOrNestedPath } from "./process-management.js";
 import { execSync } from "node:child_process";
 
 const COMMON_DEV_PORTS = [
@@ -77,7 +78,7 @@ export function verifyPortOwnership(port: number, expectedDir: string): boolean 
         const processCwd = resolve(cwdOutput.slice(1)); // strip leading 'n'
 
         // Match if the process cwd is the project dir, a parent, or a child
-        if (processCwd === expected || expected.startsWith(processCwd) || processCwd.startsWith(expected)) {
+        if (isSameOrNestedPath(processCwd, expected) || isSameOrNestedPath(expected, processCwd)) {
           return true;
         }
       } catch {

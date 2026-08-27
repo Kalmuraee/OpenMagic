@@ -15,6 +15,10 @@ interface OpenAICompatibleRequest {
   reasoning_effort?: string;
 }
 
+
+function contextImages(context: LlmContext): string[] {
+  return [...new Set([context.screenshot, ...(context.attachments || [])].filter((value): value is string => !!value))];
+}
 export function buildOpenAICompatibleRequest(
   provider: string,
   model: string,
@@ -37,15 +41,13 @@ export function buildOpenAICompatibleRequest(
     if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
       const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
 
-      if (context.screenshot && modelInfo?.vision) {
+      const images = modelInfo?.vision ? contextImages(context) : [];
+      if (images.length) {
         apiMessages.push({
           role: "user",
           content: [
             { type: "text", text: enrichedContent },
-            {
-              type: "image_url",
-              image_url: { url: context.screenshot },
-            },
+            ...images.map((image) => ({ type: "image_url", image_url: { url: image } })),
           ],
         });
       } else {
@@ -182,6 +184,21 @@ export async function chatOpenAICompatible(
       }
     }
 
+    // OPENMAGIC_FINAL_SSE_FLUSH: TextDecoder can retain bytes and an SSE
+    // server is not required to terminate its last record with a newline.
+    buffer += decoder.decode();
+    for (const trailingLine of buffer.split("\n")) {
+      if (!trailingLine.startsWith("data: ")) continue;
+      const data = trailingLine.slice(6).trim();
+      if (!data || data === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(data);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta) { fullContent += delta; onChunk(delta); }
+        const reason = parsed.choices?.[0]?.finish_reason;
+        if (reason === "length" || reason === "max_tokens") truncated = true;
+      } catch {}
+    }
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
     if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled

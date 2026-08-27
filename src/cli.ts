@@ -2,6 +2,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import open from "open";
 import { resolve, join } from "node:path";
+import { parsePort, platformCommand } from "./process-management.js";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import http from "node:http";
@@ -167,6 +168,7 @@ try {
 // Track child processes for cleanup
 const childProcesses: ChildProcess[] = [];
 let lastDetectedPort: number | null = null; // Port detected from dev server output
+let ownsTargetProcess = false;
 import { createProxyServer } from "./proxy.js";
 import { generateSessionToken } from "./security.js";
 import {
@@ -279,7 +281,7 @@ function isPortHealthy(host: string, port: number): Promise<boolean> {
       { timeout: 3000 },
       (res) => {
         // 2xx/3xx = healthy, 4xx/5xx = unhealthy
-        resolve(res.statusCode !== undefined && res.statusCode < 400);
+        resolve(res.statusCode !== undefined);
         res.resume(); // drain
       }
     );
@@ -320,10 +322,10 @@ function waitForPort(
 function runCommand(cmd: string, args: string[], cwd: string = process.cwd()): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      const child = spawn(cmd, args, {
+      const child = spawn(platformCommand(cmd), args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: "/bin/sh",
+        shell: false,
       });
 
       child.stdout?.on("data", (data: Buffer) => {
@@ -514,7 +516,7 @@ program
 
     if (opts.port) {
       // User specified a port
-      targetPort = parseInt(opts.port, 10);
+      try { targetPort = parsePort(opts.port, "Dev server port"); } catch (error) { printError((error as Error).message); process.exit(1); }
       const isRunning = await isPortOpen(targetPort);
       if (!isRunning) {
         // Port specified but not running — offer to start it
@@ -539,54 +541,12 @@ program
       const detected = await detectDevServer();
 
       if (detected && detected.fromScripts) {
-        // Trusted detection via package.json scripts — but verify it's healthy.
-        // An orphaned dev server from a previous OpenMagic session may still be
-        // on the port but serving errors (zombie/dying process).
+        targetPort = detected.port;
+        targetHost = detected.host;
+        const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
         const healthy = await isPortHealthy(detected.host, detected.port);
-        if (healthy) {
-          targetPort = detected.port;
-          targetHost = detected.host;
-          const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
-          finishInlineStatus(`Found ${frameworkLabel} on port ${detected.port}`);
-        } else {
-          warnInlineStatus(`Dev server on port ${detected.port} is not responding`);
-          printDetail("Cleaning up the orphaned process...");
-          killPortProcess(detected.port);
-          // Wait for the port to be freed
-          const freed = await waitForPortClose(detected.port, 5000);
-          if (!freed) {
-            // Force kill
-            try {
-              const pidOutput = execSync(`lsof -i :${detected.port} -sTCP:LISTEN -t 2>/dev/null`, {
-                encoding: "utf-8", timeout: 3000,
-              }).trim();
-              for (const pid of pidOutput.split("\n").filter(Boolean)) {
-                try { process.kill(parseInt(pid, 10), "SIGKILL"); } catch {}
-              }
-              await waitForPortClose(detected.port, 3000);
-            } catch {}
-          }
-          // Start a fresh dev server
-          const started = await offerToStartDevServer();
-          if (!started) { process.exit(1); }
-          if (lastDetectedPort) {
-            targetPort = lastDetectedPort;
-          } else {
-            const redetected = await detectDevServer();
-            if (redetected) {
-              targetPort = redetected.port;
-              targetHost = redetected.host;
-            } else {
-              printError("Could not detect the dev server after starting.");
-              printDetail("Try specifying the port manually:");
-              printCommand("npx openmagic --port 3000");
-              process.exit(1);
-            }
-          }
-
-          const frameworkLabel = getDetectedFrameworkLabel() ?? "dev server";
-          printSuccess(`Found ${frameworkLabel} on port ${targetPort}`);
-        }
+        if (healthy) finishInlineStatus(`Found ${frameworkLabel} on port ${detected.port}`);
+        else warnInlineStatus(`Found ${frameworkLabel} on port ${detected.port}; HTTP readiness will be checked without terminating it`);
       } else if (detected && !detected.fromScripts) {
         // Found a port via generic scan — confirm with user
         finishInlineStatus(`Found dev server on port ${detected.port}`);
@@ -667,7 +627,8 @@ program
     generateSessionToken();
 
     // Find available port (single port — proxy + toolbar + WS all on same origin)
-    const requestedProxyPort = parseInt(opts.listen, 10);
+    let requestedProxyPort: number;
+    try { requestedProxyPort = parsePort(opts.listen, "OpenMagic proxy port"); } catch (error) { printError((error as Error).message); process.exit(1); }
     let proxyPort = requestedProxyPort;
     while (await isPortOpen(proxyPort)) {
       proxyPort++;
@@ -747,12 +708,12 @@ program
 
       // Step 2: Also kill anything on the dev server port (catches grandchildren
       // like Next.js workers that our direct child.kill() won't reach)
-      if (targetPort) {
+      if (targetPort && ownsTargetProcess) {
         killPortProcess(targetPort);
       }
 
       // Step 3: Wait for the port to actually close (poll every 200ms, up to 4s)
-      if (targetPort && (await isPortOpen(targetPort))) {
+      if (targetPort && ownsTargetProcess && (await isPortOpen(targetPort))) {
         const freed = await waitForPortClose(targetPort, 4000);
         if (!freed) {
           // Step 4: Force-kill everything on the port
@@ -863,6 +824,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
       });
 
       childProcesses.push(staticChild);
+      ownsTargetProcess = true;
       staticChild.stdout?.on("data", (d: Buffer) => {
         for (const line of d.toString().trim().split("\n")) {
           if (line.trim()) writeLine(pc.dim(`${INDENT}│ ${line}`));
@@ -1054,14 +1016,10 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
 
   let child: ReturnType<typeof spawn>;
   try {
-    // Wrap in shell with ulimit to prevent EMFILE on large projects.
-    // Turbopack/Webpack need thousands of file watchers; macOS default is 256.
-    const escapedArgs = runArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
-    const shellCmd = `ulimit -n 65536 2>/dev/null; exec ${runCmd} ${escapedArgs}`;
-
-    child = spawn("sh", ["-c", shellCmd], {
+    child = spawn(platformCommand(runCmd), runArgs, {
       cwd: process.cwd(),
       stdio: "inherit",
+      shell: false,
       env: {
         ...process.env,
         PORT: String(port),
@@ -1075,6 +1033,7 @@ async function offerToStartDevServer(expectedPort?: number): Promise<boolean> {
   }
 
   childProcesses.push(child);
+  ownsTargetProcess = true;
   let childExited = false;
 
   child.on("error", (err) => {

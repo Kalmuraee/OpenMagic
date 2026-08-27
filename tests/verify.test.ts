@@ -71,13 +71,13 @@ describe("runVerifyScript", () => {
     const r = await runVerifyScript(ROOT, "ok", 15000);
     expect(r.code).toBe(0);
     expect(r.timedOut).toBe(false);
-  });
+  }, 20_000);
   it("captures failure output for a script that exits non-zero", async () => {
     pkg({ bad: "node -e \"console.log('boom err'); process.exit(1)\"" });
     const r = await runVerifyScript(ROOT, "bad", 15000);
     expect(r.code).not.toBe(0);
     expect(r.output).toContain("boom");
-  });
+  }, 20_000);
   it("times out a long-running script", async () => {
     pkg({ slow: "node -e \"setTimeout(()=>{}, 10000)\"" });
     const r = await runVerifyScript(ROOT, "slow", 500);

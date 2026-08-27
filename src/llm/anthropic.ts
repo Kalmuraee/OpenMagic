@@ -8,6 +8,10 @@ interface AnthropicMessage {
   content: string | Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
 }
 
+
+function contextImages(context: LlmContext): string[] {
+  return [...new Set([context.screenshot, ...(context.attachments || [])].filter((value): value is string => !!value))];
+}
 export function buildAnthropicRequest(
   model: string,
   messages: ChatMessage[],
@@ -15,67 +19,52 @@ export function buildAnthropicRequest(
   modelInfoOverride?: ModelInfo
 ): Record<string, unknown> {
   const apiMessages: AnthropicMessage[] = [];
-  const lastUserIdx = messages.reduce((acc, m, i) => m.role === "user" ? i : acc, -1);
+  const lastUserIdx = messages.reduce((acc, message, index) => message.role === "user" ? index : acc, -1);
 
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role === "system") continue;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role === "system") continue;
 
-    if (msg.role === "user" && typeof msg.content === "string" && i === lastUserIdx) {
-      const enrichedContent = buildUserMessage(msg.content, buildContextParts(context));
-
-      // If screenshot available, use vision. Accept data: URLs and bare base64.
-      if (context.screenshot) {
-        const mimeMatch = context.screenshot.match(/^data:(image\/[a-z+]+);base64,/);
-        const mediaType = mimeMatch?.[1] || "image/png";
-        const base64Data = context.screenshot.replace(/^data:image\/[a-z+]+;base64,/, "");
-        apiMessages.push({
-          role: "user",
-          content: [
-            { type: "text", text: enrichedContent },
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType as any,
-                data: base64Data,
-              },
-            },
-          ],
-        });
+    if (message.role === "user" && typeof message.content === "string" && index === lastUserIdx) {
+      const enrichedContent = buildUserMessage(message.content, buildContextParts(context));
+      const images = contextImages(context);
+      if (images.length) {
+        const content: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [
+          { type: "text", text: enrichedContent },
+        ];
+        for (const image of images) {
+          const mimeMatch = image.match(/^data:(image\/[a-z0-9.+-]+);base64,/i);
+          const mediaType = mimeMatch?.[1] || "image/png";
+          const base64Data = image.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, "");
+          content.push({
+            type: "image",
+            source: { type: "base64", media_type: mediaType, data: base64Data },
+          });
+        }
+        apiMessages.push({ role: "user", content });
       } else {
         apiMessages.push({ role: "user", content: enrichedContent });
       }
     } else {
       apiMessages.push({
-        role: msg.role as "user" | "assistant",
-        content: msg.content as string,
+        role: message.role as "user" | "assistant",
+        content: message.content as string,
       });
     }
   }
 
   const providerConfig = MODEL_REGISTRY.anthropic;
-  const modelInfo = modelInfoOverride ?? providerConfig?.models.find((m) => m.id === model);
-
-  // Full output budget; thinking budget is clamped to stay strictly below it.
+  const modelInfo = modelInfoOverride ?? providerConfig?.models.find((candidate) => candidate.id === model);
   const maxOut = resolveMaxOutput(modelInfo);
   const thinkingBudget = resolveThinkingBudget(context, modelInfo);
-
   const body: Record<string, unknown> = {
     model,
     max_tokens: maxOut,
-    // Prompt caching: the large, stable system prompt is cached across every turn
-    // of a conversation / retry loop (~90% cheaper + faster on cache hits). OpenAI
-    // caches automatically; Anthropic needs this explicit cache_control marker.
     system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     messages: apiMessages,
     stream: true,
   };
-
-  if (thinkingBudget > 0) {
-    body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
-  }
-
+  if (thinkingBudget > 0) body.thinking = { type: "enabled", budget_tokens: thinkingBudget };
   return body;
 }
 
@@ -159,6 +148,20 @@ export async function chatAnthropic(
       }
     }
 
+    // OPENMAGIC_FINAL_SSE_FLUSH
+    buffer += decoder.decode();
+    for (const trailingBlock of buffer.split("\n\n")) {
+      const dataLine = trailingBlock.split("\n").find((line) => line.startsWith("data: "));
+      if (!dataLine) continue;
+      try {
+        const parsed = JSON.parse(dataLine.slice(6).trim());
+        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && typeof parsed.delta.text === "string") {
+          fullContent += parsed.delta.text;
+          onChunk(parsed.delta.text);
+        }
+        if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") truncated = true;
+      } catch {}
+    }
     onDone({ content: fullContent, truncated });
   } catch (e: unknown) {
     if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled

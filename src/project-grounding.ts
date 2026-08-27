@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { listFiles, readFileSafe } from "./filesystem.js";
 import { findSymbol, getSymbolIndex } from "./symbol-index.js";
 
@@ -82,7 +82,7 @@ export function detectRepoConventions(root: string): string {
   return lines.join("\n");
 }
 
-const TEXT_RE = /\.(?:[cm]?[jt]sx?|json|svelte|vue|astro|html?|css|scss|less|php|py|rb|blade\.php)$/i;
+const TEXT_RE = /\.(?:[cm]?[jt]sx?|json|jsonc|mdx?|graphql|gql|prisma|sql|go|java|kt|cs|rs|svelte|vue|astro|html?|css|scss|less|php|py|rb|twig|erb|blade\.php)$/i;
 const STOP_WORDS = new Set(["the", "to", "in", "of", "and", "div", "span", "class", "style", "with", "for", "from"]);
 const DEFAULT_BUDGET = 48_000;
 const MAX_FILES = 10;
@@ -186,6 +186,25 @@ export function groundProject(root: string, request: ProjectGroundRequest): Proj
   };
 }
 
+
+export function groundProjects(roots: string[], request: ProjectGroundRequest): ProjectGroundResult {
+  if (roots.length <= 1) return groundProject(roots[0] || process.cwd(), request);
+  const aliases = new Map<string, number>();
+  for (const root of roots) aliases.set(basename(root), (aliases.get(basename(root)) || 0) + 1);
+  const results = roots.map((root, index) => {
+    const alias = aliases.get(basename(root)) === 1 ? basename(root) : `root-${index + 1}`;
+    return { alias, result: groundProject(root, request) };
+  });
+  const files = results.flatMap(({ alias, result }) => result.files.map((file) => ({ ...file, path: `${alias}/${file.path}`, reasons: [`project ${alias}`, ...file.reasons] })));
+  const rankedFiles = files.map((file) => ({ path: file.path, reasons: file.reasons, score: file.score, snippet: file.content.slice(0, 400) }));
+  return {
+    framework: results.map(({ alias, result }) => `${alias}:${result.framework}`).join(", "),
+    conventions: results.map(({ alias, result }) => `[${alias}]\n${result.conventions}`).join("\n\n"),
+    files: files.sort((a, b) => b.score - a.score).slice(0, 10),
+    rankedFiles: rankedFiles.sort((a, b) => b.score - a.score).slice(0, 10),
+  };
+}
+
 export function detectFramework(root: string): string {
   const pkgPath = join(root, "package.json");
   let deps: Record<string, string> = {};
@@ -207,8 +226,9 @@ export function detectFramework(root: string): string {
   if (deps["@react-router/dev"] || existsSync(join(root, "react-router.config.ts"))) return "react-router";
   if (deps["@solidjs/start"]) return "solidstart";
   if (deps["solid-js"]) return "solid";
-  if (deps.vue || existsSync(join(root, "vite.config.ts"))) return deps.react ? "vite-react" : "vue";
+  if (deps.vue) return "vue";
   if (deps.react || existsSync(join(root, "src/App.tsx")) || existsSync(join(root, "src/App.jsx"))) return "vite-react";
+  if (deps.vite || existsSync(join(root, "vite.config.ts")) || existsSync(join(root, "vite.config.js"))) return "vite";
   if (existsSync(join(root, "config/routes.rb"))) return "rails";
   if (existsSync(join(root, "manage.py"))) return "django";
   if (existsSync(join(root, "artisan"))) return "laravel";

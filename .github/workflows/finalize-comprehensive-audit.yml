@@ -1,0 +1,149 @@
+name: Finalize comprehensive audit repair
+
+on:
+  push:
+    branches:
+      - fix/comprehensive-audit-final-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: comprehensive-audit-final
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/comprehensive-audit-final-20260827
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply idempotent repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .audit-logs
+          if [ -f scripts/apply-audit-fixes.py ]; then
+            python scripts/apply-audit-fixes.py 2>&1 | tee .audit-logs/01-apply.log
+          else
+            echo "Repair script already removed; validating existing product changes." | tee .audit-logs/01-apply.log
+          fi
+
+      - name: Install dependencies
+        run: npm ci 2>&1 | tee .audit-logs/02-install.log
+
+      - name: Type check
+        run: npm run typecheck 2>&1 | tee .audit-logs/03-typecheck.log
+
+      - name: Lint
+        run: npm run lint 2>&1 | tee .audit-logs/04-lint.log
+
+      - name: Unit and integration tests
+        run: npm test 2>&1 | tee .audit-logs/05-tests.log
+
+      - name: Build
+        run: npm run build 2>&1 | tee .audit-logs/06-build.log
+
+      - name: Edit-success-rate evaluation
+        run: npm run eval 2>&1 | tee .audit-logs/07-eval.log
+
+      - name: CLI smoke test
+        run: npm run test:smoke 2>&1 | tee .audit-logs/08-smoke.log
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium 2>&1 | tee .audit-logs/09-browser-install.log
+
+      - name: Browser smoke test
+        run: npm run test:browser 2>&1 | tee .audit-logs/10-browser.log
+
+      - name: Check package contents
+        run: npm run check:pack 2>&1 | tee .audit-logs/11-pack.log
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev 2>&1 | tee .audit-logs/12-audit.log
+
+      - name: Write permanent progress report
+        shell: bash
+        run: |
+          mkdir -p docs
+          cat > docs/AUDIT_FIX_REPORT_2026-08-27.md <<'EOF'
+          # OpenMagic Comprehensive Audit Fix Report
+
+          **Date:** 2026-08-27  
+          **Baseline:** v0.44.2  
+          **Repair branch:** `fix/comprehensive-audit-final-20260827`
+
+          ## Completed repair areas
+
+          - Provider API keys are isolated per provider; legacy keys are migrated only to their recorded provider.
+          - OpenMagic tracks ownership of processes and no longer terminates externally managed development servers.
+          - CLI providers wait for process completion, retain cancellation, use the configured project root, and perform native edits in isolated Git worktrees.
+          - File writes preserve mode and metadata, refuse unsafe symlink replacement, use per-session backups, and restore durable manifests exactly.
+          - Patch preview/apply/verify/rollback and project tooling are root-aware for multi-repository sessions.
+          - Non-HTML API errors pass through unchanged; compressed HTML is not corrupted by injection.
+          - Gemini reasoning configuration and multiple image attachments use provider-compatible request shapes.
+          - Visual element editing preserves nested DOM and can discard previews losslessly.
+          - Verification runs every available project gate and retains runtime rollback protection when a gate is inconclusive.
+          - Screenshot capture preserves text nodes and no longer substitutes a misleading fabricated screenshot.
+          - Stream parsers retain final unterminated events; agent/tool paths retain relevant conversation history.
+          - Tool reads are explicit about paging/truncation rather than claiming incomplete content is exact.
+          - Framework grounding, source-format coverage, and static SPA routing were expanded.
+          - Public version metadata was synchronized with v0.44.2.
+          - Regression coverage and CI were expanded for Linux, macOS, and Windows.
+
+          ## Validation completed by this workflow
+
+          - TypeScript typecheck
+          - ESLint
+          - Complete Vitest suite
+          - Production build
+          - Edit-success-rate evaluation
+          - CLI smoke test
+          - Chromium browser smoke test
+          - npm package dry run
+          - Production dependency audit
+
+          No live paid-provider requests were executed because provider credentials were not supplied. Provider payloads, key isolation, cancellation, tools, images, and reasoning configuration are covered through deterministic tests.
+          EOF
+
+      - name: Remove temporary repair machinery
+        shell: bash
+        run: |
+          rm -f scripts/apply-audit-fixes.py
+          rm -f .github/workflows/source-export.yml
+          rm -f .github/workflows/apply-audit-fixes.yml
+          rm -f .github/workflows/apply-audit-final.yml
+          rm -f .github/workflows/finalize-comprehensive-audit.yml
+          rm -rf .audit-logs
+
+      - name: Commit validated product changes
+        shell: bash
+        run: |
+          git config user.name "OpenAI Codex"
+          git config user.email "noreply@openai.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No additional changes to commit."
+          else
+            git commit -m "fix: resolve comprehensive OpenMagic reliability audit"
+            git push origin HEAD:fix/comprehensive-audit-final-20260827
+          fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comprehensive-audit-final-logs
+          path: .audit-logs
+          retention-days: 7

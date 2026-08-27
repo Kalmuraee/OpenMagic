@@ -1,0 +1,218 @@
+name: Authoritative Full Audit Remediation
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+concurrency:
+  group: openmagic-full-audit-authoritative
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  remediate-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - name: Preserve every available audit transformer
+        run: |
+          mkdir -p /tmp/openmagic-audit
+          cp scripts/apply-full-audit-fixes.py /tmp/openmagic-audit/ 2>/dev/null || true
+          cp scripts/apply-audit-base-adjustments.py /tmp/openmagic-audit/ 2>/dev/null || true
+          cp scripts/apply-audit-followup.py /tmp/openmagic-audit/ 2>/dev/null || true
+          cp scripts/apply-multiroot-runtime-followup.py /tmp/openmagic-audit/ 2>/dev/null || true
+
+      - name: Cancel older branch automation runs
+        run: |
+          for status in queued in_progress; do
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=fix/full-audit-20260827&status=${status}&per_page=100" \
+              --jq '.workflow_runs[].id' | while read -r run_id; do
+                if test -n "$run_id" && test "$run_id" != "$GITHUB_RUN_ID"; then
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+                fi
+              done
+          done
+          sleep 8
+
+      - name: Establish a deterministic base
+        run: |
+          if ! test -f src/root-resolver.ts || ! test -f src/multi-root-patch.ts; then
+            test -f /tmp/openmagic-audit/apply-full-audit-fixes.py
+            git fetch origin main
+            git reset --hard origin/main
+            python /tmp/openmagic-audit/apply-full-audit-fixes.py
+          fi
+
+      - name: Apply compatibility/lifecycle adjustments
+        run: |
+          if test -f /tmp/openmagic-audit/apply-audit-base-adjustments.py; then
+            python /tmp/openmagic-audit/apply-audit-base-adjustments.py
+          fi
+
+      - name: Apply provider/browser hardening
+        run: |
+          if ! test -f tests/provider-context-regressions.test.ts; then
+            test -f /tmp/openmagic-audit/apply-audit-followup.py
+            python /tmp/openmagic-audit/apply-audit-followup.py
+          fi
+
+      - name: Apply multi-root runtime hardening
+        run: |
+          if ! grep -q 'reads an explicitly qualified secondary root' tests/audit-regressions.test.ts 2>/dev/null; then
+            test -f /tmp/openmagic-audit/apply-multiroot-runtime-followup.py
+            python /tmp/openmagic-audit/apply-multiroot-runtime-followup.py
+          fi
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Edit-success evaluation
+        run: npm run eval
+
+      - name: CLI smoke
+        run: npm run test:smoke
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke
+        run: npm run test:browser
+
+      - name: Package inspection
+        run: npm run check:pack
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+
+      - name: Write validated completion report
+        run: |
+          cat > AUDIT_PROGRESS.md <<'EOF'
+          # OpenMagic full-audit remediation progress
+
+          **Status: completed and validated on Linux.** Pull-request CI provides the independent Windows and macOS gates.
+
+          | Audit finding | Status | Implemented resolution |
+          |---|---:|---|
+          | OM-001 | Complete | API keys are provider-bound; the legacy key migrates only to its recorded provider. |
+          | OM-002 | Complete | Shutdown terminates only dev-server processes started by this OpenMagic process. |
+          | OM-003 | Complete | Authenticated/error root routes no longer cause a detected external server to be killed. |
+          | OM-004 | Complete | Process ownership uses path-boundary checks instead of unsafe string prefixes. |
+          | OM-005 | Complete | Install/start commands are shell-independent and use Windows command shims where required. |
+          | OM-006 | Complete | CLI adapters await child termination and cancellation kills the process tree. |
+          | OM-007 | Complete | Native edit capture begins only after the CLI agent has completed. |
+          | OM-008 | Complete | Local agents execute in the configured project root/worktree. |
+          | OM-009 | Complete | Ignored-file modifications are rejected from native-edit capture. |
+          | OM-010 | Complete | Native agents edit an isolated temporary Git worktree; the user checkout is never reset/cleaned. |
+          | OM-011 | Complete | Git execution uses argument arrays, not shell-concatenated commands. |
+          | OM-012 | Complete | Atomic writes preserve executable and readability modes. |
+          | OM-013 | Complete | Visual text preview edits only a direct text node and preserves descendant DOM/listeners. |
+          | OM-014 | Complete | Non-HTML 4xx/5xx application responses pass through unchanged. |
+          | OM-015 | Complete | Gemini thinking controls are emitted under the supported generation configuration. |
+          | OM-016 | Complete | Read/write/list/grep/ground/patch/rollback/verify/tool operations resolve across all configured roots. |
+          | OM-017 | Complete | Backups are isolated by process/session. |
+          | OM-018 | Complete | Config, manifest directories and manifests use private permissions. |
+          | OM-019 | Complete | CLI port values are validated before socket operations. |
+          | OM-020 | Complete | Every configured verification script runs; timeout/spawn failures fail closed. |
+          | OM-021 | Complete | Runtime verification observes a five-second post-reload window. |
+          | OM-022 | Complete | Provider context supports all attached images rather than silently dropping extras. |
+          | OM-023 | Complete | Screenshot cloning preserves visible text nodes. |
+          | OM-024 | Complete | Cloud SSE adapters flush decoder state and parse the final unterminated event. |
+          | OM-025 | Complete | Tool and local-CLI prompts retain bounded sanitized conversation history. |
+          | OM-026 | Complete | Model file reads are exact, bounded pages with explicit continuation offsets. |
+          | OM-027 | Complete | Rollback validates the complete parent chain before restoring any file. |
+          | OM-028 | Complete | Durable snapshots preserve raw bytes, BOM/line endings and mode. |
+          | OM-029 | Complete | Writes refuse symlinks instead of replacing them with regular files. |
+          | OM-030 | Complete | Encoded HTML passes through intact rather than combining compressed bytes with plaintext injection. |
+          | OM-031 | Complete | Vite is no longer misclassified as Vue and grounding recognizes additional web-source formats. |
+          | OM-032 | Complete | Static projects use `index.html` for extensionless SPA history routes. |
+          | OM-033 | Complete | The landing-page version label matches v0.44.2. |
+
+          ## Validation completed before publication
+
+          - Production build
+          - TypeScript typecheck
+          - ESLint
+          - Unit and integration suite, including audit regressions
+          - Edit-success evaluation
+          - CLI smoke test
+          - Chromium browser smoke test
+          - npm package dry-run inspection
+          - Production dependency audit
+
+          ## CI expansion
+
+          Pull-request CI includes Windows and macOS build, typecheck, lint, tests and CLI smoke in addition to the Linux/browser gate.
+
+          ## Release behavior
+
+          This branch does not publish an npm version. Release/versioning remains an explicit maintainer action after review and merge.
+          EOF
+          sed -i 's/^          //' AUDIT_PROGRESS.md
+
+      - name: Remove temporary automation and publish one clean branch
+        run: |
+          rm -f .github/workflows/audit-authoritative.yml
+          rm -f .github/workflows/source-snapshot.yml .github/workflows/audit-base-rescue.yml
+          rm -f .github/workflows/audit-finalize.yml .github/workflows/audit-finalize-bot.yml
+          rm -f .github/workflows/audit-followup.yml .github/workflows/multiroot-runtime-followup.yml
+          rm -f scripts/apply-full-audit-fixes.py scripts/apply-audit-base-adjustments.py
+          rm -f scripts/apply-audit-followup.py scripts/apply-multiroot-runtime-followup.py
+          rm -f .audit-fix-tool-ready
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve full OpenMagic safety and reliability audit"
+          git push --force origin HEAD:fix/full-audit-20260827
+
+      - name: Create or update pull request
+        run: |
+          cat >/tmp/pr-body.md <<'EOF'
+          ## Summary
+
+          Resolves all findings in the OpenMagic safety and reliability audit: credential isolation, process ownership, Windows/macOS startup compatibility, CLI-agent lifecycle, isolated native editing, mode/raw-byte-preserving filesystem operations, durable rollback, multi-root behavior, proxy fidelity, provider request/stream handling, visual editing, grounding, and verification.
+
+          The exact issue-by-issue matrix is in [`AUDIT_PROGRESS.md`](../blob/fix/full-audit-20260827/AUDIT_PROGRESS.md).
+
+          ## Validation
+
+          Before the final branch was pushed, the authoritative workflow completed build, typecheck, lint, the full unit/integration suite, edit-success evaluation, CLI smoke, Chromium smoke, package inspection, and production dependency audit. PR CI adds Windows and macOS jobs.
+
+          ## Release behavior
+
+          This PR does not publish an npm release.
+          EOF
+          if gh pr view fix/full-audit-20260827 --repo Kalmuraee/OpenMagic >/dev/null 2>&1; then
+            gh pr edit fix/full-audit-20260827 --repo Kalmuraee/OpenMagic --title "fix: resolve full OpenMagic safety and reliability audit" --body-file /tmp/pr-body.md
+            gh pr ready fix/full-audit-20260827 --repo Kalmuraee/OpenMagic || true
+          else
+            gh pr create --repo Kalmuraee/OpenMagic --base main --head fix/full-audit-20260827 --title "fix: resolve full OpenMagic safety and reliability audit" --body-file /tmp/pr-body.md
+          fi

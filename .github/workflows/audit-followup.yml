@@ -1,0 +1,95 @@
+name: Audit Provider and Browser Follow-up
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  follow-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - name: Preserve follow-up transformer
+        run: cp scripts/apply-audit-followup.py /tmp/apply-audit-followup.py
+
+      - name: Wait for the validated base transformation
+        run: |
+          for attempt in $(seq 1 90); do
+            git fetch origin fix/full-audit-20260827
+            git reset --hard origin/fix/full-audit-20260827
+            if test -f src/root-resolver.ts && test -f src/multi-root-patch.ts && test -f tests/audit-regressions.test.ts; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The base audit transformation did not complete within the validation window." >&2
+          exit 1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Apply follow-up hardening
+        run: python /tmp/apply-audit-followup.py
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run eval
+      - run: npm run test:smoke
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run check:pack
+      - run: npm audit --omit=dev
+
+      - name: Commit validated follow-up
+        run: |
+          rm -f .github/workflows/audit-followup.yml .github/workflows/audit-finalize.yml .github/workflows/audit-finalize-bot.yml .github/workflows/source-snapshot.yml
+          rm -f scripts/apply-audit-followup.py scripts/apply-full-audit-fixes.py .audit-fix-tool-ready
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: complete provider stream and browser edit hardening"
+          git pull --rebase origin fix/full-audit-20260827
+          git push origin HEAD:fix/full-audit-20260827
+
+      - name: Create or update pull request
+        run: |
+          cat >/tmp/pr-body.md <<'EOF'
+          ## Summary
+
+          Resolves the complete OpenMagic audit across credential isolation, process ownership, cross-platform startup, local CLI-agent lifecycle, isolated native editing, filesystem durability, multi-root operation, proxy fidelity, provider request/stream handling, visual editing, grounding, rollback, and verification.
+
+          See `AUDIT_PROGRESS.md` for the issue-by-issue completion matrix.
+
+          ## Validation
+
+          - Build, typecheck, lint
+          - Full unit/integration suite and edit-success evaluation
+          - CLI smoke and Chromium browser smoke
+          - npm package dry-run and production dependency audit
+          - Windows and macOS CI jobs included
+
+          No npm release is performed by this PR.
+          EOF
+          if gh pr view fix/full-audit-20260827 --repo Kalmuraee/OpenMagic >/dev/null 2>&1; then
+            gh pr edit fix/full-audit-20260827 --repo Kalmuraee/OpenMagic --title "fix: resolve full OpenMagic safety and reliability audit" --body-file /tmp/pr-body.md
+            gh pr ready fix/full-audit-20260827 --repo Kalmuraee/OpenMagic || true
+          else
+            gh pr create --repo Kalmuraee/OpenMagic --base main --head fix/full-audit-20260827 --title "fix: resolve full OpenMagic safety and reliability audit" --body-file /tmp/pr-body.md
+          fi

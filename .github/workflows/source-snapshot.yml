@@ -1,0 +1,24 @@
+name: Source Snapshot
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Archive repository
+        run: tar --exclude=.git -czf openmagic-source.tgz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: openmagic-source
+          path: openmagic-source.tgz
+          retention-days: 1

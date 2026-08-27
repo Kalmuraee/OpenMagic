@@ -1,13 +1,28 @@
 from pathlib import Path
+import re
 
 
-def replace_text(path: str, old: str, new: str, expected: int = 1) -> None:
-    file = Path(path)
-    text = file.read_text(encoding="utf-8")
-    actual = text.count(old)
-    if actual != expected:
-        raise SystemExit(f"{path}: expected {expected} occurrence(s), found {actual}")
-    file.write_text(text.replace(old, new), encoding="utf-8")
+def read(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def write(path: str, text: str) -> None:
+    Path(path).write_text(text, encoding="utf-8")
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    text = read(path)
+    if old not in text:
+        raise SystemExit(f"{path}: required source fragment was not found")
+    write(path, text.replace(old, new, 1))
+
+
+def regex_replace(path: str, pattern: str, replacement: str, expected: int) -> None:
+    text = read(path)
+    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE | re.DOTALL)
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} regex replacement(s), found {count}")
+    write(path, updated)
 
 
 Path("src/path-utils.ts").write_text(
@@ -19,78 +34,78 @@ export function toPortablePath(value: string): string {
     encoding="utf-8",
 )
 
-replace_text(
+# Repository-relative paths are part of OpenMagic's protocol and must use '/'
+# on every operating system.
+replace_once(
     "src/filesystem.ts",
     'import type { FileEntry } from "./shared-types.js";\n',
     'import type { FileEntry } from "./shared-types.js";\nimport { toPortablePath } from "./path-utils.js";\n',
 )
-replace_text(
+replace_once(
     "src/filesystem.ts",
     "      const relPath = relative(rootPath, fullPath);",
     "      const relPath = toPortablePath(relative(rootPath, fullPath));",
 )
-replace_text(
+replace_once(
     "src/filesystem.ts",
     "                file: relative(searchRoot, fullPath),",
     "                file: toPortablePath(relative(searchRoot, fullPath)),",
 )
 
-replace_text(
+replace_once(
     "src/project-grounding.ts",
     'import { listFiles, readFileSafe } from "./filesystem.js";\n',
     'import { listFiles, readFileSafe } from "./filesystem.js";\nimport { toPortablePath } from "./path-utils.js";\n',
 )
-replace_text(
+replace_once(
     "src/project-grounding.ts",
     "      base = relative(root, join(root, dir, imp));",
     "      base = toPortablePath(relative(root, join(root, dir, imp)));",
 )
-replace_text(
+regex_replace(
     "src/project-grounding.ts",
-    '''      const marker = `\n// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
-      const room = Math.max(0, cap - marker.length);
-      content = read.content.slice(0, room) + marker;''',
-    '''      const verboseMarker = `\n// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
-      const compactMarker = `\n// [TRUNCATED — NEED_FILE: ${item.path}]`;
+    r'''      const marker = `\\n// \[TRUNCATED \$\{read\.content\.length\} chars — request the rest with NEED_FILE: \$\{item\.path\}\]`;
+      const room = Math\.max\(0, cap - marker\.length\);
+      content = read\.content\.slice\(0, room\) \+ marker;''',
+    '''      const verboseMarker = `\\n// [TRUNCATED ${read.content.length} chars — request the rest with NEED_FILE: ${item.path}]`;
+      const compactMarker = `\\n// [TRUNCATED — NEED_FILE: ${item.path}]`;
       const marker = verboseMarker.length <= cap ? verboseMarker : compactMarker.slice(0, cap);
       const room = Math.max(0, cap - marker.length);
       content = read.content.slice(0, room) + marker;''',
+    1,
 )
 
-replace_text(
+replace_once(
     "src/root-resolver.ts",
     'import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";\n',
     'import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";\nimport { toPortablePath } from "./path-utils.js";\n',
 )
-replace_text(
+regex_replace(
     "src/root-resolver.ts",
-    "    const relativePath = relative(root, absolutePath);",
-    "    const relativePath = toPortablePath(relative(root, absolutePath));",
-    expected=2,
-)
-replace_text(
-    "src/root-resolver.ts",
-    "    const relativePath = relative(item.root, item.absolutePath);",
-    "    const relativePath = toPortablePath(relative(item.root, item.absolutePath));",
-    expected=2,
+    r"const relativePath = relative\(([^;]+)\);",
+    r"const relativePath = toPortablePath(relative(\1));",
+    4,
 )
 
-replace_text(
+# Windows cannot reliably execute npm.cmd directly through spawn() on all Node
+# runner combinations. Invoke it through ComSpec and reject shell metacharacters.
+replace_once(
     "src/verify.ts",
     "  const haystack = output.toLowerCase();",
     '  const haystack = output.toLowerCase().replace(/\\\\/g, "/");',
 )
-replace_text(
+regex_replace(
     "src/verify.ts",
-    '''export function runVerifyScript(root: string, script: string, timeoutMs: number, signal?: AbortSignal): Promise<RunScriptResult> {
-  return new Promise((resolve) => {
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawn(npm, ["run", "--silent", script], {
+    r'''export function runVerifyScript\(root: string, script: string, timeoutMs: number, signal\?: AbortSignal\): Promise<RunScriptResult> \{
+  return new Promise\(\(resolve\) => \{
+    const npm = process\.platform === "win32" \? "npm\.cmd" : "npm";
+    const child = spawn\(npm, \["run", "--silent", script\], \{
       cwd: root,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
-      detached: process.platform !== "win32",
-    });''',
+      stdio: \["ignore", "pipe", "pipe"\],
+      env: \{ \.\.\.process\.env, FORCE_COLOR: "0", NO_COLOR: "1" \},
+      detached: process\.platform !== "win32",
+    \}\);
+    let output = "";''',
     '''export interface NpmInvocation {
   command: string;
   args: string[];
@@ -136,17 +151,19 @@ export function runVerifyScript(root: string, script: string, timeoutMs: number,
         spawnError: (error as Error).message,
       });
       return;
-    }''',
+    }
+    let output = "";''',
+    1,
 )
 
-replace_text(
+replace_once(
     "tests/verify.test.ts",
     "  runVerifyScript,\n  verifyPatchGroup,",
     "  runVerifyScript,\n  getNpmInvocation,\n  verifyPatchGroup,",
 )
-replace_text(
+replace_once(
     "tests/verify.test.ts",
-    '''describe("runVerifyScript", () => {''',
+    'describe("runVerifyScript", () => {',
     '''describe("getNpmInvocation", () => {
   it("uses cmd.exe without spawning a .cmd file directly on Windows", () => {
     const invocation = getNpmInvocation("typecheck", "win32");

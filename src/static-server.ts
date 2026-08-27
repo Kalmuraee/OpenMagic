@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { extname, relative, resolve } from "node:path";
 
 export const STATIC_MIME_TYPES: Record<string, string> = {
@@ -44,6 +45,10 @@ export function resolveStaticRequestPath(rootDir: string, requestUrl: string | u
     return null;
   }
 
+  if (!existsSync(candidate) && !extname(pathname)) {
+    const fallback = resolve(root, "index.html");
+    if (existsSync(fallback)) return fallback;
+  }
   return candidate;
 }
 

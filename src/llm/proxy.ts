@@ -8,7 +8,7 @@ import type {
 import { invalidateCliCache } from "./cli-detect.js";
 import { getExecutionAdapter, isCliProvider } from "./execution-adapters.js";
 import { sanitizeHistory } from "./history.js";
-import { captureAndRevert, isNativeEditEligible } from "./native-capture.js";
+import { captureNativeEditSession, closeNativeEditSession, createNativeEditSession, isNativeEditEligible } from "./native-capture.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import {
   AnthropicToolDriver,
@@ -27,7 +27,8 @@ interface LlmChatParams {
   context: LlmContext;
   useTools?: boolean;   // opt-in: route tool-capable providers through native tool-calling
   nativeEdit?: boolean; // opt-in: let CLI agents edit the tree natively (capture+revert+review)
-  root?: string;        // project root, required for tool execution / native capture
+  root?: string;        // primary project root
+  roots?: string[];      // all configured project roots
 }
 
 // Providers whose APIs support native tool-calling (H11). The OpenAI-compatible
@@ -190,24 +191,36 @@ export async function handleLlmChat(
     // route the changes through the normal review→apply→verify pipeline — their
     // multi-turn editing power without the write-before-approve regression.
     if (params.nativeEdit && params.root && isCliProvider(provider) && isNativeEditEligible(params.root)) {
+      if ((params.roots?.length || 1) > 1) {
+        onError("Native edit is disabled for multi-root sessions; use reviewed patch mode instead.");
+        return;
+      }
       const adapter = getExecutionAdapter(provider);
       if (adapter) {
-        let narration = "";
-        await adapter.chat(
-          model, apiKey, messages, { ...context, nativeEdit: true },
-          onChunk,
-          (r) => { narration = r.content; },
-          cliOnError,
-          signal
-        );
-        if (signal?.aborted) return;
-        const modifications = captureAndRevert(params.root);
-        onDone({
-          content: narration || (modifications.length ? `Captured ${modifications.length} change(s) from the agent — review below.` : "The agent made no file changes."),
-          modifications,
-          parseStatus: "clean",
-        });
-        return;
+        const session = createNativeEditSession(params.root);
+        try {
+          let narration = "";
+          await adapter.chat(
+            model, apiKey, messages,
+            { ...context, nativeEdit: true, projectRoot: session.workspace },
+            onChunk,
+            (result) => { narration = result.content; },
+            cliOnError,
+            signal
+          );
+          if (signal?.aborted) return;
+          const modifications = captureNativeEditSession(session);
+          onDone({
+            content: narration || (modifications.length
+              ? `Captured ${modifications.length} change(s) from the agent — review below.`
+              : "The agent made no file changes."),
+            modifications,
+            parseStatus: "clean",
+          });
+          return;
+        } finally {
+          closeNativeEditSession(session);
+        }
       }
     }
 
@@ -220,7 +233,7 @@ export async function handleLlmChat(
         try {
           const result = await runToolLoop(
             driver,
-            (name, args) => executeServerTool(name, args, params.root!, [params.root!]),
+            (name, args) => executeServerTool(name, args, params.root!, params.roots?.length ? params.roots : [params.root!]),
             { signal }
           );
           if (signal?.aborted) return;
@@ -239,7 +252,7 @@ export async function handleLlmChat(
       return;
     }
     const adapterOnError = adapter.id.endsWith("-cli") ? cliOnError : onError;
-    await adapter.chat(model, apiKey, messages, context, onChunk, wrappedOnDone, adapterOnError, signal);
+    await adapter.chat(model, apiKey, messages, { ...context, projectRoot: params.root }, onChunk, wrappedOnDone, adapterOnError, signal);
   } catch (e: unknown) {
     if (signal?.aborted || (e as Error).name === "AbortError") return; // client cancelled
     const msg = (e as Error).message || "Unknown error";

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { terminateChildProcessTree } from "./child-process.js";
 import type { ChatMessage, LlmContext } from "../shared-types.js";
 import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextParts } from "./prompts.js";
 
@@ -16,11 +17,9 @@ import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextP
  */
 export function isClaudeCliAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
-    const proc = spawn("claude", ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    proc.on("error", () => resolve(false));
-    proc.on("close", (code) => resolve(code === 0));
+    const process = spawn("claude", ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+    process.on("error", () => resolve(false));
+    process.on("close", (code) => resolve(code === 0));
   });
 }
 
@@ -39,12 +38,24 @@ export async function chatClaudeCode(
       ? lastUserMsg.content
       : "Help me with this element.";
 
+  const conversationHistory = messages
+    .slice(0, Math.max(0, messages.lastIndexOf(lastUserMsg!)))
+    .filter((message) => typeof message.content === "string")
+    .slice(-20)
+    .map((message) => `${message.role.toUpperCase()}: ${message.content as string}`)
+    .join("\n\n");
+
   const contextParts = buildContextParts(context);
-  const fullPrompt = buildUserMessage(userPrompt, contextParts);
+  const currentPrompt = buildUserMessage(userPrompt, contextParts);
+  const fullPrompt = conversationHistory ? `Previous conversation:\n${conversationHistory}\n\nCurrent request:\n${currentPrompt}` : currentPrompt;
 
   // Spawn claude -p with stream-json for real-time streaming
   // --verbose + --include-partial-messages: token-level streaming deltas
   // --max-turns 5: allows Claude to read files and produce a complete response
+  await new Promise<void>((resolve) => {
+    let processSettled = false;
+    const settle = () => { if (!processSettled) { processSettled = true; resolve(); } };
+
   const proc = spawn(
     "claude",
     [
@@ -56,7 +67,8 @@ export async function chatClaudeCode(
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
-      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      cwd: context.projectRoot || process.cwd(),
       env: {
         ...process.env,
         // Generous timeouts — Claude may read files and think between turns
@@ -74,8 +86,8 @@ export async function chatClaudeCode(
   // Kill the child if the client cancels or disconnects.
   let aborted = false;
   if (signal) {
-    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
-    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+    if (signal.aborted) { aborted = true; terminateChildProcessTree(proc); }
+    else signal.addEventListener("abort", () => { aborted = true; terminateChildProcessTree(proc); }, { once: true });
   }
 
   let fullContent = "";
@@ -124,10 +136,11 @@ export async function chatClaudeCode(
     } else {
       onError(`Claude CLI error: ${err.message}`);
     }
+    settle();
   });
 
   proc.on("close", (code) => {
-    if (aborted) return; // client cancelled — stay silent
+    if (aborted) { settle(); return; } // client cancelled — settle without callbacks
     // Process remaining buffer
     if (buffer.trim()) {
       try {
@@ -159,6 +172,8 @@ export async function chatClaudeCode(
         onError(err.slice(0, 500) || `Claude CLI exited with code ${code}`);
       }
     }
+    settle();
+  });
   });
 }
 

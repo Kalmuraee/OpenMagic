@@ -17,8 +17,9 @@ import {
 } from "node:fs";
 import { join, resolve, relative, dirname, extname, parse } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { FileEntry } from "./shared-types.js";
+import { toPortablePath } from "./path-utils.js";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -134,9 +135,9 @@ export function readFileSafe(
 }
 
 // ── Backup Management (temp directory) ──
-const BACKUP_DIR = join(tmpdir(), "openmagic-backups");
+const BACKUP_DIR = process.env.OPENMAGIC_BACKUP_DIR || join(tmpdir(), `openmagic-backups-${process.pid}-${randomBytes(6).toString("hex")}`);
 const MAX_BACKUPS_PER_FILE = 10;
-type BackupEntry = { backupPath?: string; existed: boolean };
+type BackupEntry = { backupPath?: string; existed: boolean; mode?: number };
 const backupStack = new Map<string, BackupEntry[]>(); // originalPath -> newest backup stack
 
 function getBackupPath(filePath: string): string {
@@ -185,7 +186,7 @@ function createBackupEntry(filePath: string): BackupEntry {
   }
   const backupPath = getBackupPath(filePath);
   copyFileSync(filePath, backupPath);
-  return { existed: true, backupPath };
+  return { existed: true, backupPath, mode: statSync(filePath).mode & 0o777 };
 }
 
 function fsyncDir(dir: string): void {
@@ -202,30 +203,29 @@ function fsyncDir(dir: string): void {
   }
 }
 
-function atomicWriteFile(filePath: string, data: string | Buffer): void {
+function atomicWriteFile(filePath: string, data: string | Buffer, requestedMode?: number): void {
   const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  if (existsSync(filePath) && lstatSync(filePath).isSymbolicLink()) {
+    throw new Error("Refusing to replace a symbolic link");
   }
 
+  const existingMode = existsSync(filePath) ? (statSync(filePath).mode & 0o777) : undefined;
+  const mode = requestedMode ?? existingMode ?? 0o600;
   const tmpPath = join(dir, `.${parse(filePath).base}.openmagic-tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   let fd: number | undefined;
   try {
-    fd = openSync(tmpPath, "w", 0o600);
-    if (Buffer.isBuffer(data)) {
-      writeSync(fd, data);
-    } else {
-      writeSync(fd, data, 0, "utf-8");
-    }
+    fd = openSync(tmpPath, "w", mode);
+    if (Buffer.isBuffer(data)) writeSync(fd, data);
+    else writeSync(fd, data, 0, "utf-8");
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
     renameSync(tmpPath, filePath);
     fsyncDir(dir);
   } catch (error) {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch {}
-    }
+    if (fd !== undefined) { try { closeSync(fd); } catch {} }
     try { unlinkSync(tmpPath); } catch {}
     throw error;
   }
@@ -241,6 +241,9 @@ export function writeFileSafe(
   }
 
   try {
+    if (existsSync(filePath) && lstatSync(filePath).isSymbolicLink()) {
+      return { ok: false, error: "Refusing to edit a symbolic link" };
+    }
     const backupPath = pushBackup(filePath, createBackupEntry(filePath));
 
     // Restore original line endings and BOM
@@ -307,7 +310,7 @@ export function undoFileSafe(
         return { ok: false, error: "Backup file is missing" };
       }
       const raw = readFileSync(entry.backupPath);
-      atomicWriteFile(filePath, raw);
+      atomicWriteFile(filePath, raw, entry.mode);
       try { unlinkSync(entry.backupPath); } catch {}
     } else if (existsSync(filePath)) {
       unlinkSync(filePath);
@@ -317,6 +320,49 @@ export function undoFileSafe(
   } catch (e: unknown) {
     stack?.push(entry);
     return { ok: false, error: `Undo failed: ${(e as Error).message}` };
+  }
+}
+
+
+export interface FileSnapshot {
+  existed: boolean;
+  contentBase64?: string;
+  mode?: number;
+}
+
+export function captureFileSnapshotSafe(filePath: string, roots: string[]): FileSnapshot | { error: string } {
+  if (!isPathSafe(filePath, roots)) return { error: "Path is outside allowed roots" };
+  if (!existsSync(filePath)) return { existed: false };
+  try {
+    const stat = lstatSync(filePath);
+    if (stat.isSymbolicLink()) return { error: "Refusing to snapshot a symbolic link" };
+    if (!stat.isFile()) return { error: "Can only snapshot regular files" };
+    return {
+      existed: true,
+      contentBase64: readFileSync(filePath).toString("base64"),
+      mode: stat.mode & 0o777,
+    };
+  } catch (error) {
+    return { error: `Failed to snapshot file: ${(error as Error).message}` };
+  }
+}
+
+export function restoreFileSnapshotSafe(filePath: string, snapshot: FileSnapshot, roots: string[]): { ok: boolean; error?: string } {
+  if (!isPathSafe(filePath, roots)) return { ok: false, error: "Path is outside allowed roots" };
+  try {
+    if (!snapshot.existed) {
+      if (existsSync(filePath)) {
+        if (lstatSync(filePath).isSymbolicLink()) return { ok: false, error: "Refusing to delete a symbolic link" };
+        unlinkSync(filePath);
+        fsyncDir(dirname(filePath));
+      }
+      return { ok: true };
+    }
+    if (!snapshot.contentBase64) return { ok: false, error: "Snapshot content is missing" };
+    atomicWriteFile(filePath, Buffer.from(snapshot.contentBase64, "base64"), snapshot.mode);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: `Snapshot restore failed: ${(error as Error).message}` };
   }
 }
 
@@ -357,7 +403,7 @@ export function listFiles(
       }
       if (stat.isSymbolicLink()) continue;
 
-      const relPath = relative(rootPath, fullPath);
+      const relPath = toPortablePath(relative(rootPath, fullPath));
 
       if (stat.isDirectory()) {
         entries.push({ path: relPath, type: "dir", name: item });
@@ -427,7 +473,7 @@ export function grepFiles(
           for (let i = 0; i < lines.length && fileMatches < 5; i++) {
             if (lines[i].toLowerCase().includes(lowerPattern)) {
               results.push({
-                file: relative(searchRoot, fullPath),
+                file: toPortablePath(relative(searchRoot, fullPath)),
                 lineNum: i + 1,
                 line: lines[i].trim().slice(0, 200),
               });

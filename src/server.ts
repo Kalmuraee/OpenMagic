@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { getSessionToken, validateToken } from "./security.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { getProviderApiKey, hasProviderApiKey, loadConfig, saveConfig } from "./config.js";
 import { detectAvailableClis, invalidateCliCache } from "./llm/cli-detect.js";
 import { readFileSafe, writeFileSafe, deleteFileSafe, listFiles, getProjectTree, grepFiles, undoFileSafe, cleanupBackups } from "./filesystem.js";
 import type {
@@ -24,8 +24,10 @@ import { verifyPatchGroup } from "./verify.js";
 import { extractAgentDirectives, runAgentLoop, type AgentContext } from "./llm/agent-loop.js";
 import { MODEL_REGISTRY } from "./llm/registry.js";
 import { fetchProviderModels, getToolbarRegistry } from "./llm/models.js";
-import { applyPatchGroup, previewPatchGroup, pruneOldManifests, rollbackChain, rollbackPatchGroup, type PatchGroupRequest } from "./patch.js";
-import { groundProject, type ProjectGroundRequest } from "./project-grounding.js";
+import { pruneOldManifests, type PatchGroupRequest } from "./patch.js";
+import { applyPatchGroupAcrossRoots, previewPatchGroupAcrossRoots, rollbackPatchGroupAcrossRoots } from "./multi-root-patch.js";
+import { displayPathFor, resolveProjectPath } from "./root-resolver.js";
+import { groundProjects, type ProjectGroundRequest } from "./project-grounding.js";
 import { testProviderModel } from "./llm/provider-test.js";
 
 import { createRequire } from "node:module";
@@ -234,7 +236,7 @@ async function handleMessage(
           config: {
             provider: config.provider,
             model: config.model,
-            hasApiKey: !!config.apiKey,
+            hasApiKey: hasProviderApiKey(config, config.provider || ""),
             apiKeys: Object.fromEntries(Object.entries(config.apiKeys || {}).map(([k]) => [k, true])),
           },
         },
@@ -248,14 +250,16 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing path", msg.id);
         break;
       }
-      const result = readFileSafe(payload.path, roots);
+      const resolved = resolveProjectPath(payload.path, roots, { mustExist: true });
+      if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+      const result = readFileSafe(resolved.absolutePath, [resolved.root]);
       if ("error" in result) {
         sendError(ws, "fs_error", result.error, msg.id);
       } else {
         send(ws, {
           id: msg.id,
           type: "fs.content",
-          payload: { path: payload.path, content: result.content },
+          payload: { path: resolved.displayPath, content: result.content },
         });
       }
       break;
@@ -267,7 +271,9 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing path or content", msg.id);
         break;
       }
-      const writeResult = writeFileSafe(payload.path, payload.content, roots);
+      const resolved = resolveProjectPath(payload.path, roots, { forCreate: true });
+      if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+      const writeResult = writeFileSafe(resolved.absolutePath, payload.content, [resolved.root]);
       if (!writeResult.ok) {
         sendError(ws, "fs_error", writeResult.error || "Write failed", msg.id);
       } else {
@@ -286,7 +292,9 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing path", msg.id);
         break;
       }
-      const deleteResult = deleteFileSafe(payload.path, roots);
+      const resolved = resolveProjectPath(payload.path, roots, { mustExist: false });
+      if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+      const deleteResult = deleteFileSafe(resolved.absolutePath, [resolved.root]);
       if (!deleteResult.ok) {
         sendError(ws, "fs_error", deleteResult.error || "Delete failed", msg.id);
       } else {
@@ -302,7 +310,9 @@ async function handleMessage(
     case "fs.undo": {
       const payload = msg.payload as { path: string };
       if (!payload?.path) { sendError(ws, "invalid_payload", "Missing path", msg.id); break; }
-      const undoResult = undoFileSafe(payload.path, roots);
+      const resolved = resolveProjectPath(payload.path, roots, { mustExist: false });
+      if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+      const undoResult = undoFileSafe(resolved.absolutePath, [resolved.root]);
       if (!undoResult.ok) { sendError(ws, "fs_error", undoResult.error || "Undo failed", msg.id); break; }
       send(ws, { id: msg.id, type: "fs.undone", payload: { path: payload.path, ok: true, undoCount: undoResult.remainingUndoCount || 0 } });
       break;
@@ -314,7 +324,7 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing patches", msg.id);
         break;
       }
-      const result = previewPatchGroup(roots[0] || process.cwd(), payload);
+      const result = previewPatchGroupAcrossRoots(roots, payload);
       send(ws, { id: msg.id, type: "fs.patch.previewed", payload: result });
       break;
     }
@@ -325,7 +335,7 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing patches", msg.id);
         break;
       }
-      const result = applyPatchGroup(roots[0] || process.cwd(), payload);
+      const result = applyPatchGroupAcrossRoots(roots, payload);
       send(ws, { id: msg.id, type: "fs.patch.applied", payload: result });
       break;
     }
@@ -336,10 +346,7 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing groupId", msg.id);
         break;
       }
-      const root = roots[0] || process.cwd();
-      const result = payload.chain
-        ? rollbackChain(root, payload.groupId)
-        : rollbackPatchGroup(root, payload.groupId);
+      const result = rollbackPatchGroupAcrossRoots(roots, payload.groupId, payload.chain === true);
       if (!result.ok) {
         sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
       } else {
@@ -356,7 +363,7 @@ async function handleMessage(
       const reqId = `${state.connId}:${msg.id}`;
       const controller = llmAbortRegistry.register(reqId);
       try {
-        const result = await verifyPatchGroup(roots[0] || process.cwd(), {
+        const result = await verifyPatchGroup(roots, {
           files,
           timeoutMs: payload?.timeoutMs,
           signal: controller.signal,
@@ -370,13 +377,18 @@ async function handleMessage(
 
     case "fs.list": {
       const payload = msg.payload as FsListPayload | undefined;
-      const root = payload?.root || roots[0];
-      const files = listFiles(root, roots);
-      send(ws, {
-        id: msg.id,
-        type: "fs.tree",
-        payload: { files, projectTree: getProjectTree(roots) },
-      });
+      if (payload?.root) {
+        const resolved = resolveProjectPath(payload.root, roots, { mustExist: true });
+        if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+        const files = listFiles(resolved.absolutePath, [resolved.root]);
+        send(ws, { id: msg.id, type: "fs.tree", payload: { files, projectTree: getProjectTree(roots) } });
+        break;
+      }
+      const files = roots.flatMap((root) => listFiles(root, [root]).map((file) => ({
+        ...file,
+        path: displayPathFor(root, file.path, roots),
+      })));
+      send(ws, { id: msg.id, type: "fs.tree", payload: { files, projectTree: getProjectTree(roots) } });
       break;
     }
 
@@ -386,7 +398,7 @@ async function handleMessage(
 
       // Resolve API key: per-provider keys first, then global fallback
       const provider = payload.provider || config.provider || "openai";
-      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const apiKey = getProviderApiKey(config, provider);
       const providerMeta = MODEL_REGISTRY?.[provider];
 
       if (!apiKey && !providerMeta?.local) {
@@ -416,6 +428,7 @@ async function handleMessage(
           // H9: opt-in CLI native-edit (config flag or env), off by default.
           nativeEdit: config.nativeEdit === true || process.env.OPENMAGIC_NATIVE_EDIT === "1",
           root: roots[0],
+          roots,
         },
         (chunk) => {
           send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } });
@@ -451,7 +464,7 @@ async function handleMessage(
       const payload = msg.payload as LlmChatPayload;
       const config = loadConfig();
       const provider = payload.provider || config.provider || "openai";
-      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const apiKey = getProviderApiKey(config, provider);
       const providerMeta = MODEL_REGISTRY?.[provider];
       if (!apiKey && !providerMeta?.local) {
         sendError(ws, "config_error", "API key not configured", msg.id);
@@ -478,7 +491,7 @@ async function handleMessage(
         const files = mergedFiles.filter((f) => (seen.has(f.path) ? false : (seen.add(f.path), true)));
         const ctx = { ...baseContext, files, searchResults: loopCtx.searchResults.map((s) => ({ query: s.query, matches: [{ file: "search", lineNum: 0, line: s.result }] })) } as any;
         handleLlmChat(
-          { provider, model, apiKey, messages: payload.messages, context: ctx, useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1", root },
+          { provider, model, apiKey, messages: payload.messages, context: ctx, roots, useTools: config.useTools === true || process.env.OPENMAGIC_TOOLS === "1", root },
           (chunk) => send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: chunk } }),
           (result) => {
             const directives = extractAgentDirectives(result.content || "");
@@ -494,10 +507,14 @@ async function handleMessage(
           {
             step,
             readFile: async (p) => {
-              const r = readFileSafe(join(root, p), roots);
+              const resolved = resolveProjectPath(p, roots, { mustExist: true });
+              if ("error" in resolved) return null;
+              const r = readFileSafe(resolved.absolutePath, [resolved.root]);
               return "error" in r ? null : r.content.slice(0, 16000);
             },
-            search: async (q) => grepFiles(q, root, roots).map((m) => `${m.file}:${m.lineNum}: ${m.line}`).join("\n"),
+            search: async (q) => roots.flatMap((candidate) =>
+              grepFiles(q, candidate, [candidate]).map((m) => `${displayPathFor(candidate, m.file, roots)}:${m.lineNum}: ${m.line}`)
+            ).join("\n"),
             onEvent: (e) => { if (e.type === "investigate") send(ws, { id: msg.id, type: "llm.chunk", payload: { delta: "" } }); },
           },
           { maxSteps: 6, signal: controller.signal }
@@ -543,7 +560,7 @@ async function handleMessage(
           model,
           planBeforeEdit: !!config.planBeforeEdit,
           serverAgent: config.serverAgent === true || process.env.OPENMAGIC_SERVER_AGENT === "1",
-          hasApiKey: !!(config.apiKeys?.[provider] || config.apiKey),
+          hasApiKey: hasProviderApiKey(config, provider),
           roots: config.roots || roots,
           apiKeys: Object.fromEntries(
             Object.entries(config.apiKeys || {}).map(([k]) => [k, true])
@@ -564,7 +581,7 @@ async function handleMessage(
       }
 
       const config = loadConfig();
-      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const apiKey = getProviderApiKey(config, provider);
       const result = await fetchProviderModels(provider, apiKey, { refresh: payload?.refresh });
       send(ws, {
         id: msg.id,
@@ -584,7 +601,7 @@ async function handleMessage(
       }
 
       const config = loadConfig();
-      const apiKey = config.apiKeys?.[provider] || config.apiKey || "";
+      const apiKey = getProviderApiKey(config, provider);
       const result = await testProviderModel(provider, model, apiKey);
       send(ws, {
         id: msg.id,
@@ -596,7 +613,7 @@ async function handleMessage(
 
     case "project.ground": {
       const payload = msg.payload as ProjectGroundRequest | undefined;
-      const result = groundProject(roots[0] || process.cwd(), payload || {});
+      const result = groundProjects(roots, payload || {});
       send(ws, {
         id: msg.id,
         type: "project.ground.result",
@@ -617,9 +634,7 @@ async function handleMessage(
         const apiKeys = { ...(existing.apiKeys || {}) };
         apiKeys[payload.provider] = payload.apiKey;
         updates.apiKeys = apiKeys;
-        updates.apiKey = payload.apiKey; // backward compat
       } else if (payload.apiKey !== undefined) {
-        updates.apiKey = payload.apiKey;
       }
       const result = saveConfig(updates);
       if (!result.ok) {
@@ -636,8 +651,16 @@ async function handleMessage(
         sendError(ws, "invalid_payload", "Missing pattern", msg.id);
         break;
       }
-      const searchRoot = payload.path ? join(roots[0] || process.cwd(), payload.path) : (roots[0] || process.cwd());
-      const results = grepFiles(payload.pattern, searchRoot, roots);
+      let results: Array<{ file: string; lineNum: number; line: string }> = [];
+      if (payload.path) {
+        const resolved = resolveProjectPath(payload.path, roots, { mustExist: true });
+        if ("error" in resolved) { sendError(ws, "fs_error", resolved.error, msg.id); break; }
+        results = grepFiles(payload.pattern, resolved.absolutePath, [resolved.root])
+          .map((match) => ({ ...match, file: displayPathFor(resolved.root, match.file, roots) }));
+      } else {
+        results = roots.flatMap((root) => grepFiles(payload.pattern, root, [root])
+          .map((match) => ({ ...match, file: displayPathFor(root, match.file, roots) })));
+      }
       send(ws, { id: msg.id, type: "fs.grep.result", payload: { results } });
       break;
     }

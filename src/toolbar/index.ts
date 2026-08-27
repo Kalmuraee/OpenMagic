@@ -109,7 +109,7 @@ let MODEL_REGISTRY: Record<string, ToolbarProviderInfo> = {
   openrouter: { name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys", keyPlaceholder: "sk-or-...", models: [] },
 };
 
-const CURRENT_VERSION = "0.44.2";
+const CURRENT_VERSION = "0.45.0";
 
 // ── State ────────────────────────────────────────────────────────
 const state = {
@@ -156,7 +156,7 @@ const state = {
   cmdkIndex: 0,                 // highlighted command index
   editTargetEl: null as HTMLElement | null,                 // live element being visually edited
   editorOriginal: null as ElementState | null,              // snapshot at editor open (for diffing)
-  editorRevert: null as { attrs: Record<string, string>; text: string } | null, // for Discard
+  editorRevert: null as { attrs: Record<string, string>; textNode: Text | null; text: string; customProps: Set<string> } | null, // for Discard
 };
 
 // ── DOM refs (created once) ──────────────────────────────────────
@@ -242,6 +242,10 @@ function init() {
     else if (d.kind === "css") fake.dataset.editCustomCss = "";
     fake.value = d.value ?? "";
     applyLiveEdit(fake);
+  });
+  host.addEventListener("openmagic:test-discard-edit", () => {
+    revertElementEdits();
+    openPanel("chat");
   });
   document.body.appendChild(host);
 
@@ -602,7 +606,8 @@ function attachGlobalEvents(root: HTMLElement) {
 }
 
 function resolveFilePath(rel: string): string {
-  return state.roots.length > 0 ? state.roots[0] + "/" + rel : rel;
+  if (state.roots.length !== 1 || /^(?:[A-Za-z]:[\\/]|\/)/.test(rel)) return rel;
+  return state.roots[0] + "/" + rel;
 }
 
 type FilePatch =
@@ -735,11 +740,16 @@ async function checkRuntimeAfterReload(): Promise<void> {
   if (!pending) return;
   clearPendingRuntimeCheck(); // one-shot
 
-  // Let the freshly-reloaded app render and throw before we look.
-  await new Promise((r) => setTimeout(r, 1500));
-
-  const failure = summarizeRuntimeFailure(scrapeErrorOverlay(), getRuntimeErrors());
-  if (!failure) return; // healthy at runtime — nothing to do
+  // Observe a short window: hydration and lazy effects often fail after the
+  // first paint rather than at one fixed 1.5-second instant.
+  let failure = "";
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    failure = summarizeRuntimeFailure(scrapeErrorOverlay(), getRuntimeErrors()) || "";
+    if (failure) break;
+  }
+  if (!failure) return;
 
   try { await ws.request("fs.patch.rollback", { groupId: pending.groupId, chain: true }); } catch { /* manifest may be gone */ }
   openPanel("chat");
@@ -874,7 +884,9 @@ async function verifyAndSettle(groupId: string, files: string[], reload: () => v
     const res = await ws.request("fs.patch.verify", { files });
     verdict = res?.payload;
   } catch {
-    reload(); // verification itself couldn't run — don't block the edit
+    armRuntimeCheck();
+    state.messages.push({ role: "system", content: "Build verification could not run; keeping the edit provisionally and running the browser runtime smoke check after reload." });
+    reload();
     return;
   }
 
@@ -1558,7 +1570,8 @@ function openElementEditor(): void {
   state.editorOriginal = captureLiveElementState(el);
   const attrs: Record<string, string> = {};
   for (const a of Array.from(el.attributes)) attrs[a.name] = a.value;
-  state.editorRevert = { attrs, text: el.textContent || "" };
+  const textNode = Array.from(el.childNodes).find((node): node is Text => node.nodeType === Node.TEXT_NODE && !!node.textContent?.trim()) || null;
+  state.editorRevert = { attrs, textNode, text: textNode?.nodeValue || "", customProps: new Set<string>() };
   $host?.setAttribute("data-openmagic-editing", elementLabel());
   openPanel("edit");
 }
@@ -1566,24 +1579,30 @@ function openElementEditor(): void {
 // Live preview: apply an edit straight to the page element as the user types.
 function applyLiveEdit(target: HTMLElement): void {
   const el = state.editTargetEl;
-  if (!el) return;
+  const snap = state.editorRevert;
+  if (!el || !snap) return;
   const value = (target as HTMLInputElement | HTMLTextAreaElement).value;
   if (target.dataset.editStyle) {
-    if (value.trim()) el.style.setProperty(target.dataset.editStyle, value); else el.style.removeProperty(target.dataset.editStyle);
+    if (value.trim()) el.style.setProperty(target.dataset.editStyle, value);
+    else el.style.removeProperty(target.dataset.editStyle);
   } else if (target.dataset.editText !== undefined) {
-    el.textContent = value;
+    // Never assign container.textContent: that destroys descendant elements and
+    // their listeners. Edit the existing direct text node only.
+    if (snap.textNode?.parentNode === el) snap.textNode.nodeValue = value;
   } else if (target.dataset.editClass !== undefined) {
     el.className = value;
   } else if (target.dataset.editAttr) {
-    if (value) el.setAttribute(target.dataset.editAttr, value); else el.removeAttribute(target.dataset.editAttr);
+    if (value) el.setAttribute(target.dataset.editAttr, value);
+    else el.removeAttribute(target.dataset.editAttr);
   } else if (target.dataset.editCustomCss !== undefined) {
-    // Parse "prop: value;" declarations and apply each.
+    for (const prop of snap.customProps) el.style.removeProperty(prop);
+    snap.customProps.clear();
     for (const decl of value.split(";")) {
       const idx = decl.indexOf(":");
       if (idx === -1) continue;
       const prop = decl.slice(0, idx).trim();
       const val = decl.slice(idx + 1).trim();
-      if (prop && val) el.style.setProperty(prop, val);
+      if (prop && val) { el.style.setProperty(prop, val); snap.customProps.add(prop); }
     }
   }
 }
@@ -1592,9 +1611,11 @@ function revertElementEdits(): void {
   const el = state.editTargetEl;
   const snap = state.editorRevert;
   if (el && snap) {
-    for (const a of Array.from(el.attributes)) el.removeAttribute(a.name);
-    for (const [k, v] of Object.entries(snap.attrs)) { try { el.setAttribute(k, v); } catch { /* invalid attr name */ } }
-    el.textContent = snap.text;
+    for (const attribute of Array.from(el.attributes)) el.removeAttribute(attribute.name);
+    for (const [name, value] of Object.entries(snap.attrs)) {
+      try { el.setAttribute(name, value); } catch {}
+    }
+    if (snap.textNode?.parentNode === el) snap.textNode.nodeValue = snap.text;
   }
   state.editTargetEl = null;
   state.editorOriginal = null;
@@ -1637,7 +1658,7 @@ function renderEditPanelHTML(): string {
       <div class="om-edit-hint">Edits preview live on the page. "Apply to code" sends them to the LLM to change the source.</div>
 
       <div class="om-edit-section">Content</div>
-      <label class="om-edit-row"><span class="om-edit-label">text</span><input class="om-edit-input" data-edit-text value="${escapeHtml(s.text.slice(0, 200))}" /></label>
+      <label class="om-edit-row"><span class="om-edit-label">text</span><input class="om-edit-input" data-edit-text value="${escapeHtml(state.editorRevert?.text || "")}" ${state.editorRevert?.textNode ? "" : "disabled title=\"This element has no direct editable text node\""} /></label>
       <label class="om-edit-row"><span class="om-edit-label">class</span><input class="om-edit-input" data-edit-class value="${escapeHtml(s.className)}" /></label>
 
       <div class="om-edit-section">Styles</div>

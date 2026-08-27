@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { terminateChildProcessTree } from "./child-process.js";
 import type { ChatMessage, LlmContext } from "../shared-types.js";
 import { SYSTEM_PROMPT, NATIVE_EDIT_INSTRUCTION, buildUserMessage, buildContextParts } from "./prompts.js";
 
@@ -26,21 +27,35 @@ export async function chatCodexCli(
       ? lastUserMsg.content
       : "Help me with this element.";
 
+  const conversationHistory = messages
+    .slice(0, Math.max(0, messages.lastIndexOf(lastUserMsg!)))
+    .filter((message) => typeof message.content === "string")
+    .slice(-20)
+    .map((message) => `${message.role.toUpperCase()}: ${message.content as string}`)
+    .join("\n\n");
+
   const contextParts = buildContextParts(context);
   const systemText = context.nativeEdit ? NATIVE_EDIT_INSTRUCTION : SYSTEM_PROMPT;
-  const fullPrompt = `${systemText}\n\n${buildUserMessage(userPrompt, contextParts)}`;
+  const currentPrompt = buildUserMessage(userPrompt, contextParts);
+  const conversationPrompt = conversationHistory ? `Previous conversation:\n${conversationHistory}\n\nCurrent request:\n${currentPrompt}` : currentPrompt;
+  const fullPrompt = `${systemText}\n\n${conversationPrompt}`;
 
   // `codex exec` is the non-interactive subcommand (no TTY required)
   // --full-auto: auto-approve actions (alias for --sandbox workspace-write)
   // --json: structured JSONL output to stdout
   // --skip-git-repo-check: allow running outside git repos
   // - : read prompt from stdin
+  await new Promise<void>((resolve) => {
+  let processSettled = false;
+  const settle = () => { if (!processSettled) { processSettled = true; resolve(); } };
+
   const proc = spawn(
     "codex",
     ["exec", "--full-auto", "--json", "--skip-git-repo-check", "-"],
     {
       stdio: ["pipe", "pipe", "pipe"],
-      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      cwd: context.projectRoot || process.cwd(),
     }
   );
 
@@ -49,8 +64,8 @@ export async function chatCodexCli(
 
   let aborted = false;
   if (signal) {
-    if (signal.aborted) { aborted = true; proc.kill("SIGTERM"); }
-    else signal.addEventListener("abort", () => { aborted = true; proc.kill("SIGTERM"); }, { once: true });
+    if (signal.aborted) { aborted = true; terminateChildProcessTree(proc); }
+    else signal.addEventListener("abort", () => { aborted = true; terminateChildProcessTree(proc); }, { once: true });
   }
 
   let fullContent = "";
@@ -87,10 +102,11 @@ export async function chatCodexCli(
     } else {
       onError(`Codex CLI error: ${err.message}`);
     }
+    settle();
   });
 
   proc.on("close", (code) => {
-    if (aborted) return; // client cancelled — stay silent
+    if (aborted) { settle(); return; } // client cancelled — settle without callbacks
     // Process remaining buffer
     if (buffer.trim()) {
       try {
@@ -112,6 +128,8 @@ export async function chatCodexCli(
         onError(err.slice(0, 500) || `Codex CLI exited with code ${code}`);
       }
     }
+    settle();
+  });
   });
 }
 

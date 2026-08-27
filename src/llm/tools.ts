@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { grepFiles, listFiles, readFileSafe } from "../filesystem.js";
 import { findSymbol, getSymbolIndex } from "../symbol-index.js";
 import type { CodeModification } from "../shared-types.js";
+import { displayPathFor, resolveProjectPath } from "../root-resolver.js";
 
 /**
  * H11: native tool-calling. Instead of hand-writing a JSON contract and scraping
@@ -32,10 +33,14 @@ interface ToolSpec {
 export const TOOL_SPECS: ToolSpec[] = [
   {
     name: "read_file",
-    description: "Read the full, exact contents of a source file (path relative to the project root). Use this before proposing an edit so your search block matches byte-for-byte.",
+    description: "Read an exact page of a source file. Use offset/limit repeatedly until no MORE_AVAILABLE marker remains before proposing a byte-exact edit.",
     parameters: {
       type: "object",
-      properties: { path: { type: "string", description: "Path relative to project root" } },
+      properties: {
+        path: { type: "string", description: "Path relative to project root" },
+        offset: { type: "integer", minimum: 0, description: "Character offset (default 0)" },
+        limit: { type: "integer", minimum: 1, maximum: 16000, description: "Characters to return (default/max 16000)" },
+      },
       required: ["path"],
     },
   },
@@ -106,25 +111,48 @@ export function executeServerTool(
   switch (name) {
     case "read_file": {
       const rel = String(args.path || "");
-      const read = readFileSafe(join(root, rel), roots);
+      const resolved = resolveProjectPath(rel, roots, { mustExist: true });
+      if ("error" in resolved) return { content: `Error reading ${rel}: ${resolved.error}` };
+      const read = readFileSafe(resolved.absolutePath, [resolved.root]);
       if ("error" in read) return { content: `Error reading ${rel}: ${read.error}` };
-      const content = read.content.length > MAX_TOOL_FILE_CHARS
-        ? read.content.slice(0, MAX_TOOL_FILE_CHARS) + `\n// [truncated at ${MAX_TOOL_FILE_CHARS} chars]`
-        : read.content;
-      return { content: `Contents of ${rel}:\n${content}` };
+      const offset = Math.max(0, Number.isFinite(Number(args.offset)) ? Math.floor(Number(args.offset)) : 0);
+      const limit = Math.min(MAX_TOOL_FILE_CHARS, Math.max(1, Number.isFinite(Number(args.limit)) ? Math.floor(Number(args.limit)) : MAX_TOOL_FILE_CHARS));
+      const chunk = read.content.slice(offset, offset + limit);
+      const nextOffset = offset + chunk.length < read.content.length ? offset + chunk.length : null;
+      return {
+        content: `Contents of ${resolved.displayPath} [${offset}:${offset + chunk.length}] of ${read.content.length}:
+${chunk}` +
+          (nextOffset === null ? "" : `
+[MORE_AVAILABLE next_offset=${nextOffset}]`),
+      };
     }
     case "search_code": {
       const pattern = String(args.pattern || "");
-      const sub = args.path ? join(root, String(args.path)) : root;
-      const results = grepFiles(pattern, sub, roots);
+      let results: Array<{ file: string; lineNum: number; line: string }> = [];
+      if (args.path) {
+        const resolved = resolveProjectPath(String(args.path), roots, { mustExist: true });
+        if ("error" in resolved) return { content: `Search path error: ${resolved.error}` };
+        results = grepFiles(pattern, resolved.absolutePath, [resolved.root])
+          .map((match) => ({ ...match, file: displayPathFor(resolved.root, match.file, roots) }));
+      } else {
+        results = roots.flatMap((candidate) => grepFiles(pattern, candidate, [candidate])
+          .map((match) => ({ ...match, file: displayPathFor(candidate, match.file, roots) })));
+      }
       if (!results.length) return { content: `No matches for "${pattern}".` };
       return { content: results.map((r) => `${r.file}:${r.lineNum}: ${r.line}`).join("\n") };
     }
     case "list_dir": {
-      const dir = args.path ? join(root, String(args.path)) : root;
-      const entries = listFiles(dir, roots, 3);
+      if (args.path) {
+        const resolved = resolveProjectPath(String(args.path), roots, { mustExist: true });
+        if ("error" in resolved) return { content: `List path error: ${resolved.error}` };
+        const entries = listFiles(resolved.absolutePath, [resolved.root], 3);
+        if (!entries.length) return { content: "No files found." };
+        return { content: entries.map((entry) => `${entry.type === "dir" ? "[dir] " : ""}${displayPathFor(resolved.root, entry.path, roots)}`).join("\n") };
+      }
+      const entries = roots.flatMap((candidate) => listFiles(candidate, [candidate], 3)
+        .map((entry) => ({ ...entry, path: displayPathFor(candidate, entry.path, roots) })));
       if (!entries.length) return { content: "No files found." };
-      return { content: entries.map((e) => `${e.type === "dir" ? "[dir] " : ""}${e.path}`).join("\n") };
+      return { content: entries.map((entry) => `${entry.type === "dir" ? "[dir] " : ""}${entry.path}`).join("\n") };
     }
     case "find_symbol": {
       const entries = findSymbol(getSymbolIndex(root, roots), String(args.name || ""));

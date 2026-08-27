@@ -6,6 +6,7 @@ import {
   attributeToTouched,
   verifyTouchedFiles,
   runVerifyScript,
+  getNpmInvocation,
   verifyPatchGroup,
 } from "../src/verify.js";
 
@@ -65,19 +66,33 @@ describe("verifyTouchedFiles", () => {
   });
 });
 
+describe("getNpmInvocation", () => {
+  it("uses cmd.exe without spawning a .cmd file directly on Windows", () => {
+    const invocation = getNpmInvocation("typecheck", "win32");
+    expect("error" in invocation).toBe(false);
+    if ("error" in invocation) return;
+    expect(invocation.command.toLowerCase()).toContain("cmd");
+    expect(invocation.args).toEqual(["/d", "/s", "/c", "npm run --silent typecheck"]);
+  });
+
+  it("rejects unsafe script names before invoking a shell", () => {
+    expect(getNpmInvocation("lint && whoami", "win32")).toEqual({ error: "Invalid npm script name" });
+  });
+});
+
 describe("runVerifyScript", () => {
   it("reports success for a script that exits 0", async () => {
     pkg({ ok: "node -e \"process.exit(0)\"" });
     const r = await runVerifyScript(ROOT, "ok", 15000);
     expect(r.code).toBe(0);
     expect(r.timedOut).toBe(false);
-  });
+  }, 20_000);
   it("captures failure output for a script that exits non-zero", async () => {
     pkg({ bad: "node -e \"console.log('boom err'); process.exit(1)\"" });
     const r = await runVerifyScript(ROOT, "bad", 15000);
     expect(r.code).not.toBe(0);
     expect(r.output).toContain("boom");
-  });
+  }, 20_000);
   it("times out a long-running script", async () => {
     pkg({ slow: "node -e \"setTimeout(()=>{}, 10000)\"" });
     const r = await runVerifyScript(ROOT, "slow", 500);

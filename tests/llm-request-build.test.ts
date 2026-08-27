@@ -77,6 +77,6 @@ describe("buildGoogleRequest", () => {
 
   it("applies the per-request thinking level", () => {
     const body = buildGoogleRequest("gemini-x", msgs, { reasoningLevel: "high" }, geminiThinker) as Record<string, any>;
-    expect(body.thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
+    expect((body.generationConfig as any).thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
   });
 });

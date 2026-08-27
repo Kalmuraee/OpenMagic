@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { deleteFileSafe, isPathSafe, readFileSafe, writeFileSafe } from "./filesystem.js";
+import { captureFileSnapshotSafe, deleteFileSafe, isPathSafe, readFileSafe, restoreFileSnapshotSafe, writeFileSafe, type FileSnapshot } from "./filesystem.js";
 
 export type FilePatch =
   | { type: "replace"; file: string; search: string; replace: string }
@@ -49,11 +49,7 @@ interface PatchManifest {
   groupId: string;
   timestamp: number;
   parentGroupId?: string;
-  files: Array<{
-    path: string;
-    existed: boolean;
-    content: string;
-  }>;
+  files: Array<{ path: string; snapshot: FileSnapshot; content?: string; existed?: boolean }>;
 }
 
 const manifests = new Map<string, PatchManifest>();
@@ -70,10 +66,13 @@ function manifestPath(groupId: string): string {
 
 function persistManifest(manifest: PatchManifest): void {
   try {
-    mkdirSync(manifestDir(), { recursive: true });
-    const tmp = `${manifestPath(manifest.groupId)}.tmp`;
-    writeFileSync(tmp, JSON.stringify(manifest), "utf-8");
+    mkdirSync(manifestDir(), { recursive: true, mode: 0o700 });
+    try { chmodSync(manifestDir(), 0o700); } catch {}
+    const tmp = `${manifestPath(manifest.groupId)}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(manifest), { encoding: "utf-8", mode: 0o600 });
+    try { chmodSync(tmp, 0o600); } catch {}
     renameSync(tmp, manifestPath(manifest.groupId));
+    try { chmodSync(manifestPath(manifest.groupId), 0o600); } catch {}
   } catch {
     // Disk persistence is best-effort — the in-memory map still allows undo
     // within this process even if the home dir is read-only.
@@ -149,11 +148,11 @@ export function applyPatchGroup(root: string, request: PatchGroupRequest): Patch
     groupId,
     timestamp: Date.now(),
     parentGroupId: request.parentGroupId,
-    files: planned.map((item) => ({
-      path: item.path,
-      existed: item.existed,
-      content: item.originalContent,
-    })),
+    files: planned.map((item) => {
+      const snapshot = captureFileSnapshotSafe(item.path, [root]);
+      if ("error" in snapshot) throw new Error(snapshot.error);
+      return { path: item.path, snapshot };
+    }),
   };
 
   const applied: PlannedPatch[] = [];
@@ -191,13 +190,14 @@ export function rollbackPatchGroup(root: string, groupId: string): { ok: boolean
   if (!manifest) return { ok: false, groupId, error: "Patch group not found" };
 
   for (const file of manifest.files) {
-    if (file.existed) {
-      const result = writeFileSafe(file.path, file.content, [root]);
-      if (!result.ok) return { ok: false, groupId, error: result.error || `Failed to restore ${file.path}` };
-    } else if (existsSync(file.path)) {
-      const result = deleteFileSafe(file.path, [root]);
-      if (!result.ok) return { ok: false, groupId, error: result.error || `Failed to remove ${file.path}` };
-    }
+    const snapshot: FileSnapshot = file.snapshot || {
+      existed: !!file.existed,
+      contentBase64: file.existed && typeof file.content === "string"
+        ? Buffer.from(file.content, "utf-8").toString("base64")
+        : undefined,
+    };
+    const result = restoreFileSnapshotSafe(file.path, snapshot, [root]);
+    if (!result.ok) return { ok: false, groupId, error: result.error || `Failed to restore ${file.path}` };
   }
 
   forgetManifest(groupId);
@@ -211,20 +211,26 @@ export function rollbackPatchGroup(root: string, groupId: string): { ok: boolean
  */
 export function rollbackChain(root: string, groupId: string): { ok: boolean; error?: string; groupId: string; files?: string[] } {
   const visited = new Set<string>();
-  const files: string[] = [];
+  const chain: PatchManifest[] = [];
   let current: string | undefined = groupId;
 
-  while (current && !visited.has(current)) {
+  // Resolve the complete chain before touching files. Missing/corrupt parents
+  // must not produce a partial rollback reported as success.
+  while (current) {
+    if (visited.has(current)) return { ok: false, groupId, error: "Patch chain contains a cycle" };
     visited.add(current);
     const manifest = loadManifest(current);
-    if (!manifest) break;
-    const parent = manifest.parentGroupId;
-    const rb = rollbackPatchGroup(root, current);
-    if (!rb.ok) return { ok: false, groupId, error: rb.error };
-    if (rb.files) files.push(...rb.files);
-    current = parent;
+    if (!manifest) return { ok: false, groupId, error: `Patch group not found: ${current}` };
+    chain.push(manifest);
+    current = manifest.parentGroupId;
   }
 
+  const files: string[] = [];
+  for (const manifest of chain) {
+    const result = rollbackPatchGroup(root, manifest.groupId);
+    if (!result.ok) return { ok: false, groupId, error: result.error };
+    if (result.files) files.push(...result.files);
+  }
   return { ok: true, groupId, files: [...new Set(files)] };
 }
 

@@ -83,9 +83,16 @@ export async function runToolLoop(
 // ---------------------------------------------------------------------------
 
 function initialUserContent(messages: ChatMessage[], context: LlmContext): string {
-  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const lastUserIndex = messages.reduce((found, message, index) => message.role === "user" ? index : found, -1);
+  const lastUser = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
   const prompt = typeof lastUser?.content === "string" ? lastUser.content : "Help me with this element.";
-  return buildUserMessage(prompt, buildContextParts(context));
+  const history = messages.slice(0, Math.max(0, lastUserIndex))
+    .filter((message) => typeof message.content === "string")
+    .slice(-20)
+    .map((message) => `${message.role.toUpperCase()}: ${message.content as string}`)
+    .join("\n\n");
+  const current = buildUserMessage(prompt, buildContextParts(context));
+  return history ? `Previous conversation:\n${history}\n\nCurrent request:\n${current}` : current;
 }
 
 export class OpenAiToolDriver implements ToolDriver {

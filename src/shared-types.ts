@@ -103,6 +103,8 @@ export interface LlmContext {
   selectedElement?: ElementInfo;
   selectedElements?: ElementInfo[]; // U3: additional elements when multi-selecting
   screenshot?: string; // base64 data URL
+  attachments?: string[]; // additional base64 image data URLs
+  projectRoot?: string; // actual execution cwd for local CLI agents
   networkLogs?: NetworkLogEntry[];
   consoleLogs?: ConsoleLogEntry[];
   runtimeErrors?: RuntimeErrorEntry[];
@@ -185,8 +187,8 @@ export type ParseStatus = "clean" | "salvaged" | "truncated" | "failed";
 export interface OpenMagicConfig {
   provider?: string;
   model?: string;
-  apiKey?: string;
-  apiKeys?: Record<string, string>; // per-provider key storage
+  apiKey?: string; // legacy migration input only; never a cross-provider fallback
+  apiKeys?: Record<string, string>; // provider-bound key storage
   planBeforeEdit?: boolean;
   useTools?: boolean;   // opt-in: native tool-calling for tool-capable providers (H11)
   nativeEdit?: boolean; // opt-in: CLI agents edit the tree natively, captured+reverted+reviewed (H9)

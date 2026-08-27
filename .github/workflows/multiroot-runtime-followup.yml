@@ -1,0 +1,72 @@
+name: Multi-root Runtime Audit Follow-up
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - name: Preserve runtime follow-up
+        run: cp scripts/apply-multiroot-runtime-followup.py /tmp/apply-multiroot-runtime-followup.py
+
+      - name: Wait for transformed base
+        run: |
+          for attempt in $(seq 1 120); do
+            git fetch origin fix/full-audit-20260827
+            git reset --hard origin/fix/full-audit-20260827
+            if test -f src/root-resolver.ts && test -f src/multi-root-patch.ts; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - run: python /tmp/apply-multiroot-runtime-followup.py
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run eval
+      - run: npm run test:smoke
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run check:pack
+      - run: npm audit --omit=dev
+
+      - name: Commit validated runtime follow-up
+        run: |
+          rm -f .github/workflows/multiroot-runtime-followup.yml .github/workflows/audit-base-rescue.yml .github/workflows/audit-followup.yml .github/workflows/audit-finalize.yml .github/workflows/audit-finalize-bot.yml .github/workflows/source-snapshot.yml
+          rm -f scripts/apply-multiroot-runtime-followup.py scripts/apply-audit-base-adjustments.py scripts/apply-audit-followup.py scripts/apply-full-audit-fixes.py .audit-fix-tool-ready
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: complete multi-root runtime and provider tool hardening"
+          git pull --rebase origin fix/full-audit-20260827
+          git push origin HEAD:fix/full-audit-20260827
+
+      - name: Update pull request
+        run: |
+          if gh pr view fix/full-audit-20260827 --repo Kalmuraee/OpenMagic >/dev/null 2>&1; then
+            gh pr ready fix/full-audit-20260827 --repo Kalmuraee/OpenMagic || true
+          fi

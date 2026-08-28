@@ -68,7 +68,25 @@ Discovery evidence:
 
 - [Target discovery report](https://github.com/Kalmuraee/awesome-ai-devtools/tree/openmagic-target-discovery/promotion-targets)
 
-A stricter second-stage review is maintained separately. It rechecks current absence, category fit, contribution rules, repository activity, and whether the repository is genuinely a curated list before a target is approved.
+## Verified 100-target ledger
+
+A second-stage automated review was completed on August 28, 2026. It re-read the current upstream repositories and produced:
+
+- **100 distinct target repositories** in the final ledger
+- **159 repositories** in the broader verified pool
+- **191 candidates rejected** during the strict pass
+- OpenMagic absent from all 100 final targets at verification time
+- Active, non-archived repositories only
+- A detected contribution path and at least one potentially relevant category for every included repository
+
+Evidence:
+
+- [Final 100-target report](https://github.com/Kalmuraee/awesome-ai-devtools/tree/openmagic-final-100/promotion-final-100)
+- [Machine-readable 100-target ledger](https://github.com/Kalmuraee/awesome-ai-devtools/blob/openmagic-final-100/promotion-final-100/targets.json)
+- [Broader verified pool](https://github.com/Kalmuraee/awesome-ai-devtools/blob/openmagic-final-100/promotion-final-100/verified-pool.json)
+- [Rejected candidates](https://github.com/Kalmuraee/awesome-ai-devtools/blob/openmagic-final-100/promotion-final-100/rejected.json)
+
+The final ledger is a targeting and review queue, not authorization for indiscriminate submission. Category detection is automated, so every entry must receive a final human relevance check before a branch or pull request is created. Issue-only directories, narrow research lists, prompt collections, governance directories, and other weak-fit categories must be removed during that review even when a generic developer-related heading was detected.
 
 ## Access boundary
 
@@ -82,4 +100,5 @@ For such repositories, the compare links above are the final prepared submission
 2. Withdraw submissions where OpenMagic is already listed.
 3. Withdraw submissions to inactive or mismatched repositories.
 4. Keep one compliant submission for each qualified upstream repository.
-5. Prioritize high-fit, actively maintained lists over raw submission count.
+5. Manually review the automated 100-target ledger before preparing more branches.
+6. Prioritize high-fit, actively maintained lists over raw submission count.

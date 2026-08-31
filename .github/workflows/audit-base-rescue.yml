@@ -1,0 +1,65 @@
+name: Audit Base Transformation Rescue
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  transform-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - name: Preserve transformation scripts
+        run: |
+          cp scripts/apply-audit-base-adjustments.py /tmp/apply-audit-base-adjustments.py
+          if test -f scripts/apply-full-audit-fixes.py; then
+            cp scripts/apply-full-audit-fixes.py /tmp/apply-full-audit-fixes.py
+          fi
+
+      - name: Establish transformed source
+        run: |
+          if test -f src/root-resolver.ts && test -f src/multi-root-patch.ts; then
+            echo "Using the already transformed branch."
+          else
+            test -f /tmp/apply-full-audit-fixes.py
+            git fetch origin main
+            git reset --hard origin/main
+            python /tmp/apply-full-audit-fixes.py
+          fi
+          python /tmp/apply-audit-base-adjustments.py
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run eval
+      - run: npm run test:smoke
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - run: npm run check:pack
+      - run: npm audit --omit=dev
+
+      - name: Publish validated transformed base
+        run: |
+          rm -f .github/workflows/source-snapshot.yml .github/workflows/audit-base-rescue.yml .github/workflows/audit-finalize.yml .github/workflows/audit-finalize-bot.yml
+          rm -f scripts/apply-full-audit-fixes.py scripts/apply-audit-base-adjustments.py .audit-fix-tool-ready
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve OpenMagic audit safety and reliability findings"
+          git push --force origin HEAD:fix/full-audit-20260827

@@ -1,0 +1,77 @@
+name: Apply Full Audit Fixes
+
+on:
+  push:
+    branches:
+      - fix/full-audit-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: fix/full-audit-20260827
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Preserve the deterministic transformer
+        run: cp scripts/apply-full-audit-fixes.py /tmp/apply-full-audit-fixes.py
+
+      - name: Reset the branch to current main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Apply audited fixes
+        run: python /tmp/apply-full-audit-fixes.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Edit-success evaluation
+        run: npm run eval
+
+      - name: CLI smoke test
+        run: npm run test:smoke
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run test:browser
+
+      - name: Package inspection
+        run: npm run check:pack
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+
+      - name: Commit validated fixes
+        run: |
+          git config user.name "OpenMagic Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: resolve full OpenMagic safety and reliability audit"
+          git push --force origin HEAD:fix/full-audit-20260827

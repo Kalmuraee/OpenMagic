@@ -358,7 +358,8 @@ export function restoreFileSnapshotSafe(filePath: string, snapshot: FileSnapshot
       }
       return { ok: true };
     }
-    if (!snapshot.contentBase64) return { ok: false, error: "Snapshot content is missing" };
+    // An empty string is the valid encoding of an existing zero-byte file.
+    if (typeof snapshot.contentBase64 !== "string") return { ok: false, error: "Snapshot content is missing" };
     atomicWriteFile(filePath, Buffer.from(snapshot.contentBase64, "base64"), snapshot.mode);
     return { ok: true };
   } catch (error) {

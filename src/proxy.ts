@@ -15,7 +15,8 @@ export function createProxyServer(
   targetHost: string,
   targetPort: number,
   roots: string[],
-  gitSession?: GitSession
+  gitSession?: GitSession,
+  allowedOrigin?: string
 ): http.Server {
   const proxy = httpProxy.createProxyServer({
     target: `http://${targetHost}:${targetPort}`,
@@ -106,7 +107,7 @@ export function createProxyServer(
   });
 
   // Attach OpenMagic endpoints to THIS server (same port, noServer WSS)
-  const om = attachOpenMagic(server, roots, gitSession);
+  const om = attachOpenMagic(server, roots, gitSession, allowedOrigin);
   omHandle = om.handleRequest;
   omUpgrade = om.handleUpgrade;
   server.on("upgrade", (req, socket, head) => {

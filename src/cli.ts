@@ -510,6 +510,7 @@ program
   .option("--git-mode <mode>", "Commit applied changes: off | branch", "off")
   .option("--branch <name>", "Session branch to create and commit to")
   .option("--journal <path>", "Change journal path", ".openmagic/journal.jsonl")
+  .option("--allow-origin <origin>", "Additional Origin allowed to open the toolbar WebSocket (hosted mode)")
   .action(async (opts) => {
     writeLine();
     writeLine(`${INDENT}${pc.white("OpenMagic")} ${pc.dim(`v${VERSION}`)}`);
@@ -673,8 +674,21 @@ program
       }
     }
 
+    // An extra WS origin (hosted mode embeds the toolbar behind a preview
+    // domain) must be a real origin — a malformed one never matches anyway,
+    // but failing here beats silently rejecting every toolbar connection.
+    let allowedOrigin: string | undefined;
+    if (opts.allowOrigin) {
+      try {
+        allowedOrigin = new URL(opts.allowOrigin).origin;
+      } catch {
+        printError(`--allow-origin is not a valid URL: ${opts.allowOrigin}`);
+        process.exit(1);
+      }
+    }
+
     // Single server: proxy + toolbar + WebSocket all on one port
-    const proxyServer = createProxyServer(targetHost, targetPort!, roots, gitSession);
+    const proxyServer = createProxyServer(targetHost, targetPort!, roots, gitSession, allowedOrigin);
 
     const bindAddress = opts.bind || "localhost";
     proxyServer.listen(proxyPort, bindAddress, async () => {

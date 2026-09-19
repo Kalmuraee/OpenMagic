@@ -107,7 +107,8 @@ export function authorizeOperation(type: string, authenticated: boolean): boolea
 export function attachOpenMagic(
   httpServer: http.Server,
   roots: string[],
-  gitSession?: GitSession
+  gitSession?: GitSession,
+  allowedOrigin?: string
 ): {
   wss: WebSocketServer;
   handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean;
@@ -149,7 +150,7 @@ export function attachOpenMagic(
 
   wss.on("connection", (ws, req) => {
     const origin = req.headers.origin || "";
-    if (!isAllowedWsOrigin(origin)) {
+    if (!isAllowedWsOrigin(origin, allowedOrigin)) {
       ws.close(4003, "Forbidden origin");
       return;
     }
@@ -705,8 +706,9 @@ async function handleMessage(
   }
 }
 
-export function isAllowedWsOrigin(origin: string): boolean {
+export function isAllowedWsOrigin(origin: string, extraAllowedOrigin?: string): boolean {
   if (!origin) return true;
+  if (extraAllowedOrigin && origin === extraAllowedOrigin) return true;
 
   try {
     const parsed = new URL(origin);

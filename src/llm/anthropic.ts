@@ -2,6 +2,7 @@ import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
 import { resolveMaxOutput, resolveThinkingBudget } from "./thinking.js";
+import { describeProviderHttpError } from "./http-error.js";
 
 interface AnthropicMessage {
   role: "user" | "assistant";
@@ -96,13 +97,7 @@ export async function chatAnthropic(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      if (response.status === 401 || response.status === 403) {
-        onError("Invalid Anthropic API key. Check your key in Settings.");
-      } else if (response.status === 429) {
-        onError("Anthropic rate limit exceeded. Wait a moment and try again.");
-      } else {
-        onError(`Anthropic API error ${response.status}: ${errorText.slice(0, 200)}`);
-      }
+      onError(describeProviderHttpError(response.status, "Anthropic", errorText));
       return;
     }
 

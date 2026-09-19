@@ -2,6 +2,7 @@ import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
 import { mapOpenAiEffort, resolveMaxOutput, resolveReasoningLevel } from "./thinking.js";
+import { describeProviderHttpError } from "./http-error.js";
 
 interface OpenAICompatibleRequest {
   model: string;
@@ -134,13 +135,7 @@ export async function chatOpenAICompatible(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      if (response.status === 401 || response.status === 403) {
-        onError(`Invalid API key for ${providerConfig.name}. Check your key in Settings.`);
-      } else if (response.status === 429) {
-        onError(`Rate limit exceeded for ${providerConfig.name}. Wait a moment and try again.`);
-      } else {
-        onError(`${providerConfig.name} API error ${response.status}: ${errorText.slice(0, 200)}`);
-      }
+      onError(describeProviderHttpError(response.status, providerConfig.name, errorText));
       return;
     }
 

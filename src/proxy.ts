@@ -3,8 +3,20 @@ import http from "node:http";
 import httpProxy from "http-proxy";
 import { getSessionToken } from "./security.js";
 import { attachOpenMagic } from "./server.js";
+import type { GitSession } from "./git-session.js";
 
-export function createProxyServer(targetHost: string, targetPort: number, roots: string[]): http.Server {
+/**
+ * Create a single-port proxy server that:
+ * 1. Serves /__openmagic__/* (toolbar bundle, health, WebSocket)
+ * 2. Proxies everything else to the dev server
+ * 3. Injects the toolbar script into HTML responses
+ */
+export function createProxyServer(
+  targetHost: string,
+  targetPort: number,
+  roots: string[],
+  gitSession?: GitSession
+): http.Server {
   const proxy = httpProxy.createProxyServer({
     target: `http://${targetHost}:${targetPort}`,
     selfHandleResponse: true,
@@ -12,9 +24,22 @@ export function createProxyServer(targetHost: string, targetPort: number, roots:
   });
   const token = getSessionToken();
 
+  const targetOrigin = `http://${targetHost}:${targetPort}`;
+
+  // changeOrigin rewrites Host to the upstream but leaves Origin pointing at
+  // this proxy — dev servers that compare the two (Next.js dev origin checks)
+  // then 403 every request the browser marked with an Origin. Rewrite Origin
+  // to the upstream's own origin so the pair stays consistent.
+  const retargetOrigin = (req: http.IncomingMessage) => {
+    if (req.headers.origin) req.headers.origin = targetOrigin;
+  };
+
+  // Strip Accept-Encoding on HTML requests so upstream sends uncompressed (enables streaming injection)
+  // Only apply to regular HTTP requests, not WebSocket upgrades
   proxy.on("proxyReq", (proxyReq, req) => {
     const accept = req.headers.accept || "";
     if (accept.includes("text/html")) proxyReq.removeHeader("Accept-Encoding");
+    if (req.headers.origin) proxyReq.setHeader("Origin", targetOrigin);
   });
 
   proxy.on("proxyRes", (proxyRes, _req, res) => {
@@ -38,6 +63,9 @@ export function createProxyServer(targetHost: string, targetPort: number, roots:
     delete headers["content-security-policy"];
     delete headers["content-security-policy-report-only"];
     delete headers["x-content-security-policy"];
+    // The toolbar is designed to run embedded (MZJ iframes the proxied preview);
+    // an app's own frame denial must not block that.
+    delete headers["x-frame-options"];
     delete headers.etag;
     delete headers["last-modified"];
     headers["cache-control"] = "no-store";
@@ -76,11 +104,17 @@ export function createProxyServer(targetHost: string, targetPort: number, roots:
     if (omHandle?.(req, res)) return;
     proxy.web(req, res);
   });
-  const om = attachOpenMagic(server, roots);
+
+  // Attach OpenMagic endpoints to THIS server (same port, noServer WSS)
+  const om = attachOpenMagic(server, roots, gitSession);
   omHandle = om.handleRequest;
   omUpgrade = om.handleUpgrade;
   server.on("upgrade", (req, socket, head) => {
+    // Try OpenMagic WebSocket first
     if (omUpgrade?.(req, socket, head)) return;
+    // Everything else (HMR, hot reload, etc.) forwarded to dev server.
+    // proxy.ws does not run proxyReq, so fix Origin here (see retargetOrigin).
+    retargetOrigin(req);
     proxy.ws(req, socket, head);
   });
   return server;

@@ -189,9 +189,29 @@ export function scrapeErrorOverlay(): string | null {
   if (typeof document === "undefined") return null;
   try {
     // Next.js (App & Pages router) renders into a <nextjs-portal> shadow host.
+    // Since Next 15 the portal is always mounted in dev — it hosts the dev-tools
+    // button and ~100KB of stylesheet text — so non-empty textContent alone is
+    // meaningless. Only report it when actual error UI is present.
     const nextPortal = document.querySelector("nextjs-portal");
-    const nextText = (nextPortal as any)?.shadowRoot?.textContent?.trim();
-    if (nextText) return nextText.slice(0, 4000);
+    const nextRoot = (nextPortal as any)?.shadowRoot as ShadowRoot | null | undefined;
+    if (nextRoot) {
+      const errorUi = nextRoot.querySelector(
+        "nextjs-toast, [data-nextjs-dialog], [data-nextjs-dialog-overlay], nextjs-dialog, [data-errors], [data-nextjs-runtime-error]",
+      );
+      if (errorUi) {
+        const text = errorUi.textContent?.trim();
+        if (text) return text.slice(0, 4000);
+      }
+      // Older Next versions mount the portal only on errors, sometimes without
+      // the selectors above — fall back to unmistakable error phrases while
+      // ignoring the dev-tools stylesheet noise.
+      const fullText = nextRoot.textContent?.trim() || "";
+      if (/Unhandled Runtime Error|Failed to compile|Build Error|Runtime \w*Error/i.test(fullText)) {
+        const marker = fullText.match(/Unhandled Runtime Error|Failed to compile|Build Error|Runtime \w*Error/i);
+        const idx = marker ? fullText.indexOf(marker[0]) : 0;
+        return fullText.slice(idx, idx + 4000);
+      }
+    }
 
     // Vite overlay: <vite-error-overlay> custom element with a shadow root.
     const viteOverlay = document.querySelector("vite-error-overlay");

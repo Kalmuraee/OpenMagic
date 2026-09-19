@@ -28,6 +28,7 @@ import { pruneOldManifests, type PatchGroupRequest } from "./patch.js";
 import { applyPatchGroupAcrossRoots, previewPatchGroupAcrossRoots, rollbackPatchGroupAcrossRoots } from "./multi-root-patch.js";
 import { displayPathFor, resolveProjectPath } from "./root-resolver.js";
 import { groundProjects, type ProjectGroundRequest } from "./project-grounding.js";
+import type { GitSession } from "./git-session.js";
 import { testProviderModel } from "./llm/provider-test.js";
 
 import { createRequire } from "node:module";
@@ -105,7 +106,8 @@ export function authorizeOperation(type: string, authenticated: boolean): boolea
  */
 export function attachOpenMagic(
   httpServer: http.Server,
-  roots: string[]
+  roots: string[],
+  gitSession?: GitSession
 ): {
   wss: WebSocketServer;
   handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => boolean;
@@ -176,7 +178,7 @@ export function attachOpenMagic(
       }
 
       try {
-        await handleMessage(ws, msg, state, roots);
+        await handleMessage(ws, msg, state, roots, gitSession);
       } catch (e: unknown) {
         sendError(ws, "internal_error", (e as Error).message, msg.id);
       }
@@ -210,7 +212,8 @@ async function handleMessage(
   ws: WebSocket,
   msg: WsMessage,
   state: ClientState,
-  roots: string[]
+  roots: string[],
+  gitSession?: GitSession
 ): Promise<void> {
   switch (msg.type) {
     case "handshake": {
@@ -282,6 +285,7 @@ async function handleMessage(
           type: "fs.written",
           payload: { path: payload.path, ok: true },
         });
+        gitSession?.recordChange("write", [resolved.absolutePath]);
       }
       break;
     }
@@ -303,6 +307,7 @@ async function handleMessage(
           type: "fs.deleted",
           payload: { path: payload.path, ok: true },
         });
+        gitSession?.recordChange("delete", [resolved.absolutePath]);
       }
       break;
     }
@@ -315,6 +320,7 @@ async function handleMessage(
       const undoResult = undoFileSafe(resolved.absolutePath, [resolved.root]);
       if (!undoResult.ok) { sendError(ws, "fs_error", undoResult.error || "Undo failed", msg.id); break; }
       send(ws, { id: msg.id, type: "fs.undone", payload: { path: payload.path, ok: true, undoCount: undoResult.remainingUndoCount || 0 } });
+      gitSession?.recordChange("undo", [resolved.absolutePath]);
       break;
     }
 
@@ -337,6 +343,12 @@ async function handleMessage(
       }
       const result = applyPatchGroupAcrossRoots(roots, payload);
       send(ws, { id: msg.id, type: "fs.patch.applied", payload: result });
+      if (result.applied) {
+        const touched = payload.patches
+          .map((p) => resolveProjectPath(p.file, roots, { mustExist: false }))
+          .flatMap((r) => ("error" in r ? [] : [r.absolutePath]));
+        gitSession?.recordChange("patch", touched, result.groupId);
+      }
       break;
     }
 
@@ -351,6 +363,11 @@ async function handleMessage(
         sendError(ws, "fs_error", result.error || "Rollback failed", msg.id);
       } else {
         send(ws, { id: msg.id, type: "fs.patch.rolledback", payload: result });
+        if (result.files?.length) {
+          // manifest paths are already absolute (resolvePatchPath output);
+          // recordChange drops any that live outside its root.
+          gitSession?.recordChange("undo", result.files, payload.groupId);
+        }
       }
       break;
     }

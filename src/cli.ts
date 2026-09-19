@@ -184,6 +184,7 @@ import {
 } from "./detect.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { cleanupBackups } from "./filesystem.js";
+import { GitSession } from "./git-session.js";
 
 import { createRequire } from "node:module";
 import { checkForCliUpdate } from "./update-check.js";
@@ -505,6 +506,10 @@ program
   )
   .option("--no-open", "Don't auto-open browser")
   .option("--host <host>", "Dev server host", "localhost")
+  .option("--bind <address>", "Address for the OpenMagic proxy to listen on", "localhost")
+  .option("--git-mode <mode>", "Commit applied changes: off | branch", "off")
+  .option("--branch <name>", "Session branch to create and commit to")
+  .option("--journal <path>", "Change journal path", ".openmagic/journal.jsonl")
   .action(async (opts) => {
     writeLine();
     writeLine(`${INDENT}${pc.white("OpenMagic")} ${pc.dim(`v${VERSION}`)}`);
@@ -643,10 +648,36 @@ program
       printWarning(`Port ${requestedProxyPort} is in use — starting on ${proxyPort}`);
     }
 
-    // Single server: proxy + toolbar + WebSocket all on one port
-    const proxyServer = createProxyServer(targetHost, targetPort!, roots);
+    // Hosted mode: an embedding host (MZJ Studio) asks for the applied changes
+    // to land on a dedicated branch, so it can review and submit them later.
+    // Branch creation happens before listen — a session that cannot own its
+    // branch must fail here, not after edits have silently gone to the wrong
+    // place.
+    const gitMode = opts.gitMode === "branch" ? "branch" : "off";
+    let gitSession: GitSession | undefined;
+    if (gitMode === "branch") {
+      try {
+        gitSession = new GitSession({
+          mode: "branch",
+          branch: opts.branch,
+          journalPath: opts.journal,
+          root: roots[0] || process.cwd(),
+        });
+        gitSession.start();
+      } catch (err) {
+        printError(
+          `Could not prepare git branch "${opts.branch ?? ""}": ` +
+          `${err instanceof Error ? err.message.split("\n")[0] : err}`
+        );
+        process.exit(1);
+      }
+    }
 
-    proxyServer.listen(proxyPort, "localhost", async () => {
+    // Single server: proxy + toolbar + WebSocket all on one port
+    const proxyServer = createProxyServer(targetHost, targetPort!, roots, gitSession);
+
+    const bindAddress = opts.bind || "localhost";
+    proxyServer.listen(proxyPort, bindAddress, async () => {
       const proxyUrl = `http://localhost:${proxyPort}`;
       const proxyWarning = await healthCheck(proxyPort, targetPort!);
       const frameworkLabel = getDetectedFrameworkLabel();
@@ -697,6 +728,7 @@ program
       shuttingDown = true;
       writeLine();
       printInfo("Shutting down OpenMagic...");
+      gitSession?.stop();
       cleanupBackups();
       proxyServer.close();
 

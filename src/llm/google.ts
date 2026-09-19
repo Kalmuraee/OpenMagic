@@ -2,6 +2,7 @@ import type { ChatMessage, LlmContext, ModelInfo } from "../shared-types.js";
 import { MODEL_REGISTRY } from "./registry.js";
 import { SYSTEM_PROMPT, buildUserMessage, buildContextParts } from "./prompts.js";
 import { mapGoogleThinkingLevel, resolveMaxOutput, resolveReasoningLevel } from "./thinking.js";
+import { describeProviderHttpError } from "./http-error.js";
 
 export function buildGoogleRequest(
   model: string,
@@ -101,13 +102,7 @@ export async function chatGoogle(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
-      if (response.status === 401 || response.status === 403) {
-        onError("Invalid Google API key. Check your key in Settings.");
-      } else if (response.status === 429) {
-        onError("Google API rate limit exceeded. Wait a moment and try again.");
-      } else {
-        onError(`Google API error ${response.status}: ${errorText.slice(0, 200)}`);
-      }
+      onError(describeProviderHttpError(response.status, "Google API", errorText));
       return;
     }
 
